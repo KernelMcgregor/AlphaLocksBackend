@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.database import get_db
 from app.models.ufc import (
     UFCEvent, UFCFight, UFCFighter, UFCFightOdds,
-    UFCFightPrediction, UFCMethodPrediction, UFCFightStats,
+    UFCFightPrediction, UFCMethodPrediction, UFCFightShapValue, UFCFightStats,
 )
 from app.schemas.ufc import (
     UFCEventDetailResponse,
@@ -113,9 +113,37 @@ def get_event_detail(event_id: int, db: Session = Depends(get_db)):
         .filter(UFCFight.event_id == event_id)
         .all()
     )
+    # Attach consensus odds (first bookmaker found) to each fight
+    fight_ids = [f.id for f in fights]
+    odds_rows = db.query(UFCFightOdds).filter(UFCFightOdds.fight_id.in_(fight_ids)).all() if fight_ids else []
+    odds_map = {}
+    for o in odds_rows:
+        if o.fight_id not in odds_map:  # keep first (consensus/primary)
+            odds_map[o.fight_id] = o
+
+    fight_dicts = []
+    for f in fights:
+        fd = {
+            "id": f.id, "ufcstats_id": f.ufcstats_id, "date": f.date,
+            "event_id": f.event_id, "red_fighter_id": f.red_fighter_id,
+            "blue_fighter_id": f.blue_fighter_id, "winner_id": f.winner_id,
+            "red_result": f.red_result, "blue_result": f.blue_result,
+            "weight_class": f.weight_class, "method": f.method,
+            "finish_round": f.finish_round, "finish_time": f.finish_time,
+            "details": f.details, "referee": f.referee,
+            "created_at": f.created_at, "updated_at": f.updated_at,
+            "red_fighter": f.red_fighter, "blue_fighter": f.blue_fighter,
+            "winner": f.winner, "stats": f.stats,
+        }
+        o = odds_map.get(f.id)
+        if o:
+            fd["red_odds"] = o.red_odds
+            fd["blue_odds"] = o.blue_odds
+        fight_dicts.append(fd)
+
     return {"id": event.id, "ufcstats_id": event.ufcstats_id, "name": event.name,
             "date": event.date, "location": event.location,
-            "created_at": event.created_at, "fights": fights}
+            "created_at": event.created_at, "fights": fight_dicts}
 
 
 # --- Fights ---
@@ -129,7 +157,7 @@ def list_fights(
     return db.query(UFCFight).order_by(UFCFight.id.desc()).offset(offset).limit(limit).all()
 
 
-@router.get("/fights/{fight_id}", response_model=UFCFightDetailResponse)
+@router.get("/fights/{fight_id}")
 def get_fight(fight_id: int, db: Session = Depends(get_db)):
     fight = (
         db.query(UFCFight)
@@ -144,7 +172,41 @@ def get_fight(fight_id: int, db: Session = Depends(get_db)):
     )
     if not fight:
         raise HTTPException(status_code=404, detail="Fight not found")
-    return fight
+
+    # Add prediction
+    pred = db.query(UFCFightPrediction).filter(UFCFightPrediction.fight_id == fight_id).first()
+    # Add method prediction
+    method_pred = db.query(UFCMethodPrediction).filter(UFCMethodPrediction.fight_id == fight_id).first()
+    # Add odds (all bookmakers)
+    odds_rows = db.query(UFCFightOdds).filter(UFCFightOdds.fight_id == fight_id).all()
+    # Add SHAP values
+    shap_rows = db.query(UFCFightShapValue).filter(UFCFightShapValue.fight_id == fight_id).order_by(UFCFightShapValue.abs_value.desc()).all()
+
+    result = UFCFightDetailResponse.model_validate(fight).model_dump()
+    result["prediction"] = {
+        "predicted_winner": pred.predicted_winner,
+        "confidence": pred.confidence,
+        "red_prob": pred.red_prob,
+    } if pred else None
+    result["method_prediction"] = {
+        "predicted_method": method_pred.predicted_method,
+        "confidence": method_pred.confidence,
+        "ko_prob": method_pred.ko_prob,
+        "sub_prob": method_pred.sub_prob,
+        "dec_prob": method_pred.dec_prob,
+    } if method_pred else None
+    result["odds"] = [{
+        "bookmaker": o.bookmaker,
+        "red_odds": o.red_odds,
+        "blue_odds": o.blue_odds,
+    } for o in odds_rows]
+    result["shap_values"] = [{
+        "feature_name": s.feature_name,
+        "shap_value": s.shap_value,
+        "abs_value": s.abs_value,
+        "feature_value": s.feature_value,
+    } for s in shap_rows]
+    return result
 
 
 # --- Predictions ---
@@ -378,10 +440,10 @@ def get_upcoming_events(db: Session = Depends(get_db)):
             p = pred_map.get(f.id)
             fight_odds = odds_map.get(f.id, [])
             fight_list.append({
-                "id": f.id,
+                "id": str(f.id),
                 "weight_class": f.weight_class,
                 "red_fighter": {
-                    "id": f.red_fighter.id,
+                    "id": str(f.red_fighter.id),
                     "first_name": f.red_fighter.first_name,
                     "last_name": f.red_fighter.last_name,
                     "nickname": f.red_fighter.nickname,
@@ -392,7 +454,7 @@ def get_upcoming_events(db: Session = Depends(get_db)):
                     "country_code": f.red_fighter.country_code,
                 },
                 "blue_fighter": {
-                    "id": f.blue_fighter.id,
+                    "id": str(f.blue_fighter.id),
                     "first_name": f.blue_fighter.first_name,
                     "last_name": f.blue_fighter.last_name,
                     "nickname": f.blue_fighter.nickname,

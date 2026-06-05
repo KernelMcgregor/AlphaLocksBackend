@@ -108,6 +108,8 @@ class UFCFightDetailResponse(UFCFightResponse):
     blue_fighter: UFCFighterResponse
     winner: Optional[UFCFighterResponse] = None
     stats: list["UFCFightStatsResponse"] = []
+    red_odds: Optional[int] = None
+    blue_odds: Optional[int] = None
 
 
 class UFCEventDetailResponse(UFCEventResponse):

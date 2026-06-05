@@ -1929,13 +1929,33 @@ def generate_predictions():
         iso = cal["isotonic"]
         calibrated_proba = iso.predict(raw_proba)
 
-    # Store predictions in DB
-    from app.models.ufc import UFCFightPrediction
+    # Compute SHAP values for the GBT model
+    import shap
+    log.info("Computing SHAP values...")
+    explainer = shap.TreeExplainer(base_model)
+    shap_values_arr = explainer.shap_values(X)
+    # For binary classification, shap_values may be a list of 2 arrays; take class 1 (red wins)
+    if isinstance(shap_values_arr, list):
+        shap_values_arr = shap_values_arr[1]
+    log.info(f"  SHAP values shape: {shap_values_arr.shape}")
+
+    # Store predictions and SHAP values in DB
+    from app.models.ufc import UFCFightPrediction, UFCFightShapValue
     db = SessionLocal()
     try:
-        db.query(UFCFightPrediction).delete()
+        # Delete in batches to avoid CockroachDB serialization errors
+        for Model in [UFCFightShapValue, UFCFightPrediction]:
+            while True:
+                ids = [r[0] for r in db.query(Model.id).limit(5000).all()]
+                if not ids:
+                    break
+                db.query(Model).filter(Model.id.in_(ids)).delete(synchronize_session=False)
+                db.commit()
+            log.info(f"  Cleared {Model.__tablename__}")
+
         count = 0
-        for fight_id, prob in zip(matchup.index, calibrated_proba):
+        shap_count = 0
+        for i, (fight_id, prob) in enumerate(zip(matchup.index, calibrated_proba)):
             predicted_winner = "red" if prob >= 0.5 else "blue"
             confidence = abs(prob - 0.5)
             db.add(UFCFightPrediction(
@@ -1945,8 +1965,27 @@ def generate_predictions():
                 red_prob=round(float(prob), 4),
             ))
             count += 1
+
+            # Store top 20 SHAP values for this fight
+            fight_shap = shap_values_arr[i]
+            abs_shap = abs(fight_shap)
+            top_indices = abs_shap.argsort()[-20:][::-1]
+            for idx in top_indices:
+                db.add(UFCFightShapValue(
+                    fight_id=int(fight_id),
+                    feature_name=features[idx],
+                    shap_value=round(float(fight_shap[idx]), 6),
+                    abs_value=round(float(abs_shap[idx]), 6),
+                    feature_value=round(float(X[i, idx]), 4),
+                ))
+                shap_count += 1
+
+            # Commit every 100 fights to avoid CockroachDB transaction size limits
+            if count % 100 == 0:
+                db.commit()
+
         db.commit()
-        log.info(f"Stored {count} fight predictions")
+        log.info(f"Stored {count} fight predictions, {shap_count} SHAP values")
     finally:
         db.close()
 

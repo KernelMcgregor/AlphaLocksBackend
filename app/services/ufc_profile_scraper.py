@@ -25,8 +25,12 @@ import unicodedata
 import httpx
 from bs4 import BeautifulSoup
 
+from datetime import date, timedelta
+
+from sqlalchemy import or_
+
 from app.database import SessionLocal
-from app.models.ufc import UFCFighter
+from app.models.ufc import UFCFight, UFCFighter
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -150,19 +154,37 @@ def _fighter_slug(first_name: str, last_name: str) -> str:
     return re.sub(r"-+", "-", name).strip("-")
 
 
-def scrape_images(limit: int = 0):
-    """Scrape UFC.com for profile images for fighters that have country but no image."""
-    log.info("Phase 3: Scraping UFC.com for profile images...")
+def scrape_images(limit: int = 0, recent_years: int = 3):
+    """Scrape UFC.com for profile images — only fighters active in the last N years."""
+    log.info(f"Phase 3: Scraping UFC.com for images (fighters active in last {recent_years} years)...")
     db = SessionLocal()
+
+    cutoff = date.today() - timedelta(days=recent_years * 365)
+
+    # Get IDs of fighters who fought since cutoff
+    recent_ids = set()
+    recent_fights = (
+        db.query(UFCFight.red_fighter_id, UFCFight.blue_fighter_id)
+        .filter(UFCFight.date >= cutoff)
+        .all()
+    )
+    for red_id, blue_id in recent_fights:
+        recent_ids.add(red_id)
+        recent_ids.add(blue_id)
+
+    log.info(f"  {len(recent_ids)} fighters active since {cutoff}")
 
     fighters = (
         db.query(UFCFighter)
-        .filter(UFCFighter.country_code.isnot(None), UFCFighter.image_url.is_(None))
+        .filter(
+            UFCFighter.image_url.is_(None),
+            UFCFighter.id.in_(recent_ids),
+        )
         .all()
     )
     if limit > 0:
         fighters = fighters[:limit]
-    log.info(f"  {len(fighters)} fighters need images")
+    log.info(f"  {len(fighters)} recent fighters need images")
 
     client = httpx.Client(
         headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
@@ -175,21 +197,26 @@ def scrape_images(limit: int = 0):
         slug = _fighter_slug(fighter.first_name, fighter.last_name)
         try:
             resp = client.get(f"https://www.ufc.com/athlete/{slug}")
-            if resp.status_code == 200:
-                soup = BeautifulSoup(resp.text, "html.parser")
-                img = soup.find("img", class_="hero-profile__image")
-                if img and img.get("src"):
-                    image_url = img["src"]
-                    if not image_url.startswith("http"):
-                        image_url = f"https://ufc.com{image_url}"
-                    fighter.image_url = image_url
-                    matched += 1
-                    try:
-                        db.commit()
-                    except Exception:
-                        db.rollback()
-                    if matched % 25 == 0:
-                        log.info(f"  [{i+1}/{len(fighters)}] {matched} images found")
+            if resp.status_code != 200:
+                continue
+            soup = BeautifulSoup(resp.text, "html.parser")
+            # Try multiple selectors — UFC.com layout varies
+            img = (
+                soup.find("img", class_="hero-profile__image")
+                or soup.select_one("#block-mainpagecontent img")
+            )
+            if img and img.get("src"):
+                image_url = img["src"]
+                if not image_url.startswith("http"):
+                    image_url = f"https://www.ufc.com{image_url}"
+                fighter.image_url = image_url
+                matched += 1
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
+            if (i + 1) % 50 == 0:
+                log.info(f"  [{i+1}/{len(fighters)}] {matched} images found")
         except Exception:
             pass
 
