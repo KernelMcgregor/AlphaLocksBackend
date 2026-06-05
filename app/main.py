@@ -26,6 +26,15 @@ def run_migrations():
         conn.close()
     else:
         Base.metadata.create_all(bind=engine)
+        # Add columns that create_all won't add to existing tables
+        from sqlalchemy import text, inspect
+        insp = inspect(engine)
+        existing = {c["name"] for c in insp.get_columns("ufc_fighters")}
+        with engine.begin() as conn:
+            if "country_code" not in existing:
+                conn.execute(text("ALTER TABLE ufc_fighters ADD COLUMN country_code VARCHAR(2)"))
+            if "image_url" not in existing:
+                conn.execute(text("ALTER TABLE ufc_fighters ADD COLUMN image_url VARCHAR(500)"))
 
 
 def scheduled_scrape():
