@@ -1,4 +1,7 @@
+import json
+
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 
 
 class Settings(BaseSettings):
@@ -6,6 +9,13 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:5176", "http://localhost:3000"]
     ENV: str = "dev"
     ODDS_API_KEY: str = ""
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def parse_cors(cls, v):
+        if isinstance(v, str):
+            return json.loads(v)
+        return v
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
