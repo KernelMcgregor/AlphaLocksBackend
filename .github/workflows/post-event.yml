@@ -1,0 +1,102 @@
+name: Post-Event Update
+
+on:
+  schedule:
+    # Run daily at 6am UTC (1am EST / 10pm PST)
+    - cron: '0 6 * * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  check-and-update:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check if event happened yesterday
+        id: check
+        run: |
+          python -c "
+          from app.database import SessionLocal
+          from app.models.ufc import UFCEvent, UFCFight
+          from datetime import date, timedelta
+
+          db = SessionLocal()
+          yesterday = date.today() - timedelta(days=1)
+
+          # Check if any event was scheduled for yesterday
+          event = db.query(UFCEvent).filter(UFCEvent.date == yesterday).first()
+          db.close()
+
+          if event:
+              print(f'Event found: {event.name} on {event.date}')
+              with open('$GITHUB_OUTPUT', 'a') as f:
+                  f.write('event_happened=true\n')
+          else:
+              print(f'No event on {yesterday}')
+              with open('$GITHUB_OUTPUT', 'a') as f:
+                  f.write('event_happened=false\n')
+          "
+
+      - name: Run post-event scrape (results + upcoming)
+        if: steps.check.outputs.event_happened == 'true'
+        run: python -m app.services.scraper --recent
+
+      - name: Generate predictions
+        if: steps.check.outputs.event_happened == 'true'
+        run: python -m app.services.model --predict
+
+      - name: Scrape live odds
+        if: steps.check.outputs.event_happened == 'true'
+        run: python -m app.services.odds_scraper --live
+
+      - name: Summary
+        if: steps.check.outputs.event_happened == 'true'
+        run: echo "Post-event update complete - scraped results, refreshed upcoming, generated predictions, and fetched odds"
+
+  # Also refresh odds twice a week regardless of events
+  refresh-odds:
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 6 * * *'
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check if today is odds refresh day (Tue/Fri)
+        id: odds_check
+        run: |
+          python -c "
+          from datetime import date
+          day = date.today().weekday()
+          # 1=Tuesday, 4=Friday
+          should_refresh = day in (1, 4)
+          with open('$GITHUB_OUTPUT', 'a') as f:
+              f.write(f'refresh={str(should_refresh).lower()}\n')
+          print(f'Day={day}, refresh={should_refresh}')
+          "
+
+      - name: Refresh odds
+        if: steps.odds_check.outputs.refresh == 'true'
+        run: python -m app.services.odds_scraper --live
