@@ -53,9 +53,13 @@ jobs:
         if: steps.check.outputs.event_happened == 'true'
         run: python -m app.services.scraper --recent
 
-      - name: Generate predictions
+      - name: Generate winner predictions
         if: steps.check.outputs.event_happened == 'true'
         run: python -m app.services.model --predict
+
+      - name: Generate method predictions
+        if: steps.check.outputs.event_happened == 'true'
+        run: python -m app.services.method_model --predict
 
       - name: Scrape live odds
         if: steps.check.outputs.event_happened == 'true'
