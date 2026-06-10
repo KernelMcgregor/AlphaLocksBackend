@@ -38,8 +38,26 @@ def run_migrations():
 
 
 def scheduled_scrape():
+    import logging
+    log = logging.getLogger("scheduled_scrape")
+
     from app.services.scraper import run_scrape
     run_scrape(mode="update")
+
+    # Regenerate predictions with existing models (no retraining)
+    try:
+        from app.services.model import generate_predictions
+        generate_predictions()
+        log.info("Winner predictions regenerated")
+    except Exception as e:
+        log.error(f"Winner prediction generation failed: {e}")
+
+    try:
+        from app.services.method_model import generate_method_predictions
+        generate_method_predictions()
+        log.info("Method predictions regenerated")
+    except Exception as e:
+        log.error(f"Method prediction generation failed: {e}")
 
 
 @asynccontextmanager
