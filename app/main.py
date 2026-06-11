@@ -41,8 +41,8 @@ def scheduled_scrape():
     import logging
     log = logging.getLogger("scheduled_scrape")
 
-    from app.services.scraper import run_scrape
-    run_scrape(mode="update")
+    from app.services.scraper import run_recent_update
+    run_recent_update()
 
     # Regenerate predictions with existing models (no retraining)
     try:
@@ -58,6 +58,13 @@ def scheduled_scrape():
         log.info("Method predictions regenerated")
     except Exception as e:
         log.error(f"Method prediction generation failed: {e}")
+
+    try:
+        from app.services.preview_service import generate_all_upcoming_previews
+        generate_all_upcoming_previews()
+        log.info("Fight previews generated")
+    except Exception as e:
+        log.error(f"Fight preview generation failed: {e}")
 
 
 @asynccontextmanager

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.database import get_db
 from app.models.ufc import (
     UFCEvent, UFCFight, UFCFighter, UFCFightOdds,
-    UFCFightPrediction, UFCMethodPrediction, UFCFightShapValue, UFCFightStats,
+    UFCFightPrediction, UFCFightPreview, UFCMethodPrediction, UFCFightShapValue, UFCFightStats,
 )
 from app.schemas.ufc import (
     UFCEventDetailResponse,
@@ -182,7 +182,15 @@ def get_fight(fight_id: int, db: Session = Depends(get_db)):
     # Add SHAP values
     shap_rows = db.query(UFCFightShapValue).filter(UFCFightShapValue.fight_id == fight_id).order_by(UFCFightShapValue.abs_value.desc()).all()
 
+    # Add event info
+    event = db.query(UFCEvent).filter(UFCEvent.id == fight.event_id).first()
+
     result = UFCFightDetailResponse.model_validate(fight).model_dump()
+    result["event"] = {
+        "name": event.name,
+        "date": str(event.date),
+        "location": event.location,
+    } if event else None
     result["prediction"] = {
         "predicted_winner": pred.predicted_winner,
         "confidence": pred.confidence,
@@ -206,6 +214,15 @@ def get_fight(fight_id: int, db: Session = Depends(get_db)):
         "abs_value": s.abs_value,
         "feature_value": s.feature_value,
     } for s in shap_rows]
+
+    # Add preview
+    preview = db.query(UFCFightPreview).filter(UFCFightPreview.fight_id == fight_id).first()
+    result["preview"] = {
+        "content": preview.content,
+        "model_used": preview.model_used,
+        "generated_at": preview.created_at.isoformat() if preview.created_at else None,
+    } if preview else None
+
     return result
 
 
@@ -498,7 +515,23 @@ def get_upcoming_events(db: Session = Depends(get_db)):
 @router.get("/arbitrage")
 def get_arbitrage_opportunities(db: Session = Depends(get_db)):
     """Find arbitrage opportunities across bookmakers for upcoming fights."""
+    return _get_picks_data(db)
+
+
+@router.get("/picks")
+def get_picks(db: Session = Depends(get_db)):
+    """Get model picks with edge and arbitrage opportunities for upcoming fights."""
+    return _get_picks_data(db)
+
+
+def _get_picks_data(db: Session):
     from datetime import date as _date
+
+    def implied_prob(american_odds):
+        if american_odds > 0:
+            return 100 / (american_odds + 100)
+        else:
+            return abs(american_odds) / (abs(american_odds) + 100)
 
     # Get upcoming fights with multi-book odds
     upcoming_fights = (
@@ -514,50 +547,90 @@ def get_arbitrage_opportunities(db: Session = Depends(get_db)):
         .all()
     )
 
-    opportunities = []
+    results = []
     for fight in upcoming_fights:
         odds_rows = db.query(UFCFightOdds).filter(UFCFightOdds.fight_id == fight.id).all()
-        if len(odds_rows) < 2:
+        prediction = db.query(UFCFightPrediction).filter(UFCFightPrediction.fight_id == fight.id).first()
+        method_pred = db.query(UFCMethodPrediction).filter(UFCMethodPrediction.fight_id == fight.id).first()
+
+        # Need either odds or prediction to be useful
+        if not odds_rows and not prediction:
             continue
 
-        # Find best red odds and best blue odds across all books
-        best_red = max(odds_rows, key=lambda o: o.red_odds)
-        best_blue = max(odds_rows, key=lambda o: o.blue_odds)
+        # Arb calculation
+        best_red = max(odds_rows, key=lambda o: o.red_odds) if odds_rows else None
+        best_blue = max(odds_rows, key=lambda o: o.blue_odds) if odds_rows else None
 
-        # Calculate implied probabilities for best odds
-        def implied_prob(american_odds):
-            if american_odds > 0:
-                return 100 / (american_odds + 100)
+        arb_margin = None
+        is_arb = False
+        if best_red and best_blue:
+            red_ip = implied_prob(best_red.red_odds)
+            blue_ip = implied_prob(best_blue.blue_odds)
+            total_ip = red_ip + blue_ip
+            arb_margin = round((1 - total_ip) * 100, 2)
+            is_arb = total_ip < 1.0
+
+        # Model edge: compare model probability to consensus implied probability
+        edge = None
+        pick_side = None
+        pick_fighter = None
+        model_prob = None
+        implied_prob_pick = None
+        if prediction and odds_rows:
+            # Use average implied prob across all books as consensus
+            avg_red_ip = sum(implied_prob(o.red_odds) for o in odds_rows) / len(odds_rows)
+            avg_blue_ip = sum(implied_prob(o.blue_odds) for o in odds_rows) / len(odds_rows)
+
+            model_red_prob = prediction.red_prob
+            model_blue_prob = 1 - prediction.red_prob
+
+            # Edge = model probability - market implied probability
+            red_edge = model_red_prob - avg_red_ip
+            blue_edge = model_blue_prob - avg_blue_ip
+
+            # Pick the side with the bigger edge
+            if red_edge > blue_edge:
+                pick_side = "red"
+                pick_fighter = f"{fight.red_fighter.first_name} {fight.red_fighter.last_name}"
+                edge = round(red_edge * 100, 1)
+                model_prob = round(model_red_prob * 100, 1)
+                implied_prob_pick = round(avg_red_ip * 100, 1)
             else:
-                return abs(american_odds) / (abs(american_odds) + 100)
+                pick_side = "blue"
+                pick_fighter = f"{fight.blue_fighter.first_name} {fight.blue_fighter.last_name}"
+                edge = round(blue_edge * 100, 1)
+                model_prob = round(model_blue_prob * 100, 1)
+                implied_prob_pick = round(avg_blue_ip * 100, 1)
 
-        red_ip = implied_prob(best_red.red_odds)
-        blue_ip = implied_prob(best_blue.blue_odds)
-        total_ip = red_ip + blue_ip
-
-        # Arb exists when total implied probability < 1.0
-        margin = (1 - total_ip) * 100  # positive = profit %
-
-        # Include all fights with odds, sorted by margin (best arb first)
         all_books = [{
             "bookmaker": o.bookmaker,
             "red_odds": o.red_odds,
             "blue_odds": o.blue_odds,
         } for o in sorted(odds_rows, key=lambda o: o.bookmaker)]
 
-        opportunities.append({
+        results.append({
             "fight_id": fight.id,
             "event_name": fight.event.name if fight.event else "",
             "event_date": str(fight.event.date) if fight.event else "",
             "weight_class": fight.weight_class,
             "red_fighter": f"{fight.red_fighter.first_name} {fight.red_fighter.last_name}",
             "blue_fighter": f"{fight.blue_fighter.first_name} {fight.blue_fighter.last_name}",
-            "best_red_odds": best_red.red_odds,
-            "best_red_book": best_red.bookmaker,
-            "best_blue_odds": best_blue.blue_odds,
-            "best_blue_book": best_blue.bookmaker,
-            "margin": round(margin, 2),
-            "is_arb": total_ip < 1.0,
+            # Arb data
+            "best_red_odds": best_red.red_odds if best_red else None,
+            "best_red_book": best_red.bookmaker if best_red else None,
+            "best_blue_odds": best_blue.blue_odds if best_blue else None,
+            "best_blue_book": best_blue.bookmaker if best_blue else None,
+            "margin": arb_margin,
+            "is_arb": is_arb,
+            # Model edge data
+            "pick_side": pick_side,
+            "pick_fighter": pick_fighter,
+            "edge": edge,
+            "model_prob": model_prob,
+            "implied_prob": implied_prob_pick,
+            "confidence": round(prediction.confidence * 100, 1) if prediction else None,
+            "method_prediction": method_pred.predicted_method if method_pred else None,
+            # Odds
             "all_odds": all_books,
             "updated_at": max(
                 (o.updated_at for o in odds_rows if o.updated_at),
@@ -565,12 +638,11 @@ def get_arbitrage_opportunities(db: Session = Depends(get_db)):
             ),
         })
 
-    # Sort: true arbs first (by margin desc), then near-arbs
-    opportunities.sort(key=lambda x: -x["margin"])
+    # Sort by edge (biggest model edge first), then arb margin
+    results.sort(key=lambda x: -(x["edge"] or -999))
 
-    # Serialize updated_at
-    for opp in opportunities:
-        if opp["updated_at"]:
-            opp["updated_at"] = opp["updated_at"].isoformat()
+    for r in results:
+        if r["updated_at"]:
+            r["updated_at"] = r["updated_at"].isoformat()
 
-    return opportunities
+    return results

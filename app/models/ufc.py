@@ -1,4 +1,4 @@
-from sqlalchemy import Date, Float, ForeignKey, Index, Integer, String, UniqueConstraint
+from sqlalchemy import Date, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -149,3 +149,16 @@ class UFCFightShapValue(TimestampMixin, Base):
     shap_value: Mapped[float] = mapped_column(Float)  # positive = favors red, negative = favors blue
     abs_value: Mapped[float] = mapped_column(Float)  # for sorting by importance
     feature_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class UFCFightPreview(TimestampMixin, Base):
+    __tablename__ = "ufc_fight_previews"
+    __table_args__ = (UniqueConstraint("fight_id"),)
+
+    fight_id: Mapped[int] = mapped_column(ForeignKey("ufc_fights.id"), index=True)
+    content: Mapped[str] = mapped_column(Text)
+    model_used: Mapped[str] = mapped_column(String(50))
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    fight: Mapped["UFCFight"] = relationship()

@@ -58,3 +58,28 @@ def trigger_live_odds_scrape(background_tasks: BackgroundTasks):
 
     background_tasks.add_task(run_live_odds_scrape)
     return {"message": "Live odds scrape started in background"}
+
+
+@router.post("/generate-preview/{fight_id}")
+def trigger_preview_generation(
+    fight_id: int,
+    force: bool = Query(default=False),
+    db: Session = Depends(get_db),
+):
+    from app.services.preview_service import generate_preview
+
+    preview = generate_preview(fight_id, db, force=force)
+    if not preview:
+        return {"message": "Preview generation failed — check API key and fight data"}
+    return {"message": "Preview generated", "fight_id": fight_id}
+
+
+@router.post("/generate-all-previews")
+def trigger_all_previews(
+    background_tasks: BackgroundTasks,
+    force: bool = Query(default=False),
+):
+    from app.services.preview_service import generate_all_upcoming_previews
+
+    background_tasks.add_task(generate_all_upcoming_previews, force=force)
+    return {"message": "Preview generation started for all upcoming fights"}
