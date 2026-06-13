@@ -230,29 +230,98 @@ def get_fight(fight_id: int, db: Session = Depends(get_db)):
 
 @router.get("/model/metrics")
 def get_model_metrics(db: Session = Depends(get_db)):
-    """Get model performance metrics with real odds P/L."""
+    """Get model performance metrics with pick-based and edge-based P/L."""
+    from collections import defaultdict
     from sqlalchemy import and_
-    from sqlalchemy.orm import aliased
-
-    rows = (
-        db.query(UFCFightPrediction, UFCFight.winner_id, UFCFight.red_fighter_id, UFCFightOdds)
-        .join(UFCFight, UFCFightPrediction.fight_id == UFCFight.id)
-        .outerjoin(UFCFightOdds, UFCFightOdds.fight_id == UFCFightPrediction.fight_id)
-        .filter(and_(UFCFight.winner_id.isnot(None), UFCFight.date >= "2015-01-01"))
-        .all()
-    )
-    if not rows:
-        return {"total": 0, "correct": 0, "accuracy": 0, "confidence_splits": []}
 
     def _american_to_decimal(odds):
         if odds > 0:
             return 1 + odds / 100
         return 1 + 100 / abs(odds)
 
-    total = len(rows)
-    correct = sum(1 for p, w, r, o in rows if (p.predicted_winner == "red") == (w == r))
+    def _implied_prob(american_odds):
+        if american_odds > 0:
+            return 100 / (american_odds + 100)
+        return abs(american_odds) / (abs(american_odds) + 100)
 
-    buckets = [
+    # Get all predictions for decided fights
+    preds = (
+        db.query(UFCFightPrediction, UFCFight.winner_id, UFCFight.red_fighter_id, UFCFight.id)
+        .join(UFCFight, UFCFightPrediction.fight_id == UFCFight.id)
+        .filter(and_(UFCFight.winner_id.isnot(None), UFCFight.date >= "2015-01-01"))
+        .all()
+    )
+    if not preds:
+        return {"total": 0, "correct": 0, "accuracy": 0, "confidence_splits": [], "edge_splits": [], "fights": []}
+
+    # Get all odds grouped by fight_id
+    all_fight_ids = [fight_id for _, _, _, fight_id in preds]
+    all_odds = db.query(UFCFightOdds).filter(UFCFightOdds.fight_id.in_(all_fight_ids)).all()
+    odds_by_fight = defaultdict(list)
+    for o in all_odds:
+        odds_by_fight[o.fight_id].append(o)
+
+    # Process each fight
+    fight_data = []
+    for pred, winner_id, red_fighter_id, fight_id in preds:
+        red_won = winner_id == red_fighter_id
+        pick_won = (pred.predicted_winner == "red") == red_won
+        odds_rows = odds_by_fight.get(fight_id, [])
+
+        # Pick P/L (using first available bookmaker odds)
+        pick_pl = None
+        pick_odds = None
+        if odds_rows:
+            o = odds_rows[0]
+            picked_red = pred.predicted_winner == "red"
+            pick_odds = o.red_odds if picked_red else o.blue_odds
+            dec = _american_to_decimal(pick_odds)
+            pick_pl = round((dec - 1) * 100 if pick_won else -100, 2)
+
+        # Edge calculation
+        edge = None
+        edge_side = None
+        edge_won = None
+        edge_pl = None
+        edge_odds_val = None
+        if odds_rows:
+            avg_red_ip = sum(_implied_prob(o.red_odds) for o in odds_rows) / len(odds_rows)
+            avg_blue_ip = sum(_implied_prob(o.blue_odds) for o in odds_rows) / len(odds_rows)
+
+            model_red = pred.red_prob
+            model_blue = 1 - pred.red_prob
+            red_edge = model_red - avg_red_ip
+            blue_edge = model_blue - avg_blue_ip
+
+            if red_edge > blue_edge:
+                edge_side = "red"
+                edge = round(red_edge * 100, 1)
+                best_odds = max(odds_rows, key=lambda o: o.red_odds)
+                edge_odds_val = best_odds.red_odds
+            else:
+                edge_side = "blue"
+                edge = round(blue_edge * 100, 1)
+                best_odds = max(odds_rows, key=lambda o: o.blue_odds)
+                edge_odds_val = best_odds.blue_odds
+
+            edge_won = (edge_side == "red") == red_won
+            dec = _american_to_decimal(edge_odds_val)
+            edge_pl = round((dec - 1) * 100 if edge_won else -100, 2)
+
+        fight_data.append({
+            "conf": round(pred.confidence, 4),
+            "edge": edge,
+            "pick_won": pick_won,
+            "edge_won": edge_won,
+            "pick_pl": pick_pl,
+            "edge_pl": edge_pl,
+        })
+
+    total = len(fight_data)
+    correct = sum(1 for f in fight_data if f["pick_won"])
+
+    # Confidence-based splits
+    conf_buckets = [
         (0.00, 0.05, "50-55%"),
         (0.05, 0.10, "55-60%"),
         (0.10, 0.15, "60-65%"),
@@ -260,52 +329,90 @@ def get_model_metrics(db: Session = Depends(get_db)):
         (0.20, 0.30, "70-80%"),
         (0.30, 0.50, "80%+"),
     ]
-    splits = []
-    for lo, hi, label in buckets:
-        bucket = [(p, w, r, o) for p, w, r, o in rows if lo <= p.confidence < hi]
+    conf_splits = []
+    for lo, hi, label in conf_buckets:
+        bucket = [f for f in fight_data if lo <= f["conf"] < hi]
         if not bucket:
             continue
-        c = sum(1 for p, w, r, o in bucket if (p.predicted_winner == "red") == (w == r))
+        c = sum(1 for f in bucket if f["pick_won"])
+        with_odds = [f for f in bucket if f["pick_pl"] is not None]
+        pl = sum(f["pick_pl"] for f in with_odds)
+        c_odds = sum(1 for f in with_odds if f["pick_won"])
+        # Edge P/L for same confidence bucket
+        edge_with_odds = [f for f in bucket if f["edge_pl"] is not None]
+        edge_pl = sum(f["edge_pl"] for f in edge_with_odds)
+        edge_c = sum(1 for f in edge_with_odds if f["edge_won"])
 
-        # P/L calculation: only fights with real odds
-        pl = 0.0
-        fights_with_odds = 0
-        correct_with_odds = 0
-        for p, w, r, o in bucket:
-            if not (o and o.red_odds and o.blue_odds):
-                continue
-            fights_with_odds += 1
-            picked_red = p.predicted_winner == "red"
-            won = picked_red == (w == r)
-            if won:
-                correct_with_odds += 1
-            dec_odds = _american_to_decimal(o.red_odds if picked_red else o.blue_odds)
-            pl += (dec_odds - 1) * 100 if won else -100
-
-        splits.append({
+        conf_splits.append({
             "label": label,
             "fights": len(bucket),
             "correct": c,
             "accuracy": round(c / len(bucket), 4),
-            "fights_with_odds": fights_with_odds,
-            "correct_with_odds": correct_with_odds,
-            "accuracy_with_odds": round(correct_with_odds / fights_with_odds, 4) if fights_with_odds else 0,
+            "fights_with_odds": len(with_odds),
+            "correct_with_odds": c_odds,
+            "accuracy_with_odds": round(c_odds / len(with_odds), 4) if with_odds else 0,
             "pl": round(pl, 2),
-            "roi": round(pl / (fights_with_odds * 100) * 100, 2) if fights_with_odds else 0,
+            "roi": round(pl / (len(with_odds) * 100) * 100, 2) if with_odds else 0,
+            # Edge data for same bucket
+            "edge_correct": edge_c,
+            "edge_accuracy": round(edge_c / len(edge_with_odds), 4) if edge_with_odds else 0,
+            "edge_pl": round(edge_pl, 2),
+            "edge_roi": round(edge_pl / (len(edge_with_odds) * 100) * 100, 2) if edge_with_odds else 0,
         })
 
-    total_odds_fights = sum(s["fights_with_odds"] for s in splits)
-    total_odds_correct = sum(s["correct_with_odds"] for s in splits)
-    total_pl = sum(s["pl"] for s in splits)
+    # Edge-based splits (bucketed by edge percentage)
+    edge_buckets = [
+        (None, 0, "Negative"),
+        (0, 5, "0-5%"),
+        (5, 10, "5-10%"),
+        (10, 15, "10-15%"),
+        (15, 20, "15-20%"),
+        (20, 100, "20%+"),
+    ]
+    edge_splits = []
+    for lo, hi, label in edge_buckets:
+        if lo is None:
+            bucket = [f for f in fight_data if f["edge"] is not None and f["edge"] < 0]
+        else:
+            bucket = [f for f in fight_data if f["edge"] is not None and lo <= f["edge"] < hi]
+        if not bucket:
+            continue
+        with_odds = [f for f in bucket if f["edge_pl"] is not None]
+        edge_c = sum(1 for f in with_odds if f["edge_won"])
+        edge_pl = sum(f["edge_pl"] for f in with_odds)
+        pick_c = sum(1 for f in with_odds if f["pick_won"])
+        pick_pl = sum(f["pick_pl"] for f in with_odds)
+
+        edge_splits.append({
+            "label": label,
+            "fights": len(bucket),
+            "fights_with_odds": len(with_odds),
+            "edge_correct": edge_c,
+            "edge_accuracy": round(edge_c / len(with_odds), 4) if with_odds else 0,
+            "edge_pl": round(edge_pl, 2),
+            "edge_roi": round(edge_pl / (len(with_odds) * 100) * 100, 2) if with_odds else 0,
+            "pick_correct": pick_c,
+            "pick_accuracy": round(pick_c / len(with_odds), 4) if with_odds else 0,
+            "pick_pl": round(pick_pl, 2),
+            "pick_roi": round(pick_pl / (len(with_odds) * 100) * 100, 2) if with_odds else 0,
+        })
+
+    total_with_odds = sum(1 for f in fight_data if f["pick_pl"] is not None)
+    total_pl = sum(f["pick_pl"] for f in fight_data if f["pick_pl"] is not None)
+    total_edge_pl = sum(f["edge_pl"] for f in fight_data if f["edge_pl"] is not None)
 
     return {
         "total": total,
         "correct": correct,
         "accuracy": round(correct / total, 4),
-        "total_with_odds": total_odds_fights,
+        "total_with_odds": total_with_odds,
         "total_pl": round(total_pl, 2),
-        "total_roi": round(total_pl / (total_odds_fights * 100) * 100, 2) if total_odds_fights else 0,
-        "confidence_splits": splits,
+        "total_roi": round(total_pl / (total_with_odds * 100) * 100, 2) if total_with_odds else 0,
+        "total_edge_pl": round(total_edge_pl, 2),
+        "total_edge_roi": round(total_edge_pl / (total_with_odds * 100) * 100, 2) if total_with_odds else 0,
+        "confidence_splits": conf_splits,
+        "edge_splits": edge_splits,
+        "fights": fight_data,
     }
 
 
@@ -570,12 +677,28 @@ def _get_picks_data(db: Session):
             arb_margin = round((1 - total_ip) * 100, 2)
             is_arb = total_ip < 1.0
 
-        # Model edge: compare model probability to consensus implied probability
+        # Model prediction: who the model thinks wins
+        model_winner_side = None
+        model_winner_name = None
+        model_winner_prob = None
+        if prediction:
+            model_red_prob = prediction.red_prob
+            model_blue_prob = 1 - prediction.red_prob
+            if model_red_prob >= 0.5:
+                model_winner_side = "red"
+                model_winner_name = f"{fight.red_fighter.first_name} {fight.red_fighter.last_name}"
+                model_winner_prob = round(model_red_prob * 100, 1)
+            else:
+                model_winner_side = "blue"
+                model_winner_name = f"{fight.blue_fighter.first_name} {fight.blue_fighter.last_name}"
+                model_winner_prob = round(model_blue_prob * 100, 1)
+
+        # Edge pick: which side has the best betting value (can differ from model winner)
         edge = None
-        pick_side = None
-        pick_fighter = None
-        model_prob = None
-        implied_prob_pick = None
+        edge_side = None
+        edge_fighter = None
+        edge_model_prob = None
+        edge_implied_prob = None
         if prediction and odds_rows:
             # Use average implied prob across all books as consensus
             avg_red_ip = sum(implied_prob(o.red_odds) for o in odds_rows) / len(odds_rows)
@@ -588,19 +711,19 @@ def _get_picks_data(db: Session):
             red_edge = model_red_prob - avg_red_ip
             blue_edge = model_blue_prob - avg_blue_ip
 
-            # Pick the side with the bigger edge
+            # Pick the side with the bigger edge (best value bet)
             if red_edge > blue_edge:
-                pick_side = "red"
-                pick_fighter = f"{fight.red_fighter.first_name} {fight.red_fighter.last_name}"
+                edge_side = "red"
+                edge_fighter = f"{fight.red_fighter.first_name} {fight.red_fighter.last_name}"
                 edge = round(red_edge * 100, 1)
-                model_prob = round(model_red_prob * 100, 1)
-                implied_prob_pick = round(avg_red_ip * 100, 1)
+                edge_model_prob = round(model_red_prob * 100, 1)
+                edge_implied_prob = round(avg_red_ip * 100, 1)
             else:
-                pick_side = "blue"
-                pick_fighter = f"{fight.blue_fighter.first_name} {fight.blue_fighter.last_name}"
+                edge_side = "blue"
+                edge_fighter = f"{fight.blue_fighter.first_name} {fight.blue_fighter.last_name}"
                 edge = round(blue_edge * 100, 1)
-                model_prob = round(model_blue_prob * 100, 1)
-                implied_prob_pick = round(avg_blue_ip * 100, 1)
+                edge_model_prob = round(model_blue_prob * 100, 1)
+                edge_implied_prob = round(avg_blue_ip * 100, 1)
 
         all_books = [{
             "bookmaker": o.bookmaker,
@@ -622,14 +745,18 @@ def _get_picks_data(db: Session):
             "best_blue_book": best_blue.bookmaker if best_blue else None,
             "margin": arb_margin,
             "is_arb": is_arb,
-            # Model edge data
-            "pick_side": pick_side,
-            "pick_fighter": pick_fighter,
-            "edge": edge,
-            "model_prob": model_prob,
-            "implied_prob": implied_prob_pick,
+            # Model prediction (who the model thinks wins)
+            "model_winner_side": model_winner_side,
+            "model_winner_name": model_winner_name,
+            "model_winner_prob": model_winner_prob,
             "confidence": round(prediction.confidence * 100, 1) if prediction else None,
             "method_prediction": method_pred.predicted_method if method_pred else None,
+            # Edge pick (best value bet - can differ from model winner)
+            "edge_side": edge_side,
+            "edge_fighter": edge_fighter,
+            "edge": edge,
+            "edge_model_prob": edge_model_prob,
+            "edge_implied_prob": edge_implied_prob,
             # Odds
             "all_odds": all_books,
             "updated_at": max(
