@@ -637,6 +637,13 @@ def get_upcoming_events(db: Session = Depends(get_db)):
     return result
 
 
+@router.get("/rankings")
+def get_rankings():
+    """Get fighter rankings by weight class (precomputed from full model)."""
+    from app.services.ranking_service import get_rankings
+    return get_rankings()
+
+
 @router.get("/arbitrage")
 def get_arbitrage_opportunities(db: Session = Depends(get_db)):
     """Find arbitrage opportunities across bookmakers for upcoming fights."""

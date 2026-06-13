@@ -197,6 +197,44 @@ class UFCFightShapValue(TimestampMixin, Base):
     feature_value: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
+class UFCFighterRanking(TimestampMixin, Base):
+    __tablename__ = "ufc_fighter_rankings"
+    __table_args__ = (
+        UniqueConstraint("fighter_id", "weight_class"),
+        {"schema": UFC_SCHEMA},
+    )
+
+    fighter_id: Mapped[int] = mapped_column(ForeignKey("ufc.ufc_fighters.id"), index=True)
+    weight_class: Mapped[str] = mapped_column(String(30))
+    rank: Mapped[int] = mapped_column(Integer)
+    score: Mapped[float] = mapped_column(Float)  # expected win rate (0-1)
+    expected_wins: Mapped[float] = mapped_column(Float)
+    total_opponents: Mapped[int] = mapped_column(Integer)
+    feature_profile: Mapped[str] = mapped_column(Text)  # JSON blob of feature values
+
+    fighter: Mapped["UFCFighter"] = relationship()
+
+
+class UFCMatchupPrediction(TimestampMixin, Base):
+    __tablename__ = "ufc_matchup_predictions"
+    __table_args__ = (
+        UniqueConstraint("red_fighter_id", "blue_fighter_id"),
+        Index("ix_matchup_red", "red_fighter_id"),
+        Index("ix_matchup_blue", "blue_fighter_id"),
+        {"schema": UFC_SCHEMA},
+    )
+
+    red_fighter_id: Mapped[int] = mapped_column(ForeignKey("ufc.ufc_fighters.id"))
+    blue_fighter_id: Mapped[int] = mapped_column(ForeignKey("ufc.ufc_fighters.id"))
+    red_win_prob: Mapped[float] = mapped_column(Float)
+    ko_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sub_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dec_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    red_fighter: Mapped["UFCFighter"] = relationship(foreign_keys=[red_fighter_id])
+    blue_fighter: Mapped["UFCFighter"] = relationship(foreign_keys=[blue_fighter_id])
+
+
 class UFCFightPreview(TimestampMixin, Base):
     __tablename__ = "ufc_fight_previews"
     __table_args__ = (
