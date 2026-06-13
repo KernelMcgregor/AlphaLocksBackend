@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.models.ufc import (
-    UFCEvent, UFCFight, UFCFighter, UFCFightOdds,
+    UFCEvent, UFCFight, UFCFighter, UFCFightOdds, UFCMethodOdds,
     UFCFightPrediction, UFCFightPreview, UFCMethodPrediction, UFCFightShapValue, UFCFightStats,
 )
 from app.schemas.ufc import (
@@ -214,6 +214,24 @@ def get_fight(fight_id: int, db: Session = Depends(get_db)):
         "abs_value": s.abs_value,
         "feature_value": s.feature_value,
     } for s in shap_rows]
+
+    # Add method odds (Bovada)
+    method_odds_row = db.query(UFCMethodOdds).filter(UFCMethodOdds.fight_id == fight_id).first()
+    result["method_odds"] = {
+        "bookmaker": method_odds_row.bookmaker,
+        "ko_odds": method_odds_row.ko_odds,
+        "sub_odds": method_odds_row.sub_odds,
+        "dec_odds": method_odds_row.dec_odds,
+        "ko_prob": method_odds_row.ko_prob,
+        "sub_prob": method_odds_row.sub_prob,
+        "dec_prob": method_odds_row.dec_prob,
+        "red_ko_odds": method_odds_row.red_ko_odds,
+        "red_sub_odds": method_odds_row.red_sub_odds,
+        "red_dec_odds": method_odds_row.red_dec_odds,
+        "blue_ko_odds": method_odds_row.blue_ko_odds,
+        "blue_sub_odds": method_odds_row.blue_sub_odds,
+        "blue_dec_odds": method_odds_row.blue_dec_odds,
+    } if method_odds_row else None
 
     # Add preview
     preview = db.query(UFCFightPreview).filter(UFCFightPreview.fight_id == fight_id).first()

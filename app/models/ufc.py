@@ -138,6 +138,31 @@ class UFCFightOdds(TimestampMixin, Base):
     fight: Mapped["UFCFight"] = relationship()
 
 
+class UFCMethodOdds(TimestampMixin, Base):
+    __tablename__ = "ufc_method_odds"
+    __table_args__ = (UniqueConstraint("fight_id", "bookmaker"),)
+
+    fight_id: Mapped[int] = mapped_column(ForeignKey("ufc_fights.id"), index=True)
+    bookmaker: Mapped[str] = mapped_column(String(100))
+    # "How Will Fight End" market odds (American)
+    ko_odds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sub_odds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dec_odds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Implied probabilities (vig-removed)
+    ko_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sub_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dec_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # "Method of Victory" per-fighter odds (American)
+    red_ko_odds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    red_sub_odds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    red_dec_odds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    blue_ko_odds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    blue_sub_odds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    blue_dec_odds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    fight: Mapped["UFCFight"] = relationship()
+
+
 class UFCFightShapValue(TimestampMixin, Base):
     __tablename__ = "ufc_fight_shap_values"
     __table_args__ = (

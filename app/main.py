@@ -67,10 +67,23 @@ def scheduled_scrape():
         log.error(f"Fight preview generation failed: {e}")
 
 
+
+def scheduled_bovada_scrape():
+    import logging
+    log = logging.getLogger("scheduled_bovada")
+    try:
+        from app.services.bovada_scraper import scrape_bovada_method_odds
+        scrape_bovada_method_odds()
+        log.info("Bovada method odds scraped")
+    except Exception as e:
+        log.error(f"Bovada method odds scrape failed: {e}")
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     run_migrations()
     scheduler.add_job(scheduled_scrape, "interval", hours=24, id="ufc_scrape", replace_existing=True)
+    scheduler.add_job(scheduled_bovada_scrape, "cron", day_of_week="thu", hour=12, id="bovada_scrape", replace_existing=True)
     scheduler.start()
     yield
     scheduler.shutdown()
