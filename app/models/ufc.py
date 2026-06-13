@@ -4,9 +4,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 from app.models.base import TimestampMixin
 
+UFC_SCHEMA = "ufc"
+
 
 class UFCFighter(TimestampMixin, Base):
     __tablename__ = "ufc_fighters"
+    __table_args__ = {"schema": UFC_SCHEMA}
 
     ufcstats_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     first_name: Mapped[str] = mapped_column(String(100))
@@ -26,6 +29,7 @@ class UFCFighter(TimestampMixin, Base):
 
 class UFCEvent(TimestampMixin, Base):
     __tablename__ = "ufc_events"
+    __table_args__ = {"schema": UFC_SCHEMA}
 
     ufcstats_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(300))
@@ -37,13 +41,14 @@ class UFCEvent(TimestampMixin, Base):
 
 class UFCFight(TimestampMixin, Base):
     __tablename__ = "ufc_fights"
+    __table_args__ = {"schema": UFC_SCHEMA}
 
     ufcstats_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     date: Mapped[str | None] = mapped_column(Date, nullable=True)
-    event_id: Mapped[int] = mapped_column(ForeignKey("ufc_events.id"))
-    red_fighter_id: Mapped[int] = mapped_column(ForeignKey("ufc_fighters.id"))
-    blue_fighter_id: Mapped[int] = mapped_column(ForeignKey("ufc_fighters.id"))
-    winner_id: Mapped[int | None] = mapped_column(ForeignKey("ufc_fighters.id"), nullable=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("ufc.ufc_events.id"))
+    red_fighter_id: Mapped[int] = mapped_column(ForeignKey("ufc.ufc_fighters.id"))
+    blue_fighter_id: Mapped[int] = mapped_column(ForeignKey("ufc.ufc_fighters.id"))
+    winner_id: Mapped[int | None] = mapped_column(ForeignKey("ufc.ufc_fighters.id"), nullable=True)
     red_result: Mapped[str | None] = mapped_column(String(10), nullable=True)
     blue_result: Mapped[str | None] = mapped_column(String(10), nullable=True)
     weight_class: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -65,10 +70,13 @@ class UFCFight(TimestampMixin, Base):
 
 class UFCFightStats(TimestampMixin, Base):
     __tablename__ = "ufc_fight_stats"
-    __table_args__ = (UniqueConstraint("fight_id", "fighter_id", "round_number"),)
+    __table_args__ = (
+        UniqueConstraint("fight_id", "fighter_id", "round_number"),
+        {"schema": UFC_SCHEMA},
+    )
 
-    fight_id: Mapped[int] = mapped_column(ForeignKey("ufc_fights.id"), index=True)
-    fighter_id: Mapped[int] = mapped_column(ForeignKey("ufc_fighters.id"), index=True)
+    fight_id: Mapped[int] = mapped_column(ForeignKey("ufc.ufc_fights.id"), index=True)
+    fighter_id: Mapped[int] = mapped_column(ForeignKey("ufc.ufc_fighters.id"), index=True)
     round_number: Mapped[int] = mapped_column(Integer, default=0)  # 0 = totals, 1+ = per round
     corner: Mapped[str] = mapped_column(String(4))
     kd: Mapped[int] = mapped_column(Integer, default=0)
@@ -100,9 +108,12 @@ class UFCFightStats(TimestampMixin, Base):
 
 class UFCFightPrediction(TimestampMixin, Base):
     __tablename__ = "ufc_fight_predictions"
-    __table_args__ = (UniqueConstraint("fight_id"),)
+    __table_args__ = (
+        UniqueConstraint("fight_id"),
+        {"schema": UFC_SCHEMA},
+    )
 
-    fight_id: Mapped[int] = mapped_column(ForeignKey("ufc_fights.id"), index=True)
+    fight_id: Mapped[int] = mapped_column(ForeignKey("ufc.ufc_fights.id"), index=True)
     predicted_winner: Mapped[str] = mapped_column(String(4))  # 'red' or 'blue'
     confidence: Mapped[float] = mapped_column(Float)  # 0.0 to 0.5
     red_prob: Mapped[float] = mapped_column(Float)  # calibrated probability red wins
@@ -112,9 +123,12 @@ class UFCFightPrediction(TimestampMixin, Base):
 
 class UFCMethodPrediction(TimestampMixin, Base):
     __tablename__ = "ufc_method_predictions"
-    __table_args__ = (UniqueConstraint("fight_id"),)
+    __table_args__ = (
+        UniqueConstraint("fight_id"),
+        {"schema": UFC_SCHEMA},
+    )
 
-    fight_id: Mapped[int] = mapped_column(ForeignKey("ufc_fights.id"), index=True)
+    fight_id: Mapped[int] = mapped_column(ForeignKey("ufc.ufc_fights.id"), index=True)
     predicted_method: Mapped[str] = mapped_column(String(20))  # KO/TKO, Submission, Decision
     confidence: Mapped[float] = mapped_column(Float)  # max class probability
     ko_prob: Mapped[float] = mapped_column(Float)
@@ -126,9 +140,12 @@ class UFCMethodPrediction(TimestampMixin, Base):
 
 class UFCFightOdds(TimestampMixin, Base):
     __tablename__ = "ufc_fight_odds"
-    __table_args__ = (UniqueConstraint("fight_id", "bookmaker"),)
+    __table_args__ = (
+        UniqueConstraint("fight_id", "bookmaker"),
+        {"schema": UFC_SCHEMA},
+    )
 
-    fight_id: Mapped[int] = mapped_column(ForeignKey("ufc_fights.id"), index=True)
+    fight_id: Mapped[int] = mapped_column(ForeignKey("ufc.ufc_fights.id"), index=True)
     bookmaker: Mapped[str] = mapped_column(String(100))
     red_odds: Mapped[int] = mapped_column(Integer)  # American odds e.g. -150, +200
     blue_odds: Mapped[int] = mapped_column(Integer)
@@ -140,9 +157,12 @@ class UFCFightOdds(TimestampMixin, Base):
 
 class UFCMethodOdds(TimestampMixin, Base):
     __tablename__ = "ufc_method_odds"
-    __table_args__ = (UniqueConstraint("fight_id", "bookmaker"),)
+    __table_args__ = (
+        UniqueConstraint("fight_id", "bookmaker"),
+        {"schema": UFC_SCHEMA},
+    )
 
-    fight_id: Mapped[int] = mapped_column(ForeignKey("ufc_fights.id"), index=True)
+    fight_id: Mapped[int] = mapped_column(ForeignKey("ufc.ufc_fights.id"), index=True)
     bookmaker: Mapped[str] = mapped_column(String(100))
     # "How Will Fight End" market odds (American)
     ko_odds: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -167,9 +187,10 @@ class UFCFightShapValue(TimestampMixin, Base):
     __tablename__ = "ufc_fight_shap_values"
     __table_args__ = (
         Index("ix_shap_fight_id", "fight_id"),
+        {"schema": UFC_SCHEMA},
     )
 
-    fight_id: Mapped[int] = mapped_column(ForeignKey("ufc_fights.id"))
+    fight_id: Mapped[int] = mapped_column(ForeignKey("ufc.ufc_fights.id"))
     feature_name: Mapped[str] = mapped_column(String(100))
     shap_value: Mapped[float] = mapped_column(Float)  # positive = favors red, negative = favors blue
     abs_value: Mapped[float] = mapped_column(Float)  # for sorting by importance
@@ -178,9 +199,12 @@ class UFCFightShapValue(TimestampMixin, Base):
 
 class UFCFightPreview(TimestampMixin, Base):
     __tablename__ = "ufc_fight_previews"
-    __table_args__ = (UniqueConstraint("fight_id"),)
+    __table_args__ = (
+        UniqueConstraint("fight_id"),
+        {"schema": UFC_SCHEMA},
+    )
 
-    fight_id: Mapped[int] = mapped_column(ForeignKey("ufc_fights.id"), index=True)
+    fight_id: Mapped[int] = mapped_column(ForeignKey("ufc.ufc_fights.id"), index=True)
     content: Mapped[str] = mapped_column(Text)
     model_used: Mapped[str] = mapped_column(String(50))
     prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)

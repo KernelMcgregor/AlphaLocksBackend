@@ -25,16 +25,32 @@ def run_migrations():
             conn.executescript(sql_file.read_text())
         conn.close()
     else:
+        from sqlalchemy import text, inspect
+        # Create ufc schema and move tables if needed
+        with engine.begin() as conn:
+            conn.execute(text("CREATE SCHEMA IF NOT EXISTS ufc"))
+            # Move existing tables from public to ufc schema
+            ufc_tables = [
+                "ufc_fighters", "ufc_events", "ufc_fights", "ufc_fight_stats",
+                "ufc_fight_odds", "ufc_fight_predictions", "ufc_method_predictions",
+                "ufc_fight_shap_values", "ufc_fight_previews", "ufc_method_odds",
+                "ufc_distance_predictions",
+            ]
+            for table in ufc_tables:
+                try:
+                    conn.execute(text(f"ALTER TABLE public.{table} SET SCHEMA ufc"))
+                except Exception:
+                    pass  # Already moved or doesn't exist
+
         Base.metadata.create_all(bind=engine)
         # Add columns that create_all won't add to existing tables
-        from sqlalchemy import text, inspect
         insp = inspect(engine)
-        existing = {c["name"] for c in insp.get_columns("ufc_fighters")}
+        existing = {c["name"] for c in insp.get_columns("ufc_fighters", schema="ufc")}
         with engine.begin() as conn:
             if "country_code" not in existing:
-                conn.execute(text("ALTER TABLE ufc_fighters ADD COLUMN country_code VARCHAR(2)"))
+                conn.execute(text("ALTER TABLE ufc.ufc_fighters ADD COLUMN country_code VARCHAR(2)"))
             if "image_url" not in existing:
-                conn.execute(text("ALTER TABLE ufc_fighters ADD COLUMN image_url VARCHAR(500)"))
+                conn.execute(text("ALTER TABLE ufc.ufc_fighters ADD COLUMN image_url VARCHAR(500)"))
 
 
 def scheduled_scrape():
