@@ -87,6 +87,81 @@ def _fighter_recent_fights(db: Session, fighter_id: int, limit: int = 5) -> list
     return results
 
 
+def _finish_rates(db: Session, fighter_id: int) -> dict:
+    """Calculate KO and submission finish rates from all wins."""
+    wins = (
+        db.query(UFCFight)
+        .filter(UFCFight.winner_id == fighter_id)
+        .all()
+    )
+    total = len(wins)
+    if total == 0:
+        return {"ko_rate": 0, "sub_rate": 0, "total_wins": 0}
+    ko_count = sum(1 for w in wins if w.method and "KO" in w.method.upper())
+    sub_count = sum(1 for w in wins if w.method and "SUB" in w.method.upper())
+    return {
+        "ko_rate": round(ko_count / total, 2),
+        "sub_rate": round(sub_count / total, 2),
+        "total_wins": total,
+    }
+
+
+def _days_since_last_fight(db: Session, fighter_id: int) -> int | None:
+    """Days between today and the fighter's most recent completed fight."""
+    from datetime import date
+    last = (
+        db.query(UFCFight.date)
+        .filter(
+            or_(UFCFight.red_fighter_id == fighter_id, UFCFight.blue_fighter_id == fighter_id),
+            UFCFight.winner_id.isnot(None),
+        )
+        .order_by(UFCFight.date.desc())
+        .first()
+    )
+    if not last or not last[0]:
+        return None
+    fight_date = last[0] if isinstance(last[0], date) else date.fromisoformat(str(last[0]))
+    return (date.today() - fight_date).days
+
+
+def _division_change(db: Session, fighter_id: int, current_weight_class: str | None) -> dict:
+    """Check if this is a UFC debut or division change."""
+    past_fights = (
+        db.query(UFCFight.weight_class)
+        .filter(
+            or_(UFCFight.red_fighter_id == fighter_id, UFCFight.blue_fighter_id == fighter_id),
+            UFCFight.winner_id.isnot(None),
+        )
+        .order_by(UFCFight.date.desc())
+        .limit(5)
+        .all()
+    )
+    if not past_fights:
+        return {"ufc_debut": True, "division_change": False, "previous_division": None}
+    prev_class = past_fights[0][0]
+    changed = (
+        current_weight_class is not None
+        and prev_class is not None
+        and current_weight_class.strip().lower() != prev_class.strip().lower()
+    )
+    return {
+        "ufc_debut": False,
+        "division_change": changed,
+        "previous_division": prev_class if changed else None,
+    }
+
+
+def _scheduled_rounds(fight) -> int | None:
+    """Parse scheduled rounds from time_format (e.g. '3 Rnd (5-5-5)')."""
+    fmt = fight.time_format
+    if not fmt:
+        return None
+    parts = fmt.split()
+    if parts and parts[0].isdigit():
+        return int(parts[0])
+    return None
+
+
 def gather_fight_context(fight_id: int, db: Session) -> dict | None:
     """Collect all data needed for a fight preview."""
     fight = db.query(UFCFight).filter(UFCFight.id == fight_id).first()
@@ -132,6 +207,9 @@ def gather_fight_context(fight_id: int, db: Session) -> dict | None:
             "reach": f.reach,
             "stance": f.stance,
             "age": age,
+            "finish_rates": _finish_rates(db, f.id),
+            "days_since_last_fight": _days_since_last_fight(db, f.id),
+            "division_info": _division_change(db, f.id, fight.weight_class),
         }
 
     return {
@@ -141,6 +219,7 @@ def gather_fight_context(fight_id: int, db: Session) -> dict | None:
             "location": event.location if event else None,
         },
         "weight_class": fight.weight_class,
+        "scheduled_rounds": _scheduled_rounds(fight),
         "red_fighter": fighter_dict(red),
         "red_recent_fights": _fighter_recent_fights(db, red.id),
         "blue_fighter": fighter_dict(blue),
@@ -179,42 +258,77 @@ def build_preview_prompt(context: dict) -> tuple[str, str]:
     """Build system and user prompts for Claude API."""
     system = """You are an expert MMA analyst writing a pre-fight preview for a sports analytics platform.
 
-Write an engaging, analytical preview in markdown. Be specific with data — reference actual stats, records, and numbers. Do not use generic filler.
+Write an analytical preview in markdown. Be specific with data. Reference actual stats, records, and numbers from the data provided. Do not use generic filler.
 
-Structure your preview with these sections:
-1. **Overview** — A 2-3 sentence hook about the matchup
-2. **Fighter Comparison** — A markdown table comparing key attributes (record, height, reach, stance, age, streak)
-3. **Red Corner: [Name]** — Analysis of their recent form, strengths, and tendencies (reference their last few fights)
-4. **Blue Corner: [Name]** — Same analysis for the other fighter
-5. **Key Matchup Factors** — Interpret the model's top features (SHAP values) in plain English. Explain what each factor means for how the fight plays out
-6. **Model Prediction** — Present the model's pick, confidence, method prediction, and how it compares to the betting odds. Note any value discrepancies
-7. **How This Fight Plays Out** — Your narrative prediction of how the fight unfolds
+Rules:
+- Use the model feature data to inform your analysis, but never say "SHAP", "SHAP value", "feature importance", or reference model internals. Present insights as your own fight analysis grounded in the stats (e.g. instead of "the age difference SHAP value of -0.3016 suggests..." say "At 38, Pereira's age could be a factor as he moves up to heavyweight").
+- Use bold sparingly, only for section headers. Do not bold phrases or words within paragraphs, except for the final prediction sentence in the last section.
+- Never use em dashes (the long dash). Use commas, periods, or semicolons instead.
+- When referring to time since last fight, convert days into natural units: use "X months" for 30+ days, "X weeks" for 7-29 days, "X days" only for less than a week.
+- You may include markdown tables anywhere they help illustrate a point (striking comparisons, recent results, tale of the tape, etc.). This is optional and up to your judgment. Pull numbers directly from the data provided.
 
-Keep the total length to about 600-800 words. Use bold for emphasis. SHAP feature names use underscores — translate them to readable English (e.g. "diff_avg_sig_str_landed_per5" → "significant striking rate advantage")."""
+Structure every preview with exactly these sections:
+
+# [Red Last Name] vs. [Blue Last Name] | [Event Name]: [catchy one-liner]
+The one-liner should be part of the title itself after a colon. Keep it short and punchy.
+
+## Overview
+2-3 sentences setting up the matchup.
+
+## Tale of the Tape
+A markdown table comparing key attributes: record, age, height, reach, stance.
+
+## [Red Fighter Name]
+Analysis of recent form using their last few fights. You can include a table of recent results if it supports your point.
+
+## [Blue Fighter Name]
+Same format as above.
+
+## Key Factors
+Write this as flowing prose, not a bulleted list. Weave 3-5 factors together into a cohesive paragraph or two that tells the story of how this fight will be decided. Ground these in the data: striking rates, takedown numbers, finish rates, age, reach advantages, quality of opposition. Use the model's top features as a guide but describe them as fight dynamics, not model outputs.
+
+## How This Fight Plays Out
+A short narrative (3-4 sentences) describing how you see the fight unfolding. Include how it compares to the betting odds and note any value gaps between the model and the market.
+
+**Prediction: [Fighter Last Name] by [Method].**
+This line must appear as its own paragraph at the very end, fully bolded. It is not a section header.
+
+Keep the total length to about 600-800 words."""
 
     import json
+
+    def _fighter_block(key: str, context: dict) -> str:
+        f = context[f'{key}_fighter']
+        fr = f['finish_rates']
+        di = f['division_info']
+        days = f['days_since_last_fight']
+        lines = [
+            f"**{key.upper()} CORNER:** {f['name']}",
+            f"- Record: {f['record']}",
+            f"- Height: {f['height'] or 'N/A'}, Reach: {f['reach'] or 'N/A'}",
+            f"- Stance: {f['stance'] or 'N/A'}, Age: {f['age'] or 'N/A'}",
+            f"- Nickname: {f['nickname'] or 'None'}",
+            f"- Finish rates: {int(fr['ko_rate']*100)}% KO, {int(fr['sub_rate']*100)}% SUB ({fr['total_wins']} UFC wins)",
+            f"- Days since last fight: {days if days is not None else 'N/A'}",
+        ]
+        if di['ufc_debut']:
+            lines.append("- UFC DEBUT")
+        elif di['division_change']:
+            lines.append(f"- DIVISION CHANGE (previously {di['previous_division']})")
+        lines.append("")
+        lines.append("Recent Fights:")
+        lines.append(json.dumps(context[f'{key}_recent_fights'], indent=2))
+        return "\n".join(lines)
+
     user = f"""Generate a fight preview for the following upcoming bout.
 
-**Event:** {context['event']['name']} — {context['event']['date']}
+**Event:** {context['event']['name']}, {context['event']['date']}
 **Weight Class:** {context['weight_class'] or 'Unknown'}
+**Scheduled Rounds:** {context.get('scheduled_rounds') or 'Unknown'}
 
-**RED CORNER:** {context['red_fighter']['name']}
-- Record: {context['red_fighter']['record']}
-- Height: {context['red_fighter']['height'] or 'N/A'}, Reach: {context['red_fighter']['reach'] or 'N/A'}
-- Stance: {context['red_fighter']['stance'] or 'N/A'}, Age: {context['red_fighter']['age'] or 'N/A'}
-- Nickname: {context['red_fighter']['nickname'] or 'None'}
+{_fighter_block('red', context)}
 
-Recent Fights:
-{json.dumps(context['red_recent_fights'], indent=2)}
-
-**BLUE CORNER:** {context['blue_fighter']['name']}
-- Record: {context['blue_fighter']['record']}
-- Height: {context['blue_fighter']['height'] or 'N/A'}, Reach: {context['blue_fighter']['reach'] or 'N/A'}
-- Stance: {context['blue_fighter']['stance'] or 'N/A'}, Age: {context['blue_fighter']['age'] or 'N/A'}
-- Nickname: {context['blue_fighter']['nickname'] or 'None'}
-
-Recent Fights:
-{json.dumps(context['blue_recent_fights'], indent=2)}
+{_fighter_block('blue', context)}
 
 **MODEL PREDICTION:**
 {json.dumps(context['prediction'], indent=2) if context['prediction'] else 'No prediction available'}
