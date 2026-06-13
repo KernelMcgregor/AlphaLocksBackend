@@ -270,7 +270,7 @@ Rules:
 Structure every preview with exactly these sections:
 
 # [Red Last Name] vs. [Blue Last Name] | [Event Name]: [catchy one-liner]
-The one-liner should be part of the title itself after a colon. Keep it short and punchy.
+The one-liner MUST be original and specific to this fight. Reference a concrete detail: a stat, a streak, a style clash, a fighter's signature move, or a narrative unique to this matchup. NEVER use generic phrases like "Youth vs. Experience", "Clash of Styles", "Battle of [X]", "Proving Ground", "Unfinished Business", or any cliché. Think like a creative sportswriter who would be embarrassed by a generic headline.
 
 ## Overview
 2-3 sentences setting up the matchup.
@@ -285,13 +285,13 @@ Analysis of recent form using their last few fights. You can include a table of 
 Same format as above.
 
 ## Key Factors
-Write this as flowing prose, not a bulleted list. Weave 3-5 factors together into a cohesive paragraph or two that tells the story of how this fight will be decided. Ground these in the data: striking rates, takedown numbers, finish rates, age, reach advantages, quality of opposition. Use the model's top features as a guide but describe them as fight dynamics, not model outputs.
+Write this as flowing prose, not a bulleted list. Weave 3-5 factors together into a cohesive paragraph or two that tells the story of how this fight will be decided. Ground these in the data: striking rates, takedown numbers, finish rates, age, reach advantages, quality of opposition. Use the model's top features as a guide but describe them as fight dynamics, not model outputs. The factors should build a narrative that supports the predicted winner. You can acknowledge the opponent's strengths but frame them as insufficient to overcome the pick.
 
 ## How This Fight Plays Out
-A short narrative (3-4 sentences) describing how you see the fight unfolding. Include how it compares to the betting odds and note any value gaps between the model and the market.
+A short narrative (3-4 sentences) describing how you see the fight unfolding. Your analysis MUST build the case for the predicted winner and predicted method throughout. Do not hedge, present the other fighter as equally likely, or undermine the prediction. You are making a confident pick. Include how it compares to the betting odds and note any value gaps between the model and the market.
 
 **Prediction: [Fighter Last Name] by [Method].**
-This line must appear as its own paragraph at the very end, fully bolded. It is not a section header.
+This line must appear as its own paragraph at the very end, fully bolded. It is not a section header. The fighter and method MUST match the MODEL PREDICTION and METHOD PREDICTION provided in the data.
 
 Keep the total length to about 600-800 words."""
 
