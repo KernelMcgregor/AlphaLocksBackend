@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     ENV: str = "dev"
     ODDS_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
-    ANTHROPIC_MODEL: str = "claude-sonnet-4-20250514"
+    ANTHROPIC_MODEL: str = "claude-haiku-4-5-20251001"
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

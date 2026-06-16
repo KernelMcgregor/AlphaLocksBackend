@@ -76,6 +76,13 @@ def scheduled_scrape():
         log.error(f"Method prediction generation failed: {e}")
 
     try:
+        from app.services.ranking_service import generate_rankings
+        generate_rankings()
+        log.info("Fighter rankings regenerated")
+    except Exception as e:
+        log.error(f"Fighter ranking generation failed: {e}")
+
+    try:
         from app.services.preview_service import generate_all_upcoming_previews
         generate_all_upcoming_previews()
         log.info("Fight previews generated")

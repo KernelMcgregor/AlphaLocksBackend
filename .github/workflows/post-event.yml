@@ -61,13 +61,17 @@ jobs:
         if: steps.check.outputs.event_happened == 'true'
         run: python -m app.services.method_model --predict
 
+      - name: Generate fighter rankings
+        if: steps.check.outputs.event_happened == 'true'
+        run: python -m app.services.ranking_service
+
       - name: Scrape live odds
         if: steps.check.outputs.event_happened == 'true'
         run: python -m app.services.odds_scraper --live
 
       - name: Summary
         if: steps.check.outputs.event_happened == 'true'
-        run: echo "Post-event update complete - scraped results, refreshed upcoming, generated predictions, and fetched odds"
+        run: echo "Post-event update complete - scraped results, refreshed upcoming, generated predictions, rankings, and fetched odds"
 
   # Also refresh odds twice a week regardless of events
   refresh-odds:

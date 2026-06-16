@@ -535,11 +535,14 @@ def get_method_model_metrics(db: Session = Depends(get_db)):
 @router.get("/upcoming")
 def get_upcoming_events(db: Session = Depends(get_db)):
     """Get upcoming events with fights and predictions."""
-    from datetime import date as _date
+    from datetime import date as _date, timedelta
+
+    # Use yesterday as cutoff so events stay visible through the day after (handles UTC offset)
+    cutoff = _date.today() - timedelta(days=1)
 
     events = (
         db.query(UFCEvent)
-        .filter(UFCEvent.date >= _date.today())
+        .filter(UFCEvent.date >= cutoff)
         .order_by(UFCEvent.date)
         .all()
     )
@@ -657,13 +660,15 @@ def get_picks(db: Session = Depends(get_db)):
 
 
 def _get_picks_data(db: Session):
-    from datetime import date as _date
+    from datetime import date as _date, timedelta
 
     def implied_prob(american_odds):
         if american_odds > 0:
             return 100 / (american_odds + 100)
         else:
             return abs(american_odds) / (abs(american_odds) + 100)
+
+    cutoff = _date.today() - timedelta(days=1)
 
     # Get upcoming fights with multi-book odds
     upcoming_fights = (
@@ -675,7 +680,7 @@ def _get_picks_data(db: Session):
         )
         .filter(UFCFight.winner_id.is_(None))
         .join(UFCEvent, UFCFight.event_id == UFCEvent.id)
-        .filter(UFCEvent.date >= _date.today())
+        .filter(UFCEvent.date >= cutoff)
         .all()
     )
 
