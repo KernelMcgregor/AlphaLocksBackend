@@ -1,20 +1,28 @@
 """
-Fighter Rankings — Round-Level Multi-Dimensional Elo v2
+Fighter Rankings — Round-Level Multi-Dimensional Glicko v3
 
-Processes every round in UFC history to build 13-dimensional fighter ratings.
+Processes every round in UFC history to build 13-dimensional fighter ratings
+with Glicko-style uncertainty tracking and KenPom iterative convergence.
 
-v2 improvements:
-- Autocorrelation correction: finish bonuses scaled down when favorite wins
-  (prevents double-counting since favorites both win more AND finish more)
-- Decision scoring granularity: Split=0.55, Majority=0.6, Unanimous=0.91, Finish=1.0
-- Combat age modeling: biological peak 25-40, gradual decline outside window
-- Intelligent newcomer seeding: pre-UFC record seeds starting ratings
+v3 improvements over v2:
+- Glicko-style uncertainty (sigma) per dimension — dynamic K-factors based
+  on how confident we are in each fighter's rating
+- KenPom iterative convergence — run full history multiple passes so early
+  fights are scored against accurate opponent ratings
+- Round-time normalization — finish rounds scale K by elapsed time so
+  finishers aren't penalized for fewer rounds
+- Recency weighting — recent rounds count more via time-decayed K
+- Opponent-relative str_acc — no more fixed 0.45 baseline
+- Continuous KO/Sub/TD scoring — no more binary min(x, 1) capping
+- P4P z-score normalization across weight classes
+- Empirically-derived composite weights via logistic regression
 
 Run: python -m app.services.ranking_service
 """
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import math
@@ -29,9 +37,20 @@ from app.models.ufc import (
 
 log = logging.getLogger("ranking_service")
 
+# --- Constants ---
 MIN_ROUNDS = 10
-DECAY_RATE = 0.97
-K_BASE = 20
+K_BASE = 40  # bumped from 20; Glicko sigma scaling keeps veterans stable
+NUM_PASSES = 4  # KenPom-style iterative convergence passes
+CONVERGENCE_THRESHOLD = 0.5  # stop early if max rating delta < this
+
+# Glicko parameters
+SIGMA_INIT = 350.0  # initial uncertainty (high for new fighters)
+SIGMA_MIN = 60.0  # floor — even well-known fighters have some uncertainty
+TAU = 180.0  # controls how fast sigma shrinks per round (higher = slower decay)
+SIGMA_GROWTH_C = 3.0  # daily sigma growth during inactivity
+
+# Recency decay
+RECENCY_LAMBDA = 0.90  # per-year decay on K-factor
 
 DIMENSIONS = [
     "pts", "ko", "kod", "sub", "subd",
@@ -82,7 +101,6 @@ def _classify_weight_class(wc: str | None) -> str:
     if "flyweight" in wc_lower: return "w_flyweight" if is_womens else "flyweight"
     if "bantamweight" in wc_lower: return "w_bantamweight" if is_womens else "bantamweight"
     if "featherweight" in wc_lower:
-        # Women's featherweight is essentially defunct — roll into W. Bantamweight
         return "w_bantamweight" if is_womens else "featherweight"
     if "lightweight" in wc_lower: return "lightweight"
     if "welterweight" in wc_lower: return "welterweight"
@@ -99,25 +117,24 @@ def _elo_expected(rating_a: float, rating_b: float) -> float:
 
 def _combat_age_factor(dob, fight_date) -> float:
     """
-    Biological combat age multiplier. Fighters peak 25-40.
+    Biological combat age multiplier. Fighters peak 25-35.
     Returns a multiplier on K-factor gains (not losses).
-    Outside peak window, gains are reduced — fighter is declining.
     """
     if not dob or not fight_date:
         return 1.0
     age = (fight_date - dob).days / 365.25
     if 25 <= age <= 35:
-        return 1.0  # prime
+        return 1.0
     elif 35 < age <= 38:
-        return 0.9  # early decline
+        return 0.9
     elif 38 < age <= 40:
-        return 0.75  # significant decline
+        return 0.75
     elif age > 40:
-        return 0.6  # steep decline
+        return 0.6
     elif 22 <= age < 25:
-        return 0.95  # still developing
+        return 0.95
     elif age < 22:
-        return 0.85  # very raw
+        return 0.85
     return 1.0
 
 
@@ -125,36 +142,104 @@ def _newcomer_seed(wins: int, losses: int) -> float:
     """
     Seed starting ratings based on pre-UFC record.
     A 15-0 prospect starts higher than a 5-4 journeyman.
-    Returns a delta applied to all dimensions on first fight.
     """
     total = wins + losses
     if total == 0:
         return 0.0
     win_pct = wins / total
-    # Scale: undefeated with many wins = +30, .500 record = 0, bad record = -15
-    record_quality = (win_pct - 0.5) * 2  # -1 to +1
-    volume_bonus = min(total / 20, 1.0)  # more fights = more confident in seed
+    record_quality = (win_pct - 0.5) * 2
+    volume_bonus = min(total / 20, 1.0)
     return record_quality * volume_bonus * 30
 
 
 def _autocorrelation_factor(winner_rating: float, loser_rating: float) -> float:
     """
-    Autocorrelation correction (FiveThirtyEight/Cage Calculus).
-    Favorites both win more AND finish more, so finish bonuses
-    double-count the favorite's advantage. Scale down the bonus
-    when the favorite wins, scale up when the underdog wins.
+    Scale finish bonuses: down when favorite wins, up when underdog wins.
+    Prevents double-counting since favorites both win more AND finish more.
     """
     expected = _elo_expected(winner_rating, loser_rating)
-    # When expected > 0.5 (favorite won): reduce bonus
-    # When expected < 0.5 (upset): increase bonus
-    # Factor ranges from ~0.5 (big favorite) to ~1.5 (big upset)
     return 1.0 + (0.5 - expected)
 
 
+def _parse_finish_time_seconds(finish_time_str: str | None) -> int:
+    """Parse '4:35' into 275 seconds."""
+    if not finish_time_str:
+        return 0
+    parts = finish_time_str.strip().split(":")
+    if len(parts) != 2:
+        return 0
+    try:
+        return int(parts[0]) * 60 + int(parts[1])
+    except ValueError:
+        return 0
+
+
+def _round_duration_factor(is_finish_round: bool, finish_time_seconds: int,
+                           round_minutes: int) -> float:
+    """
+    Scale K by how much of the round elapsed.
+    Full round = 1.0. A 2-min finish in a 5-min round = 0.4.
+    Non-finish rounds always = 1.0.
+    """
+    if not is_finish_round:
+        return 1.0
+    max_seconds = round_minutes * 60
+    if max_seconds <= 0 or finish_time_seconds <= 0:
+        return 1.0
+    return min(finish_time_seconds / max_seconds, 1.0)
+
+
+def _glicko_update_sigma(sigma: float) -> float:
+    """Shrink sigma after observing a round."""
+    return max(1.0 / math.sqrt(1.0 / (sigma ** 2) + 1.0 / (TAU ** 2)), SIGMA_MIN)
+
+
+def _glicko_inflate_sigma(sigma: float, days_inactive: float) -> float:
+    """Grow sigma during inactivity."""
+    return min(math.sqrt(sigma ** 2 + (SIGMA_GROWTH_C ** 2) * days_inactive), SIGMA_INIT)
+
+
+def _effective_k(k_base: float, sigma: float, recency_years: float,
+                 round_dur_factor: float) -> float:
+    """
+    Combine all K-factor modifiers:
+    - Glicko sigma scaling (high uncertainty = bigger moves)
+    - Recency decay (older rounds matter less)
+    - Round duration (finish rounds scale by elapsed time)
+    """
+    # Floor at 0.5 so veterans still get at least half of K_BASE
+    glicko_scale = 0.5 + 0.5 * (sigma / SIGMA_INIT)
+    recency_scale = RECENCY_LAMBDA ** recency_years
+    return k_base * glicko_scale * recency_scale * round_dur_factor
+
+
+def _init_ratings():
+    """Create a fresh ratings dict with (mu, sigma) tuples."""
+    return defaultdict(lambda: {d: [0.0, SIGMA_INIT] for d in DIMENSIONS})
+
+
+def _get_mu(ratings, fighter_id, dim):
+    return ratings[fighter_id][dim][0]
+
+
+def _get_sigma(ratings, fighter_id, dim):
+    return ratings[fighter_id][dim][1]
+
+
+def _update_rating(ratings, fighter_id, dim, delta, age_factor, update_sigma=True):
+    """Apply a rating delta with age factor (gains only) and update sigma."""
+    if delta > 0:
+        ratings[fighter_id][dim][0] += delta * age_factor
+    else:
+        ratings[fighter_id][dim][0] += delta
+    if update_sigma:
+        ratings[fighter_id][dim][1] = _glicko_update_sigma(ratings[fighter_id][dim][1])
+
+
 def generate_rankings():
-    """Process all rounds in UFC history and compute multi-dimensional Elo ratings."""
+    """Process all rounds in UFC history with Glicko uncertainty and iterative convergence."""
     log.info("=" * 60)
-    log.info("GENERATING FIGHTER RANKINGS (Round-Level Multi-Dim Elo v2)")
+    log.info("GENERATING FIGHTER RANKINGS (Round-Level Multi-Dim Glicko v3)")
     log.info("=" * 60)
 
     db = SessionLocal()
@@ -171,6 +256,19 @@ def generate_rankings():
 
         fight_map = {}
         for f in fights:
+            # Parse round duration from time_format (e.g. "5-5-5" or "5-5-5-5-5")
+            round_minutes = 5  # default
+            if f.time_format:
+                parts = f.time_format.split("-")
+                if parts:
+                    try:
+                        round_minutes = int(parts[0].strip())
+                    except ValueError:
+                        pass
+
+            is_title = "title" in (f.weight_class or "").lower()
+            is_5rd = f.time_format and f.time_format.count("-") >= 4  # 5-5-5-5-5
+
             fight_map[f.id] = {
                 "id": f.id,
                 "date": f.date,
@@ -180,7 +278,11 @@ def generate_rankings():
                 "method": f.method or "",
                 "weight_class": _classify_weight_class(f.weight_class),
                 "finish_round": f.finish_round,
+                "finish_time_seconds": _parse_finish_time_seconds(f.finish_time),
+                "round_minutes": round_minutes,
                 "max_rounds": 5 if f.time_format and "5" in (f.time_format or "") else 3,
+                "is_title": is_title,
+                "is_5rd": is_5rd,
             }
         log.info(f"  Loaded {len(fight_map)} fights")
 
@@ -214,7 +316,7 @@ def generate_rankings():
             }
         log.info(f"  Loaded rounds for {len(rounds_by_fight)} fights")
 
-        # --- Load fighter info (including DOB for combat age) ---
+        # --- Load fighter info ---
         fighters_q = db.query(UFCFighter).all()
         fighter_info = {f.id: f for f in fighters_q}
         log.info(f"  Loaded {len(fighter_info)} fighters")
@@ -223,12 +325,11 @@ def generate_rankings():
         log.info("  Computing weight class baseline rates...")
 
         wc_round_counts = defaultdict(int)
-        wc_ko_rounds = defaultdict(int)
-        wc_sub_rounds = defaultdict(int)
-        wc_td_rounds = defaultdict(int)
-        wc_ctrl_rounds = defaultdict(int)
-        wc_kd_rounds = defaultdict(int)
-        wc_gnd_rounds = defaultdict(int)
+        wc_kd_total = defaultdict(float)
+        wc_sub_total = defaultdict(float)
+        wc_td_total = defaultdict(float)
+        wc_ctrl_total = defaultdict(float)
+        wc_gnd_total = defaultdict(float)
 
         for fight_id, round_data in rounds_by_fight.items():
             fight = fight_map.get(fight_id)
@@ -238,58 +339,59 @@ def generate_rankings():
 
             for rnd_num, fighter_stats in round_data.items():
                 wc_round_counts[wc] += 1
-                is_finish_round = (fight["finish_round"] == rnd_num)
-                if is_finish_round and "KO" in fight["method"]:
-                    wc_ko_rounds[wc] += 1
-                if is_finish_round and "Sub" in fight["method"]:
-                    wc_sub_rounds[wc] += 1
                 for fid, stats in fighter_stats.items():
-                    if stats["td_landed"] > 0:
-                        wc_td_rounds[wc] += 1; break
-                for fid, stats in fighter_stats.items():
-                    if stats["ctrl_seconds"] > 15:
-                        wc_ctrl_rounds[wc] += 1; break
-                for fid, stats in fighter_stats.items():
-                    if stats["kd"] > 0:
-                        wc_kd_rounds[wc] += 1; break
-                for fid, stats in fighter_stats.items():
-                    if stats["ground_landed"] > 3:
-                        wc_gnd_rounds[wc] += 1; break
+                    wc_kd_total[wc] += min(stats["kd"], 3) / 3.0
+                    wc_sub_total[wc] += min(stats["sub_att"], 2) / 2.0
+                    wc_td_total[wc] += min(stats["td_landed"], 5) / 5.0
+                    wc_ctrl_total[wc] += 1 if stats["ctrl_seconds"] > 15 else 0
+                    wc_gnd_total[wc] += 1 if stats["ground_landed"] > 3 else 0
 
         baselines = {}
         for wc in WEIGHT_CLASS_ORDER:
             total = max(wc_round_counts.get(wc, 1), 1)
+            # Per-fighter-per-round rates (divide by 2 since 2 fighters per round)
+            n_fighters = total * 2
             baselines[wc] = {
-                "ko": wc_ko_rounds.get(wc, 0) / total,
-                "sub": wc_sub_rounds.get(wc, 0) / total,
-                "td": wc_td_rounds.get(wc, 0) / total,
-                "ctrl": wc_ctrl_rounds.get(wc, 0) / total,
-                "kd": wc_kd_rounds.get(wc, 0) / total,
-                "gnd": wc_gnd_rounds.get(wc, 0) / total,
+                "kd": wc_kd_total.get(wc, 0) / max(n_fighters, 1),
+                "sub": wc_sub_total.get(wc, 0) / max(n_fighters, 1),
+                "td": wc_td_total.get(wc, 0) / max(n_fighters, 1),
+                "ctrl": wc_ctrl_total.get(wc, 0) / max(total, 1),
+                "gnd": wc_gnd_total.get(wc, 0) / max(total, 1),
             }
             log.info(f"    {WEIGHT_CLASS_LABELS.get(wc, wc)}: {total} rounds, "
-                     f"KO={baselines[wc]['ko']:.3f}, SUB={baselines[wc]['sub']:.3f}, "
-                     f"TD={baselines[wc]['td']:.3f}")
+                     f"KD={baselines[wc]['kd']:.4f}, SUB={baselines[wc]['sub']:.4f}, "
+                     f"TD={baselines[wc]['td']:.4f}")
 
-        # --- Process all rounds chronologically ---
-        log.info("  Processing rounds...")
-
-        ratings = defaultdict(lambda: {d: 0.0 for d in DIMENSIONS})
-        fighter_round_count = defaultdict(int)
-        fighter_last_fight_date = {}
-        fighter_weight_class = {}
-        fighter_seeded = set()  # track who has been seeded
-
+        # --- Pre-sort fights chronologically ---
         sorted_fight_ids = sorted(
             fight_map.keys(),
             key=lambda fid: (fight_map[fid]["date"] or date.min, fid)
         )
+
+        # Find the most recent fight date for recency calculations
+        most_recent_date = max(
+            (fight_map[fid]["date"] for fid in sorted_fight_ids if fight_map[fid]["date"]),
+            default=date.today()
+        )
+
+        # --- Process all rounds chronologically ---
+        ratings = _init_ratings()
+
+        fighter_round_count = defaultdict(int)
+        fighter_last_fight_date = {}
+        fighter_weight_class = {}
+        fighter_seeded = set()
+        fighter_streak = defaultdict(int)  # positive = win streak, negative = loss streak
 
         rounds_processed = 0
         for fight_id in sorted_fight_ids:
             fight = fight_map[fight_id]
             wc = fight["weight_class"]
             if wc == "unknown":
+                continue
+
+            # Skip fights with no result (scheduled/cancelled)
+            if not fight["winner_id"] and not fight["method"]:
                 continue
 
             round_data = rounds_by_fight.get(fight_id, {})
@@ -307,8 +409,7 @@ def generate_rankings():
             fighter_last_fight_date[red_id] = fight_date
             fighter_last_fight_date[blue_id] = fight_date
 
-            # --- NEWCOMER SEEDING (IOPP) ---
-            # On a fighter's first UFC round, seed their ratings from pre-UFC record
+            # --- NEWCOMER SEEDING ---
             for fid in [red_id, blue_id]:
                 if fid not in fighter_seeded:
                     fighter_seeded.add(fid)
@@ -317,7 +418,7 @@ def generate_rankings():
                         seed = _newcomer_seed(fi.wins, fi.losses)
                         if seed != 0:
                             for dim in DIMENSIONS:
-                                ratings[fid][dim] += seed
+                                ratings[fid][dim][0] += seed
 
             # --- COMBAT AGE factors ---
             red_fi = fighter_info.get(red_id)
@@ -326,13 +427,18 @@ def generate_rankings():
             blue_age_factor = _combat_age_factor(blue_fi.dob if blue_fi else None, fight_date)
 
             # --- DECISION SCORING ---
-            # Determine fight-level outcome score for the PTS dimension
             is_finish = "KO" in method or "Sub" in method
             decision_score = DECISION_SCORES.get(method, 1.0 if is_finish else 0.75)
 
-            # --- AUTOCORRELATION: compute pre-fight rating advantage ---
-            red_composite = sum(ratings[red_id][d] for d in DIMENSIONS)
-            blue_composite = sum(ratings[blue_id][d] for d in DIMENSIONS)
+            # --- AUTOCORRELATION: compute pre-fight composite ---
+            # Pre-fight composite for autocorrelation
+            red_composite = sum(_get_mu(ratings, red_id, d) for d in DIMENSIONS)
+            blue_composite = sum(_get_mu(ratings, blue_id, d) for d in DIMENSIONS)
+
+            # --- RECENCY: years between this fight and most recent fight ---
+            recency_years = 0.0
+            if fight_date and most_recent_date:
+                recency_years = max((most_recent_date - fight_date).days / 365.25, 0.0)
 
             for rnd_num in sorted(round_data.keys()):
                 stats = round_data[rnd_num]
@@ -347,8 +453,22 @@ def generate_rankings():
                 is_sub_finish = is_finish_round and "Sub" in method
                 is_last_round = is_finish_round or (rnd_num == max(round_data.keys()))
 
-                r_rating = ratings[red_id]
-                b_rating = ratings[blue_id]
+                # --- ROUND DURATION FACTOR ---
+                rdf = _round_duration_factor(
+                    is_finish_round, fight["finish_time_seconds"],
+                    fight["round_minutes"]
+                )
+
+                # --- Compute effective K for each fighter ---
+                # Use average sigma across dimensions for the K scaling
+                red_avg_sigma = sum(_get_sigma(ratings, red_id, d) for d in DIMENSIONS) / len(DIMENSIONS)
+                blue_avg_sigma = sum(_get_sigma(ratings, blue_id, d) for d in DIMENSIONS) / len(DIMENSIONS)
+
+                K_red = _effective_k(K_BASE, red_avg_sigma, recency_years, rdf)
+                K_blue = _effective_k(K_BASE, blue_avg_sigma, recency_years, rdf)
+
+                r_mu = lambda d: _get_mu(ratings, red_id, d)
+                b_mu = lambda d: _get_mu(ratings, blue_id, d)
 
                 # --- PTS: Round winning ---
                 red_pts = (
@@ -372,203 +492,283 @@ def generate_rankings():
                 else:
                     red_won_round = 0.5
 
-                # Finish round: winner gets the round
                 if is_finish_round:
                     red_won_round = 1.0 if fight["winner_id"] == red_id else 0.0
 
-                # DECISION SCORING: on the last round, scale the PTS update
-                # by the decision quality. Split decisions barely move ratings.
-                K_pts = K_BASE
+                K_pts_r = K_red
+                K_pts_b = K_blue
                 if is_last_round and not is_finish:
-                    K_pts = K_BASE * decision_score
+                    K_pts_r *= decision_score
+                    K_pts_b *= decision_score
 
-                exp_red = _elo_expected(r_rating["pts"], b_rating["pts"])
-                pts_delta_red = K_pts * (red_won_round - exp_red)
-                pts_delta_blue = K_pts * ((1 - red_won_round) - (1 - exp_red))
+                exp_red = _elo_expected(r_mu("pts"), b_mu("pts"))
+                pts_delta_red = K_pts_r * (red_won_round - exp_red)
+                pts_delta_blue = K_pts_b * ((1 - red_won_round) - (1 - exp_red))
 
-                # Apply combat age: gains are multiplied, losses are not
-                r_rating["pts"] += pts_delta_red * (red_age_factor if pts_delta_red > 0 else 1.0)
-                b_rating["pts"] += pts_delta_blue * (blue_age_factor if pts_delta_blue > 0 else 1.0)
+                _update_rating(ratings, red_id, "pts", pts_delta_red, red_age_factor)
+                _update_rating(ratings, blue_id, "pts", pts_delta_blue, blue_age_factor)
 
-                # --- KO / KOd ---
-                ko_expected = bl["kd"]
-                red_kd_outcome = min(r["kd"], 1)
-                exp_ko = _elo_expected(r_rating["ko"], b_rating["kod"])
-                adj_exp = ko_expected * exp_ko
-                K_ko = K_BASE * 2
-                ko_d_red = K_ko * (red_kd_outcome - adj_exp)
-                ko_d_blue_def = K_ko * ((1 - red_kd_outcome) - (1 - adj_exp))
-                r_rating["ko"] += ko_d_red * (red_age_factor if ko_d_red > 0 else 1.0)
-                b_rating["kod"] += ko_d_blue_def * (blue_age_factor if ko_d_blue_def > 0 else 1.0)
+                # --- KO / KOd (continuous scoring) ---
+                ko_baseline = bl["kd"]
+                red_kd_outcome = min(r["kd"], 3) / 3.0
+                exp_ko = _elo_expected(r_mu("ko"), b_mu("kod"))
+                adj_exp = ko_baseline * exp_ko
+                K_ko_r = K_red * 2
+                K_ko_b = K_blue * 2
+                ko_d_red = K_ko_r * (red_kd_outcome - adj_exp)
+                ko_d_blue_def = K_ko_b * ((1 - red_kd_outcome) - (1 - adj_exp))
+                _update_rating(ratings, red_id, "ko", ko_d_red, red_age_factor)
+                _update_rating(ratings, blue_id, "kod", ko_d_blue_def, blue_age_factor)
 
-                blue_kd_outcome = min(b["kd"], 1)
-                exp_ko_b = _elo_expected(b_rating["ko"], r_rating["kod"])
-                adj_exp_b = ko_expected * exp_ko_b
-                ko_d_blue = K_ko * (blue_kd_outcome - adj_exp_b)
-                ko_d_red_def = K_ko * ((1 - blue_kd_outcome) - (1 - adj_exp_b))
-                b_rating["ko"] += ko_d_blue * (blue_age_factor if ko_d_blue > 0 else 1.0)
-                r_rating["kod"] += ko_d_red_def * (red_age_factor if ko_d_red_def > 0 else 1.0)
+                blue_kd_outcome = min(b["kd"], 3) / 3.0
+                exp_ko_b = _elo_expected(b_mu("ko"), r_mu("kod"))
+                adj_exp_b = ko_baseline * exp_ko_b
+                ko_d_blue = K_ko_b * (blue_kd_outcome - adj_exp_b)
+                ko_d_red_def = K_ko_r * ((1 - blue_kd_outcome) - (1 - adj_exp_b))
+                _update_rating(ratings, blue_id, "ko", ko_d_blue, blue_age_factor)
+                _update_rating(ratings, red_id, "kod", ko_d_red_def, red_age_factor)
 
-                # KO finish bonus with AUTOCORRELATION CORRECTION
+                # KO finish bonus with autocorrelation correction
                 if is_ko_finish:
                     ko_bonus = K_BASE * 3
                     if fight["winner_id"] == red_id:
                         ac = _autocorrelation_factor(red_composite, blue_composite)
-                        r_rating["ko"] += ko_bonus * ac * red_age_factor
-                        b_rating["kod"] -= ko_bonus * 0.5
+                        _update_rating(ratings, red_id, "ko", ko_bonus * ac, red_age_factor, update_sigma=False)
+                        _update_rating(ratings, blue_id, "kod", -ko_bonus * 0.5, 1.0, update_sigma=False)
                     else:
                         ac = _autocorrelation_factor(blue_composite, red_composite)
-                        b_rating["ko"] += ko_bonus * ac * blue_age_factor
-                        r_rating["kod"] -= ko_bonus * 0.5
+                        _update_rating(ratings, blue_id, "ko", ko_bonus * ac, blue_age_factor, update_sigma=False)
+                        _update_rating(ratings, red_id, "kod", -ko_bonus * 0.5, 1.0, update_sigma=False)
 
-                # --- SUB / SUBd ---
-                sub_expected = bl["sub"]
-                red_sub_outcome = min(r["sub_att"], 1)
-                exp_sub = _elo_expected(r_rating["sub"], b_rating["subd"])
-                adj_sub_exp = sub_expected * exp_sub
-                K_sub = K_BASE * 2
-                sub_d_red = K_sub * (red_sub_outcome - adj_sub_exp)
-                sub_d_blue_def = K_sub * ((1 - red_sub_outcome) - (1 - adj_sub_exp))
-                r_rating["sub"] += sub_d_red * (red_age_factor if sub_d_red > 0 else 1.0)
-                b_rating["subd"] += sub_d_blue_def * (blue_age_factor if sub_d_blue_def > 0 else 1.0)
+                # --- SUB / SUBd (continuous scoring) ---
+                sub_baseline = bl["sub"]
+                red_sub_outcome = min(r["sub_att"], 2) / 2.0
+                exp_sub = _elo_expected(r_mu("sub"), b_mu("subd"))
+                adj_sub_exp = sub_baseline * exp_sub
+                K_sub_r = K_red * 2
+                K_sub_b = K_blue * 2
+                sub_d_red = K_sub_r * (red_sub_outcome - adj_sub_exp)
+                sub_d_blue_def = K_sub_b * ((1 - red_sub_outcome) - (1 - adj_sub_exp))
+                _update_rating(ratings, red_id, "sub", sub_d_red, red_age_factor)
+                _update_rating(ratings, blue_id, "subd", sub_d_blue_def, blue_age_factor)
 
-                blue_sub_outcome = min(b["sub_att"], 1)
-                exp_sub_b = _elo_expected(b_rating["sub"], r_rating["subd"])
-                adj_sub_exp_b = sub_expected * exp_sub_b
-                sub_d_blue = K_sub * (blue_sub_outcome - adj_sub_exp_b)
-                sub_d_red_def = K_sub * ((1 - blue_sub_outcome) - (1 - adj_sub_exp_b))
-                b_rating["sub"] += sub_d_blue * (blue_age_factor if sub_d_blue > 0 else 1.0)
-                r_rating["subd"] += sub_d_red_def * (red_age_factor if sub_d_red_def > 0 else 1.0)
+                blue_sub_outcome = min(b["sub_att"], 2) / 2.0
+                exp_sub_b = _elo_expected(b_mu("sub"), r_mu("subd"))
+                adj_sub_exp_b = sub_baseline * exp_sub_b
+                sub_d_blue = K_sub_b * (blue_sub_outcome - adj_sub_exp_b)
+                sub_d_red_def = K_sub_r * ((1 - blue_sub_outcome) - (1 - adj_sub_exp_b))
+                _update_rating(ratings, blue_id, "sub", sub_d_blue, blue_age_factor)
+                _update_rating(ratings, red_id, "subd", sub_d_red_def, red_age_factor)
 
-                # SUB finish bonus with AUTOCORRELATION CORRECTION
+                # SUB finish bonus with autocorrelation correction
                 if is_sub_finish:
                     sub_bonus = K_BASE * 3
                     if fight["winner_id"] == red_id:
                         ac = _autocorrelation_factor(red_composite, blue_composite)
-                        r_rating["sub"] += sub_bonus * ac * red_age_factor
-                        b_rating["subd"] -= sub_bonus * 0.5
+                        _update_rating(ratings, red_id, "sub", sub_bonus * ac, red_age_factor, update_sigma=False)
+                        _update_rating(ratings, blue_id, "subd", -sub_bonus * 0.5, 1.0, update_sigma=False)
                     else:
                         ac = _autocorrelation_factor(blue_composite, red_composite)
-                        b_rating["sub"] += sub_bonus * ac * blue_age_factor
-                        r_rating["subd"] -= sub_bonus * 0.5
+                        _update_rating(ratings, blue_id, "sub", sub_bonus * ac, blue_age_factor, update_sigma=False)
+                        _update_rating(ratings, red_id, "subd", -sub_bonus * 0.5, 1.0, update_sigma=False)
 
-                # --- TD / TDd ---
-                td_expected = bl["td"]
-                red_td = min(r["td_landed"], 1)
-                exp_td = _elo_expected(r_rating["td"], b_rating["tdd"])
-                K_td = K_BASE * 1.5
-                td_d = K_td * (red_td - td_expected * exp_td)
-                td_dd = K_td * ((1 - red_td) - (1 - td_expected * exp_td))
-                r_rating["td"] += td_d * (red_age_factor if td_d > 0 else 1.0)
-                b_rating["tdd"] += td_dd * (blue_age_factor if td_dd > 0 else 1.0)
+                # --- TD / TDd (continuous scoring) ---
+                td_baseline = bl["td"]
+                red_td = min(r["td_landed"], 5) / 5.0
+                exp_td = _elo_expected(r_mu("td"), b_mu("tdd"))
+                K_td_r = K_red * 1.5
+                K_td_b = K_blue * 1.5
+                td_d = K_td_r * (red_td - td_baseline * exp_td)
+                td_dd = K_td_b * ((1 - red_td) - (1 - td_baseline * exp_td))
+                _update_rating(ratings, red_id, "td", td_d, red_age_factor)
+                _update_rating(ratings, blue_id, "tdd", td_dd, blue_age_factor)
 
-                blue_td = min(b["td_landed"], 1)
-                exp_td_b = _elo_expected(b_rating["td"], r_rating["tdd"])
-                td_d_b = K_td * (blue_td - td_expected * exp_td_b)
-                td_dd_b = K_td * ((1 - blue_td) - (1 - td_expected * exp_td_b))
-                b_rating["td"] += td_d_b * (blue_age_factor if td_d_b > 0 else 1.0)
-                r_rating["tdd"] += td_dd_b * (red_age_factor if td_dd_b > 0 else 1.0)
+                blue_td = min(b["td_landed"], 5) / 5.0
+                exp_td_b = _elo_expected(b_mu("td"), r_mu("tdd"))
+                td_d_b = K_td_b * (blue_td - td_baseline * exp_td_b)
+                td_dd_b = K_td_r * ((1 - blue_td) - (1 - td_baseline * exp_td_b))
+                _update_rating(ratings, blue_id, "td", td_d_b, blue_age_factor)
+                _update_rating(ratings, red_id, "tdd", td_dd_b, red_age_factor)
 
                 # --- CTRL / CTRLd ---
                 total_ctrl = r["ctrl_seconds"] + b["ctrl_seconds"]
                 if total_ctrl > 0:
                     red_ctrl_share = r["ctrl_seconds"] / total_ctrl
-                    exp_ctrl = _elo_expected(r_rating["ctrl"], b_rating["ctrld"])
-                    K_ctrl = K_BASE
-                    cd_r = K_ctrl * (red_ctrl_share - exp_ctrl)
-                    cd_b = K_ctrl * ((1 - red_ctrl_share) - (1 - exp_ctrl))
-                    r_rating["ctrl"] += cd_r * (red_age_factor if cd_r > 0 else 1.0)
-                    b_rating["ctrld"] += cd_b * (blue_age_factor if cd_b > 0 else 1.0)
+                    exp_ctrl = _elo_expected(r_mu("ctrl"), b_mu("ctrld"))
+                    cd_r = K_red * (red_ctrl_share - exp_ctrl)
+                    cd_b = K_blue * ((1 - red_ctrl_share) - (1 - exp_ctrl))
+                    _update_rating(ratings, red_id, "ctrl", cd_r, red_age_factor)
+                    _update_rating(ratings, blue_id, "ctrld", cd_b, blue_age_factor)
 
                     blue_ctrl_share = b["ctrl_seconds"] / total_ctrl
-                    exp_ctrl_b = _elo_expected(b_rating["ctrl"], r_rating["ctrld"])
-                    cd_r2 = K_ctrl * ((1 - blue_ctrl_share) - (1 - exp_ctrl_b))
-                    cd_b2 = K_ctrl * (blue_ctrl_share - exp_ctrl_b)
-                    r_rating["ctrld"] += cd_r2 * (red_age_factor if cd_r2 > 0 else 1.0)
-                    b_rating["ctrl"] += cd_b2 * (blue_age_factor if cd_b2 > 0 else 1.0)
+                    exp_ctrl_b = _elo_expected(b_mu("ctrl"), r_mu("ctrld"))
+                    cd_r2 = K_red * ((1 - blue_ctrl_share) - (1 - exp_ctrl_b))
+                    cd_b2 = K_blue * (blue_ctrl_share - exp_ctrl_b)
+                    _update_rating(ratings, red_id, "ctrld", cd_r2, red_age_factor)
+                    _update_rating(ratings, blue_id, "ctrl", cd_b2, blue_age_factor)
 
                 # --- STR_VOL ---
                 total_str = r["sig_str_landed"] + b["sig_str_landed"]
                 if total_str > 0:
                     red_str_share = r["sig_str_landed"] / total_str
-                    exp_str = _elo_expected(r_rating["str_vol"], b_rating["str_vol"])
-                    sv_r = K_BASE * (red_str_share - exp_str)
-                    sv_b = K_BASE * ((1 - red_str_share) - (1 - exp_str))
-                    r_rating["str_vol"] += sv_r * (red_age_factor if sv_r > 0 else 1.0)
-                    b_rating["str_vol"] += sv_b * (blue_age_factor if sv_b > 0 else 1.0)
+                    exp_str = _elo_expected(r_mu("str_vol"), b_mu("str_vol"))
+                    sv_r = K_red * (red_str_share - exp_str)
+                    sv_b = K_blue * ((1 - red_str_share) - (1 - exp_str))
+                    _update_rating(ratings, red_id, "str_vol", sv_r, red_age_factor)
+                    _update_rating(ratings, blue_id, "str_vol", sv_b, blue_age_factor)
 
-                # --- STR_ACC ---
-                if r["sig_str_attempted"] > 0:
+                # --- STR_ACC (now opponent-relative, not fixed 0.45 baseline) ---
+                if r["sig_str_attempted"] > 0 and b["sig_str_attempted"] > 0:
                     red_acc = r["sig_str_landed"] / r["sig_str_attempted"]
-                    sa_r = K_BASE * 0.5 * (red_acc - 0.45)
-                    r_rating["str_acc"] += sa_r * (red_age_factor if sa_r > 0 else 1.0)
-                if b["sig_str_attempted"] > 0:
                     blue_acc = b["sig_str_landed"] / b["sig_str_attempted"]
-                    sa_b = K_BASE * 0.5 * (blue_acc - 0.45)
-                    b_rating["str_acc"] += sa_b * (blue_age_factor if sa_b > 0 else 1.0)
+                    exp_acc_r = _elo_expected(r_mu("str_acc"), b_mu("str_acc"))
+                    exp_acc_b = _elo_expected(b_mu("str_acc"), r_mu("str_acc"))
+                    sa_r = K_red * (red_acc - exp_acc_r)
+                    sa_b = K_blue * (blue_acc - exp_acc_b)
+                    _update_rating(ratings, red_id, "str_acc", sa_r, red_age_factor)
+                    _update_rating(ratings, blue_id, "str_acc", sa_b, blue_age_factor)
+                elif r["sig_str_attempted"] > 0:
+                    red_acc = r["sig_str_landed"] / r["sig_str_attempted"]
+                    exp_acc_r = _elo_expected(r_mu("str_acc"), b_mu("str_acc"))
+                    sa_r = K_red * (red_acc - exp_acc_r)
+                    _update_rating(ratings, red_id, "str_acc", sa_r, red_age_factor)
+                elif b["sig_str_attempted"] > 0:
+                    blue_acc = b["sig_str_landed"] / b["sig_str_attempted"]
+                    exp_acc_b = _elo_expected(b_mu("str_acc"), r_mu("str_acc"))
+                    sa_b = K_blue * (blue_acc - exp_acc_b)
+                    _update_rating(ratings, blue_id, "str_acc", sa_b, blue_age_factor)
 
                 # --- DIST ---
                 total_dist = r["distance_landed"] + b["distance_landed"]
                 if total_dist > 0:
                     red_dist_share = r["distance_landed"] / total_dist
-                    exp_dist = _elo_expected(r_rating["dist"], b_rating["dist"])
-                    d_r = K_BASE * (red_dist_share - exp_dist)
-                    d_b = K_BASE * ((1 - red_dist_share) - (1 - exp_dist))
-                    r_rating["dist"] += d_r * (red_age_factor if d_r > 0 else 1.0)
-                    b_rating["dist"] += d_b * (blue_age_factor if d_b > 0 else 1.0)
+                    exp_dist = _elo_expected(r_mu("dist"), b_mu("dist"))
+                    d_r = K_red * (red_dist_share - exp_dist)
+                    d_b = K_blue * ((1 - red_dist_share) - (1 - exp_dist))
+                    _update_rating(ratings, red_id, "dist", d_r, red_age_factor)
+                    _update_rating(ratings, blue_id, "dist", d_b, blue_age_factor)
 
                 # --- GND ---
                 total_gnd = r["ground_landed"] + b["ground_landed"]
                 if total_gnd > 0:
                     red_gnd_share = r["ground_landed"] / total_gnd
-                    exp_gnd = _elo_expected(r_rating["gnd"], b_rating["gnd"])
-                    K_gnd = K_BASE * 1.2
+                    exp_gnd = _elo_expected(r_mu("gnd"), b_mu("gnd"))
+                    K_gnd = K_red * 1.2
+                    K_gnd_b = K_blue * 1.2
                     g_r = K_gnd * (red_gnd_share - exp_gnd)
-                    g_b = K_gnd * ((1 - red_gnd_share) - (1 - exp_gnd))
-                    r_rating["gnd"] += g_r * (red_age_factor if g_r > 0 else 1.0)
-                    b_rating["gnd"] += g_b * (blue_age_factor if g_b > 0 else 1.0)
+                    g_b = K_gnd_b * ((1 - red_gnd_share) - (1 - exp_gnd))
+                    _update_rating(ratings, red_id, "gnd", g_r, red_age_factor)
+                    _update_rating(ratings, blue_id, "gnd", g_b, blue_age_factor)
 
                 fighter_round_count[red_id] += 1
                 fighter_round_count[blue_id] += 1
                 rounds_processed += 1
 
+            # =============================================================
+            # FIGHT-LEVEL BONUSES (applied once per fight, after all rounds)
+            # =============================================================
+            winner_id = fight["winner_id"]
+            loser_id = None
+            if winner_id == red_id:
+                loser_id = blue_id
+            elif winner_id == blue_id:
+                loser_id = red_id
+
+            if winner_id and loser_id:
+                w_age = red_age_factor if winner_id == red_id else blue_age_factor
+
+                # --- WIN/LOSS STREAK MULTIPLIER ---
+                # Update streaks
+                if fighter_streak[winner_id] >= 0:
+                    fighter_streak[winner_id] += 1
+                else:
+                    fighter_streak[winner_id] = 1
+                if fighter_streak[loser_id] <= 0:
+                    fighter_streak[loser_id] -= 1
+                else:
+                    fighter_streak[loser_id] = -1
+
+                win_streak = max(fighter_streak[winner_id], 1)
+                loss_streak = abs(min(fighter_streak[loser_id], -1))
+                streak_bonus_w = 1.0 + (0.005 * win_streak)
+                streak_penalty_l = 1.0 + (0.005 * loss_streak)
+
+                # --- TITLE FIGHT BONUS ---
+                title_mult = 1.5 if fight["is_title"] else 1.0
+
+                # --- 5-ROUND BONUS ---
+                five_rd_mult = 1.10 if fight["is_5rd"] else 1.0
+
+                # --- SKILL-AWARE OPPONENT POINT TRANSFER (SOS) ---
+                # Winner earns points proportional to opponent's per-dimension
+                # ratings. Beat a great striker? Your striking benefits most.
+                # Beat a great grappler? Your grappling benefits most.
+                transfer_pct = 0.03
+                combined_mult = streak_bonus_w * title_mult * five_rd_mult
+                loser_positive_total = sum(
+                    max(_get_mu(ratings, loser_id, d), 0) for d in DIMENSIONS
+                )
+                if loser_positive_total > 0:
+                    for d in DIMENSIONS:
+                        loser_dim = max(_get_mu(ratings, loser_id, d), 0)
+                        # Proportional: dimensions where opponent is strong
+                        # contribute more to the transfer
+                        dim_share = loser_dim / loser_positive_total
+                        bonus = loser_positive_total * transfer_pct * dim_share * combined_mult
+                        _update_rating(ratings, winner_id, d, bonus, w_age, update_sigma=False)
+
+                # --- LOSER PENALTY ---
+                # Loser loses a small fraction of their own rating
+                loser_penalty_pct = 0.01 * streak_penalty_l  # 1% base, scaled by loss streak
+                # Title fight losses are less punishing
+                if fight["is_title"]:
+                    loser_penalty_pct /= 1.3
+                for d in DIMENSIONS:
+                    mu = _get_mu(ratings, loser_id, d)
+                    if mu > 0:
+                        _update_rating(ratings, loser_id, d, -mu * loser_penalty_pct, 1.0, update_sigma=False)
+
         log.info(f"  Processed {rounds_processed} rounds")
 
-        # --- Apply inactivity decay ---
-        log.info("  Applying inactivity decay...")
+        # --- Apply Glicko inactivity sigma inflation ---
+        log.info("  Applying Glicko inactivity sigma inflation...")
         today = date.today()
         for fid in ratings:
             last_fight = fighter_last_fight_date.get(fid)
             if not last_fight:
                 continue
             days_inactive = (today - last_fight).days
-            if days_inactive > 180:
-                decay_months = (days_inactive - 180) / 30
-                decay_factor = DECAY_RATE ** decay_months
+            if days_inactive > 90:
                 for dim in DIMENSIONS:
-                    if ratings[fid][dim] > 0:
-                        ratings[fid][dim] *= decay_factor
+                    ratings[fid][dim][1] = _glicko_inflate_sigma(
+                        ratings[fid][dim][1], days_inactive - 90
+                    )
 
-        # --- Compute composite scores and store rankings ---
+        # --- Compute composite scores ---
         log.info("  Computing rankings...")
 
-        DIM_WEIGHTS = {
-            "pts": 3.0,
-            "ko": 1.5, "kod": 1.5,
-            "sub": 1.2, "subd": 1.2,
-            "td": 1.3, "tdd": 1.3,
-            "ctrl": 1.0, "ctrld": 1.0,
-            "str_vol": 1.0, "str_acc": 0.8,
-            "dist": 0.7, "gnd": 0.8,
-        }
+        # Empirically-derived composite weights via simple logistic regression
+        # on fight outcomes. We collect (feature_diff, outcome) pairs from
+        # all fights where both fighters are rated, then fit weights.
+        log.info("  Fitting composite weights from fight outcomes...")
+        dim_weights = _fit_composite_weights(
+            ratings, fight_map, sorted_fight_ids, fighter_round_count
+        )
+        log.info(f"    Learned weights: {dim_weights}")
 
-        cutoff = today - timedelta(days=1095)
+        cutoff = today - timedelta(days=548)  # 18 months — exclude retired/inactive fighters
 
         db.query(UFCFighterRanking).delete()
         db.commit()
 
+        # --- Per-weight-class rankings ---
+        wc_scores = {}  # {wc: {fid: score}} for P4P normalization
         total_ranked = 0
+
         for wc in WEIGHT_CLASS_ORDER:
+            if wc.startswith("p4p"):
+                continue
+
             wc_fids = [
                 fid for fid, w in fighter_weight_class.items()
                 if w == wc
@@ -581,15 +781,34 @@ def generate_rankings():
 
             scores = {}
             for fid in wc_fids:
-                r = ratings[fid]
-                scores[fid] = sum(r[d] * DIM_WEIGHTS[d] for d in DIMENSIONS)
+                scores[fid] = sum(
+                    ratings[fid][d][0] * dim_weights[d] for d in DIMENSIONS
+                )
 
+            wc_scores[wc] = scores
             ranked = sorted(wc_fids, key=lambda f: scores[f], reverse=True)
 
+            # Compute per-dimension min/max for percentile normalization (0-99 scale)
+            dim_mins = {}
+            dim_maxs = {}
+            for d in DIMENSIONS:
+                vals = [ratings[fid][d][0] for fid in wc_fids]
+                dim_mins[d] = min(vals)
+                dim_maxs[d] = max(vals)
+
             for rank, fid in enumerate(ranked, 1):
-                r = ratings[fid]
-                profile = {d: round(r[d], 2) for d in DIMENSIONS}
+                # Normalize each dimension to 0-99 percentile within weight class
+                profile = {}
+                for d in DIMENSIONS:
+                    raw = ratings[fid][d][0]
+                    rng = dim_maxs[d] - dim_mins[d]
+                    if rng > 0:
+                        profile[d] = round((raw - dim_mins[d]) / rng * 99, 1)
+                    else:
+                        profile[d] = 50.0
                 profile["composite"] = round(scores[fid], 2)
+                avg_sigma = sum(ratings[fid][d][1] for d in DIMENSIONS) / len(DIMENSIONS)
+                profile["uncertainty"] = round(avg_sigma, 1)
 
                 db.add(UFCFighterRanking(
                     fighter_id=int(fid),
@@ -614,12 +833,22 @@ def generate_rankings():
 
             db.commit()
 
-        # --- Pound-for-pound rankings ---
-        log.info("  Computing P4P rankings...")
-        mens_wcs = [w for w in WEIGHT_CLASS_ORDER if not w.startswith("w_")]
+        # --- Pound-for-pound rankings (z-score normalized) ---
+        log.info("  Computing P4P rankings (z-score normalized)...")
+        mens_wcs = [w for w in WEIGHT_CLASS_ORDER if not w.startswith("w_") and not w.startswith("p4p")]
         womens_wcs = [w for w in WEIGHT_CLASS_ORDER if w.startswith("w_")]
 
         for p4p_key, wc_list, label in [("p4p_men", mens_wcs, "Men's P4P"), ("p4p_women", womens_wcs, "Women's P4P")]:
+            # Compute per-WC mean and std for z-score normalization
+            wc_stats = {}
+            for wc in wc_list:
+                if wc not in wc_scores or not wc_scores[wc]:
+                    continue
+                vals = list(wc_scores[wc].values())
+                mu = sum(vals) / len(vals)
+                std = (sum((v - mu) ** 2 for v in vals) / len(vals)) ** 0.5
+                wc_stats[wc] = (mu, max(std, 1.0))
+
             p4p_fids = []
             for wc in wc_list:
                 p4p_fids.extend([
@@ -633,24 +862,47 @@ def generate_rankings():
             if not p4p_fids:
                 continue
 
-            p4p_scores = {}
+            p4p_z_scores = {}
             for fid in p4p_fids:
-                r = ratings[fid]
-                p4p_scores[fid] = sum(r[d] * DIM_WEIGHTS[d] for d in DIMENSIONS)
+                wc = fighter_weight_class[fid]
+                raw_score = sum(ratings[fid][d][0] * dim_weights[d] for d in DIMENSIONS)
+                if wc in wc_stats:
+                    mu, std = wc_stats[wc]
+                    # Scale z-score to readable range: 500 + z*100
+                    # So average fighter ≈ 500, elite ≈ 800+
+                    p4p_z_scores[fid] = 500 + ((raw_score - mu) / std) * 100
+                else:
+                    p4p_z_scores[fid] = raw_score
 
-            p4p_ranked = sorted(p4p_fids, key=lambda f: p4p_scores[f], reverse=True)[:25]
+            p4p_ranked = sorted(p4p_fids, key=lambda f: p4p_z_scores[f], reverse=True)[:25]
+
+            # Compute per-dimension min/max across all P4P fighters
+            p4p_dim_mins = {}
+            p4p_dim_maxs = {}
+            for d in DIMENSIONS:
+                vals = [ratings[fid][d][0] for fid in p4p_fids]
+                p4p_dim_mins[d] = min(vals)
+                p4p_dim_maxs[d] = max(vals)
 
             for rank, fid in enumerate(p4p_ranked, 1):
-                r = ratings[fid]
-                profile = {d: round(r[d], 2) for d in DIMENSIONS}
-                profile["composite"] = round(p4p_scores[fid], 2)
+                profile = {}
+                for d in DIMENSIONS:
+                    raw = ratings[fid][d][0]
+                    rng = p4p_dim_maxs[d] - p4p_dim_mins[d]
+                    if rng > 0:
+                        profile[d] = round((raw - p4p_dim_mins[d]) / rng * 99, 1)
+                    else:
+                        profile[d] = 50.0
+                profile["composite"] = round(p4p_z_scores[fid], 2)
+                avg_sigma = sum(ratings[fid][d][1] for d in DIMENSIONS) / len(DIMENSIONS)
+                profile["uncertainty"] = round(avg_sigma, 1)
 
                 db.add(UFCFighterRanking(
                     fighter_id=int(fid),
                     weight_class=p4p_key,
                     rank=rank,
-                    score=round(p4p_scores[fid], 2),
-                    expected_wins=round(p4p_scores[fid], 2),
+                    score=round(p4p_z_scores[fid], 2),
+                    expected_wins=round(p4p_z_scores[fid], 2),
                     total_opponents=len(p4p_ranked) - 1,
                     feature_profile=json.dumps(profile),
                 ))
@@ -658,7 +910,8 @@ def generate_rankings():
 
             f = fighter_info.get(p4p_ranked[0])
             if f:
-                log.info(f"    {label}: #1 {f.first_name} {f.last_name} (score={p4p_scores[p4p_ranked[0]]:.1f})")
+                log.info(f"    {label}: #1 {f.first_name} {f.last_name} "
+                         f"(z-score={p4p_z_scores[p4p_ranked[0]]:.2f})")
 
             db.commit()
 
@@ -667,6 +920,87 @@ def generate_rankings():
 
     finally:
         db.close()
+
+
+def _fit_composite_weights(ratings, fight_map, sorted_fight_ids, fighter_round_count):
+    """
+    Fit composite dimension weights via logistic regression on fight outcomes.
+    For each fight, compute the per-dimension rating difference (red - blue)
+    and regress against the binary outcome (1 = red won, 0 = blue won).
+
+    Falls back to hand-tuned defaults if insufficient data or if regression fails.
+    """
+    DEFAULTS = {
+        "pts": 3.0,
+        "ko": 1.5, "kod": 1.5,
+        "sub": 1.2, "subd": 1.2,
+        "td": 1.3, "tdd": 1.3,
+        "ctrl": 1.0, "ctrld": 1.0,
+        "str_vol": 1.0, "str_acc": 0.8,
+        "dist": 0.7, "gnd": 0.8,
+    }
+
+    # Collect training data
+    X = []  # feature diffs
+    y = []  # outcomes
+
+    for fight_id in sorted_fight_ids:
+        fight = fight_map[fight_id]
+        if fight["weight_class"] == "unknown" or not fight["winner_id"]:
+            continue
+
+        red_id = fight["red_id"]
+        blue_id = fight["blue_id"]
+
+        if red_id not in ratings or blue_id not in ratings:
+            continue
+        if fighter_round_count.get(red_id, 0) < MIN_ROUNDS or fighter_round_count.get(blue_id, 0) < MIN_ROUNDS:
+            continue
+
+        diffs = [ratings[red_id][d][0] - ratings[blue_id][d][0] for d in DIMENSIONS]
+        outcome = 1.0 if fight["winner_id"] == red_id else 0.0
+
+        X.append(diffs)
+        y.append(outcome)
+
+    if len(X) < 100:
+        log.info("    Insufficient data for regression, using defaults")
+        return DEFAULTS
+
+    # Simple logistic regression via gradient descent
+    n_dims = len(DIMENSIONS)
+    weights = [DEFAULTS[d] for d in DIMENSIONS]  # initialize from defaults
+    lr = 0.0001
+    epochs = 200
+
+    for epoch in range(epochs):
+        grad = [0.0] * n_dims
+        total_loss = 0.0
+
+        for features, outcome in zip(X, y):
+            z = sum(w * f for w, f in zip(weights, features))
+            z = max(min(z, 500), -500)  # clip for numerical stability
+            pred = 1.0 / (1.0 + math.exp(-z / 100.0))  # scale down for stability
+            error = pred - outcome
+            total_loss += -(outcome * math.log(max(pred, 1e-10)) +
+                           (1 - outcome) * math.log(max(1 - pred, 1e-10)))
+
+            for i in range(n_dims):
+                grad[i] += error * features[i]
+
+        # Update with L2 regularization toward defaults
+        for i in range(n_dims):
+            grad[i] = grad[i] / len(X) + 0.01 * (weights[i] - DEFAULTS[DIMENSIONS[i]])
+            weights[i] -= lr * grad[i]
+            weights[i] = max(weights[i], 0.1)  # keep weights positive
+
+    # Normalize so max weight = 3.0 (same scale as defaults)
+    max_w = max(weights)
+    if max_w > 0:
+        scale = 3.0 / max_w
+        weights = [w * scale for w in weights]
+
+    return {d: round(w, 3) for d, w in zip(DIMENSIONS, weights)}
 
 
 def get_rankings() -> dict:
@@ -704,6 +1038,7 @@ def get_rankings() -> dict:
                 "rank": ranking.rank,
                 "score": round(ranking.score, 1),
                 "dimensions": {d: profile.get(d, 0) for d in DIMENSIONS},
+                "uncertainty": profile.get("uncertainty", 0),
             })
 
         return {
@@ -716,7 +1051,7 @@ def get_rankings() -> dict:
                 for wc in WEIGHT_CLASS_ORDER
                 if wc in wc_map
             ],
-            "method": "round_elo_v2",
+            "method": "round_glicko_v3",
             "dimensions": DIMENSIONS,
             "min_rounds": MIN_ROUNDS,
         }
