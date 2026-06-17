@@ -50,7 +50,7 @@ TAU = 180.0  # controls how fast sigma shrinks per round (higher = slower decay)
 SIGMA_GROWTH_C = 3.0  # daily sigma growth during inactivity
 
 # Recency decay
-RECENCY_LAMBDA = 0.90  # per-year decay on K-factor
+RECENCY_DECAY = 0.3  # exponential decay rate: e^(-0.3 * years)
 
 DIMENSIONS = [
     "pts", "ko", "kod", "sub", "subd",
@@ -209,7 +209,7 @@ def _effective_k(k_base: float, sigma: float, recency_years: float,
     """
     # Floor at 0.5 so veterans still get at least half of K_BASE
     glicko_scale = 0.5 + 0.5 * (sigma / SIGMA_INIT)
-    recency_scale = RECENCY_LAMBDA ** recency_years
+    recency_scale = math.exp(-RECENCY_DECAY * recency_years)
     return k_base * glicko_scale * recency_scale * round_dur_factor
 
 
