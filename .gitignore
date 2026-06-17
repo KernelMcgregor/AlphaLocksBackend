@@ -11,9 +11,13 @@ dist/
 build/
 .env
 *.db
+*.db-shm
+*.db-wal
 *.sqlite3
 .idea/
 .vscode/
 *.swp
 *.swo
 .DS_Store
+export_to_sqlite.py
+sync_from_cockroach.py

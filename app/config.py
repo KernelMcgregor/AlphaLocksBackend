@@ -6,11 +6,12 @@ from pydantic import field_validator
 
 class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite:///./alocks.db"
-    CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:5176", "http://localhost:3000"]
+    CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:5176", "http://localhost:3000", "https://alocks-admin.pages.dev"]
     ENV: str = "dev"
     ODDS_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
     ANTHROPIC_MODEL: str = "claude-haiku-4-5-20251001"
+    ADMIN_API_KEY: str = ""
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
