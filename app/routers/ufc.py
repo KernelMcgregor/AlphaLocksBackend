@@ -3,12 +3,13 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.models.ufc import (
-    UFCEvent, UFCFight, UFCFighter, UFCFightOdds, UFCMethodOdds,
+    UFCEvent, UFCFight, UFCFighter, UFCFighterCareerStats, UFCFightOdds, UFCMethodOdds,
     UFCFightPrediction, UFCFightPreview, UFCMethodPrediction, UFCFightShapValue, UFCFightStats,
 )
 from app.schemas.ufc import (
     UFCEventDetailResponse,
     UFCEventResponse,
+    UFCFighterCareerStatsResponse,
     UFCFightDetailResponse,
     UFCFightResponse,
     UFCFighterResponse,
@@ -59,6 +60,31 @@ def get_fighter_fights(fighter_id: int, db: Session = Depends(get_db)):
 @router.get("/fighters/{fighter_id}/stats", response_model=list[UFCFightStatsResponse])
 def get_fighter_stats(fighter_id: int, db: Session = Depends(get_db)):
     return db.query(UFCFightStats).filter(UFCFightStats.fighter_id == fighter_id).all()
+
+
+@router.get("/fighters/{fighter_id}/career-stats", response_model=UFCFighterCareerStatsResponse)
+def get_fighter_career_stats(fighter_id: int, db: Session = Depends(get_db)):
+    stats = db.query(UFCFighterCareerStats).filter(
+        UFCFighterCareerStats.fighter_id == fighter_id
+    ).first()
+    if not stats:
+        raise HTTPException(status_code=404, detail="Career stats not found for this fighter")
+    return stats
+
+
+@router.get("/career-stats", response_model=list[UFCFighterCareerStatsResponse])
+def list_career_stats(
+    limit: int = Query(default=500, le=2000),
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    return (
+        db.query(UFCFighterCareerStats)
+        .order_by(UFCFighterCareerStats.fighter_id)
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
 
 
 # --- Events ---

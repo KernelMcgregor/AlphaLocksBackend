@@ -22,7 +22,32 @@ def run_migrations():
         db_path = settings.DATABASE_URL.replace("sqlite:///", "")
         conn = sqlite3.connect(db_path)
         for sql_file in sql_files:
-            conn.executescript(sql_file.read_text())
+            try:
+                conn.executescript(sql_file.read_text())
+            except Exception:
+                pass  # Columns may already exist from prior runs
+        # Add derived columns to ufc_fight_stats (idempotent)
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_fight_stats)").fetchall()}
+        derived_cols = [
+            "fight_time_min", "est_standing_min", "est_ground_min",
+            "slpm", "sapm", "sl_diff", "sig_acc", "sig_def", "tslpm",
+            "head_pct", "head_pm", "head_acc", "head_abs_pct", "head_abs_pm", "head_def",
+            "body_pct", "body_pm", "body_acc", "body_abs_pct", "body_abs_pm", "body_def",
+            "leg_pct", "leg_pm", "leg_acc", "leg_abs_pct", "leg_abs_pm", "leg_def",
+            "dist_pct", "dist_pm", "dist_acc", "dist_abs_pct", "dist_abs_pm", "dist_def",
+            "clinch_pct", "clinch_pm", "clinch_acc", "clinch_abs_pct", "clinch_abs_pm", "clinch_def",
+            "ground_pct", "ground_pm", "ground_acc", "ground_abs_pct", "ground_abs_pm", "ground_def",
+            "gnp15g", "gnp_abs15g",
+            "kd15", "kd15s", "kd_abs15", "kd_abs15s",
+            "td15", "td15s", "td_acc", "td_abs15", "td_abs15s", "td_def",
+            "ctrl15", "ctrl15g", "ctrl_abs15", "ctrl_abs15g",
+            "sub_att15", "sub_att15g", "sub_abs15", "sub_abs15g",
+            "rev15", "rev_abs15",
+        ]
+        for col in derived_cols:
+            if col not in existing:
+                conn.execute(f"ALTER TABLE ufc_fight_stats ADD COLUMN {col} REAL")
+        conn.commit()
         conn.close()
     else:
         from sqlalchemy import text, inspect
@@ -35,6 +60,7 @@ def run_migrations():
                 "ufc_fight_odds", "ufc_fight_predictions", "ufc_method_predictions",
                 "ufc_fight_shap_values", "ufc_fight_previews", "ufc_method_odds",
                 "ufc_distance_predictions",
+                "ufc_fighter_career_stats",
             ]
             for table in ufc_tables:
                 try:
@@ -51,6 +77,30 @@ def run_migrations():
                 conn.execute(text("ALTER TABLE ufc.ufc_fighters ADD COLUMN country_code VARCHAR(2)"))
             if "image_url" not in existing:
                 conn.execute(text("ALTER TABLE ufc.ufc_fighters ADD COLUMN image_url VARCHAR(500)"))
+
+        # Add derived columns to ufc_fight_stats
+        stats_existing = {c["name"] for c in insp.get_columns("ufc_fight_stats", schema="ufc")}
+        derived_cols = [
+            "fight_time_min", "est_standing_min", "est_ground_min",
+            "slpm", "sapm", "sl_diff", "sig_acc", "sig_def", "tslpm",
+            "head_pct", "head_pm", "head_acc", "head_abs_pct", "head_abs_pm", "head_def",
+            "body_pct", "body_pm", "body_acc", "body_abs_pct", "body_abs_pm", "body_def",
+            "leg_pct", "leg_pm", "leg_acc", "leg_abs_pct", "leg_abs_pm", "leg_def",
+            "dist_pct", "dist_pm", "dist_acc", "dist_abs_pct", "dist_abs_pm", "dist_def",
+            "clinch_pct", "clinch_pm", "clinch_acc", "clinch_abs_pct", "clinch_abs_pm", "clinch_def",
+            "ground_pct", "ground_pm", "ground_acc", "ground_abs_pct", "ground_abs_pm", "ground_def",
+            "gnp15g", "gnp_abs15g",
+            "kd15", "kd15s", "kd_abs15", "kd_abs15s",
+            "td15", "td15s", "td_acc", "td_abs15", "td_abs15s", "td_def",
+            "ctrl15", "ctrl15g", "ctrl_abs15", "ctrl_abs15g",
+            "sub_att15", "sub_att15g", "sub_abs15", "sub_abs15g",
+            "rev15", "rev_abs15",
+        ]
+        missing = [c for c in derived_cols if c not in stats_existing]
+        if missing:
+            with engine.begin() as conn:
+                for col in missing:
+                    conn.execute(text(f"ALTER TABLE ufc.ufc_fight_stats ADD COLUMN {col} FLOAT"))
 
 
 def scheduled_scrape():

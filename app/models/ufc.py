@@ -1,4 +1,6 @@
-from sqlalchemy import Date, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+import datetime as dt
+
+from sqlalchemy import DateTime, Date, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.config import settings
@@ -108,6 +110,99 @@ class UFCFightStats(TimestampMixin, Base):
     clinch_attempted: Mapped[int] = mapped_column(Integer, default=0)
     ground_landed: Mapped[int] = mapped_column(Integer, default=0)
     ground_attempted: Mapped[int] = mapped_column(Integer, default=0)
+
+    # -- Derived: fight context --
+    fight_time_min: Mapped[float | None] = mapped_column(Float, nullable=True)
+    est_standing_min: Mapped[float | None] = mapped_column(Float, nullable=True)
+    est_ground_min: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Derived: striking overall --
+    slpm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sapm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sl_diff: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sig_acc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sig_def: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tslpm: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Derived: head (offense + defense) --
+    head_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    head_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    head_acc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    head_abs_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    head_abs_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    head_def: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Derived: body (offense + defense) --
+    body_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    body_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    body_acc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    body_abs_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    body_abs_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    body_def: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Derived: legs (offense + defense) --
+    leg_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    leg_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    leg_acc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    leg_abs_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    leg_abs_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    leg_def: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Derived: distance position (offense + defense) --
+    dist_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dist_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dist_acc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dist_abs_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dist_abs_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dist_def: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Derived: clinch position (offense + defense) --
+    clinch_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    clinch_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    clinch_acc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    clinch_abs_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    clinch_abs_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    clinch_def: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Derived: ground position (offense + defense + position-aware) --
+    ground_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ground_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ground_acc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ground_abs_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ground_abs_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ground_def: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gnp15g: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gnp_abs15g: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Derived: knockdowns --
+    kd15: Mapped[float | None] = mapped_column(Float, nullable=True)
+    kd15s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    kd_abs15: Mapped[float | None] = mapped_column(Float, nullable=True)
+    kd_abs15s: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Derived: takedowns --
+    td15: Mapped[float | None] = mapped_column(Float, nullable=True)
+    td15s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    td_acc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    td_abs15: Mapped[float | None] = mapped_column(Float, nullable=True)
+    td_abs15s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    td_def: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Derived: control time --
+    ctrl15: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ctrl15g: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ctrl_abs15: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ctrl_abs15g: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Derived: submissions --
+    sub_att15: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sub_att15g: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sub_abs15: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sub_abs15g: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Derived: reversals --
+    rev15: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rev_abs15: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     fight: Mapped["UFCFight"] = relationship(back_populates="stats")
     fighter: Mapped["UFCFighter"] = relationship()
@@ -240,6 +335,124 @@ class UFCMatchupPrediction(TimestampMixin, Base):
 
     red_fighter: Mapped["UFCFighter"] = relationship(foreign_keys=[red_fighter_id])
     blue_fighter: Mapped["UFCFighter"] = relationship(foreign_keys=[blue_fighter_id])
+
+
+class UFCFighterCareerStats(Base):
+    __tablename__ = "ufc_fighter_career_stats"
+    __table_args__ = (
+        UniqueConstraint("fighter_id"),
+        {"schema": UFC_SCHEMA},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    fighter_id: Mapped[int] = mapped_column(ForeignKey(_fk("ufc_fighters.id")), index=True)
+
+    # -- Foundation --
+    fight_count: Mapped[int] = mapped_column(Integer, default=0)
+    total_fight_min: Mapped[float | None] = mapped_column(Float, nullable=True)
+    est_standing_min: Mapped[float | None] = mapped_column(Float, nullable=True)
+    est_ground_min: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Striking: Overall --
+    slpm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sapm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sl_diff: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sig_acc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sig_def: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tslpm: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Striking: Head (offense + defense) --
+    head_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    head_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    head_acc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    head_abs_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    head_abs_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    head_def: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Striking: Body (offense + defense) --
+    body_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    body_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    body_acc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    body_abs_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    body_abs_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    body_def: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Striking: Legs (offense + defense) --
+    leg_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    leg_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    leg_acc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    leg_abs_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    leg_abs_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    leg_def: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Striking: Distance position (offense + defense) --
+    dist_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dist_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dist_acc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dist_abs_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dist_abs_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dist_def: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Striking: Clinch position (offense + defense) --
+    clinch_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    clinch_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    clinch_acc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    clinch_abs_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    clinch_abs_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    clinch_def: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Striking: Ground position (offense + defense + position-aware) --
+    ground_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ground_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ground_acc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ground_abs_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ground_abs_pm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ground_def: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gnp15g: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gnp_abs15g: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Knockdowns --
+    kd15: Mapped[float | None] = mapped_column(Float, nullable=True)
+    kd15s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    kd_abs15: Mapped[float | None] = mapped_column(Float, nullable=True)
+    kd_abs15s: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Takedowns --
+    td15: Mapped[float | None] = mapped_column(Float, nullable=True)
+    td15s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    td_acc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    td_abs15: Mapped[float | None] = mapped_column(Float, nullable=True)
+    td_abs15s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    td_def: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Control time --
+    ctrl15: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ctrl15g: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ctrl_abs15: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ctrl_abs15g: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Submissions --
+    sub_att15: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sub_att15g: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sub_abs15: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sub_abs15g: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Reversals --
+    rev15: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rev_abs15: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Outcomes --
+    ko_wins: Mapped[int] = mapped_column(Integer, default=0)
+    sub_wins: Mapped[int] = mapped_column(Integer, default=0)
+    dec_wins: Mapped[int] = mapped_column(Integer, default=0)
+    finish_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    win_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    avg_fight_sec: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # -- Metadata --
+    computed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+    fighter: Mapped["UFCFighter"] = relationship()
 
 
 class UFCFightPreview(TimestampMixin, Base):

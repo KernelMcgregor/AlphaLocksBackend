@@ -1,0 +1,7 @@
+-- Add derived rate/percentage columns to ufc_fight_stats.
+-- Computed from raw counts + opponent's raw counts + fight time.
+-- Only populated on totals rows (round_number=0).
+--
+-- SQLite doesn't support IF NOT EXISTS on ALTER TABLE, so we use
+-- a Python migration runner instead. This file is skipped by
+-- executescript; the columns are added via run_migrations() in main.py.

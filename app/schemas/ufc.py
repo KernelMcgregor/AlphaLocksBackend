@@ -146,6 +146,75 @@ class UFCFightStatsBase(BaseModel):
     ground_landed: int = 0
     ground_attempted: int = 0
 
+    # Derived columns (populated on totals rows only)
+    fight_time_min: Optional[float] = None
+    est_standing_min: Optional[float] = None
+    est_ground_min: Optional[float] = None
+    slpm: Optional[float] = None
+    sapm: Optional[float] = None
+    sl_diff: Optional[float] = None
+    sig_acc: Optional[float] = None
+    sig_def: Optional[float] = None
+    tslpm: Optional[float] = None
+    head_pct: Optional[float] = None
+    head_pm: Optional[float] = None
+    head_acc: Optional[float] = None
+    head_abs_pct: Optional[float] = None
+    head_abs_pm: Optional[float] = None
+    head_def: Optional[float] = None
+    body_pct: Optional[float] = None
+    body_pm: Optional[float] = None
+    body_acc: Optional[float] = None
+    body_abs_pct: Optional[float] = None
+    body_abs_pm: Optional[float] = None
+    body_def: Optional[float] = None
+    leg_pct: Optional[float] = None
+    leg_pm: Optional[float] = None
+    leg_acc: Optional[float] = None
+    leg_abs_pct: Optional[float] = None
+    leg_abs_pm: Optional[float] = None
+    leg_def: Optional[float] = None
+    dist_pct: Optional[float] = None
+    dist_pm: Optional[float] = None
+    dist_acc: Optional[float] = None
+    dist_abs_pct: Optional[float] = None
+    dist_abs_pm: Optional[float] = None
+    dist_def: Optional[float] = None
+    clinch_pct: Optional[float] = None
+    clinch_pm: Optional[float] = None
+    clinch_acc: Optional[float] = None
+    clinch_abs_pct: Optional[float] = None
+    clinch_abs_pm: Optional[float] = None
+    clinch_def: Optional[float] = None
+    ground_pct: Optional[float] = None
+    ground_pm: Optional[float] = None
+    ground_acc: Optional[float] = None
+    ground_abs_pct: Optional[float] = None
+    ground_abs_pm: Optional[float] = None
+    ground_def: Optional[float] = None
+    gnp15g: Optional[float] = None
+    gnp_abs15g: Optional[float] = None
+    kd15: Optional[float] = None
+    kd15s: Optional[float] = None
+    kd_abs15: Optional[float] = None
+    kd_abs15s: Optional[float] = None
+    td15: Optional[float] = None
+    td15s: Optional[float] = None
+    td_acc: Optional[float] = None
+    td_abs15: Optional[float] = None
+    td_abs15s: Optional[float] = None
+    td_def: Optional[float] = None
+    ctrl15: Optional[float] = None
+    ctrl15g: Optional[float] = None
+    ctrl_abs15: Optional[float] = None
+    ctrl_abs15g: Optional[float] = None
+    sub_att15: Optional[float] = None
+    sub_att15g: Optional[float] = None
+    sub_abs15: Optional[float] = None
+    sub_abs15g: Optional[float] = None
+    rev15: Optional[float] = None
+    rev_abs15: Optional[float] = None
+
     @field_serializer("fight_id", "fighter_id", check_fields=False)
     @classmethod
     def serialize_stat_fk_ids(cls, v):
@@ -156,9 +225,130 @@ class UFCFightStatsCreate(UFCFightStatsBase):
     pass
 
 
+# --- Fighter Career Stats ---
+
+class UFCFighterCareerStatsResponse(BigIntStr, BaseModel):
+    id: int
+    fighter_id: int
+
+    # Foundation
+    fight_count: int = 0
+    total_fight_min: Optional[float] = None
+    est_standing_min: Optional[float] = None
+    est_ground_min: Optional[float] = None
+
+    # Striking: Overall
+    slpm: Optional[float] = None
+    sapm: Optional[float] = None
+    sl_diff: Optional[float] = None
+    sig_acc: Optional[float] = None
+    sig_def: Optional[float] = None
+    tslpm: Optional[float] = None
+
+    # Striking: Head
+    head_pct: Optional[float] = None
+    head_pm: Optional[float] = None
+    head_acc: Optional[float] = None
+    head_abs_pct: Optional[float] = None
+    head_abs_pm: Optional[float] = None
+    head_def: Optional[float] = None
+
+    # Striking: Body
+    body_pct: Optional[float] = None
+    body_pm: Optional[float] = None
+    body_acc: Optional[float] = None
+    body_abs_pct: Optional[float] = None
+    body_abs_pm: Optional[float] = None
+    body_def: Optional[float] = None
+
+    # Striking: Legs
+    leg_pct: Optional[float] = None
+    leg_pm: Optional[float] = None
+    leg_acc: Optional[float] = None
+    leg_abs_pct: Optional[float] = None
+    leg_abs_pm: Optional[float] = None
+    leg_def: Optional[float] = None
+
+    # Striking: Distance
+    dist_pct: Optional[float] = None
+    dist_pm: Optional[float] = None
+    dist_acc: Optional[float] = None
+    dist_abs_pct: Optional[float] = None
+    dist_abs_pm: Optional[float] = None
+    dist_def: Optional[float] = None
+
+    # Striking: Clinch
+    clinch_pct: Optional[float] = None
+    clinch_pm: Optional[float] = None
+    clinch_acc: Optional[float] = None
+    clinch_abs_pct: Optional[float] = None
+    clinch_abs_pm: Optional[float] = None
+    clinch_def: Optional[float] = None
+
+    # Striking: Ground + position-aware
+    ground_pct: Optional[float] = None
+    ground_pm: Optional[float] = None
+    ground_acc: Optional[float] = None
+    ground_abs_pct: Optional[float] = None
+    ground_abs_pm: Optional[float] = None
+    ground_def: Optional[float] = None
+    gnp15g: Optional[float] = None
+    gnp_abs15g: Optional[float] = None
+
+    # Knockdowns
+    kd15: Optional[float] = None
+    kd15s: Optional[float] = None
+    kd_abs15: Optional[float] = None
+    kd_abs15s: Optional[float] = None
+
+    # Takedowns
+    td15: Optional[float] = None
+    td15s: Optional[float] = None
+    td_acc: Optional[float] = None
+    td_abs15: Optional[float] = None
+    td_abs15s: Optional[float] = None
+    td_def: Optional[float] = None
+
+    # Control time
+    ctrl15: Optional[float] = None
+    ctrl15g: Optional[float] = None
+    ctrl_abs15: Optional[float] = None
+    ctrl_abs15g: Optional[float] = None
+
+    # Submissions
+    sub_att15: Optional[float] = None
+    sub_att15g: Optional[float] = None
+    sub_abs15: Optional[float] = None
+    sub_abs15g: Optional[float] = None
+
+    # Reversals
+    rev15: Optional[float] = None
+    rev_abs15: Optional[float] = None
+
+    # Outcomes
+    ko_wins: int = 0
+    sub_wins: int = 0
+    dec_wins: int = 0
+    finish_rate: Optional[float] = None
+    win_pct: Optional[float] = None
+    avg_fight_sec: Optional[float] = None
+
+    # Metadata
+    computed_at: Optional[dt.datetime] = None
+
+    @field_serializer("fighter_id", check_fields=False)
+    @classmethod
+    def serialize_fighter_id(cls, v):
+        return str(v) if v is not None else None
+
+    model_config = {"from_attributes": True}
+
+
 class UFCFightStatsResponse(BigIntStr, UFCFightStatsBase):
     id: int
     created_at: dt.datetime
     updated_at: dt.datetime
 
     model_config = {"from_attributes": True}
+
+

@@ -1057,6 +1057,12 @@ def run_scrape(mode: str = "full"):
             f"{db.query(UFCFightStats).count()} fight stats"
         )
 
+        # Populate derived stats on fight stat rows
+        from app.services.fight_stats_derived_service import compute_all_derived_stats
+        log.info("Computing derived fight stats...")
+        n = compute_all_derived_stats()
+        log.info(f"Derived stats updated on {n} fight stat rows")
+
     except Exception:
         log.exception("Scrape failed")
         db.rollback()
