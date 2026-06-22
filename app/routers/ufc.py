@@ -669,7 +669,7 @@ def get_upcoming_events(db: Session = Depends(get_db)):
 @router.get("/rankings")
 def get_rankings():
     """Get fighter rankings by weight class (precomputed from full model)."""
-    from app.services.ranking_service import get_rankings
+    from app.services.points_ranking_service import get_rankings
     return get_rankings()
 
 

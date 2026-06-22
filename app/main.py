@@ -128,9 +128,16 @@ def scheduled_scrape():
     try:
         from app.services.ranking_service import generate_rankings
         generate_rankings()
-        log.info("Fighter rankings regenerated")
+        log.info("Glicko ratings computed (for prediction features + dimension profiles)")
     except Exception as e:
-        log.error(f"Fighter ranking generation failed: {e}")
+        log.error(f"Glicko rating computation failed: {e}")
+
+    try:
+        from app.services.points_ranking_service import generate_rankings as generate_points_rankings
+        generate_points_rankings()
+        log.info("Points + Elo fighter rankings generated")
+    except Exception as e:
+        log.error(f"Points + Elo ranking generation failed: {e}")
 
     try:
         from app.services.preview_service import generate_all_upcoming_previews

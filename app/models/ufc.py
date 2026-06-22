@@ -317,6 +317,36 @@ class UFCFighterRanking(TimestampMixin, Base):
     fighter: Mapped["UFCFighter"] = relationship()
 
 
+class UFCGlickoSnapshot(Base):
+    """Pre-fight Glicko dimension ratings for each fighter in each fight.
+    Captured BEFORE the fight is processed — used as ML prediction features."""
+    __tablename__ = "ufc_glicko_snapshots"
+    __table_args__ = (
+        UniqueConstraint("fight_id", "fighter_id"),
+        Index("ix_glicko_snap_fighter", "fighter_id"),
+        {"schema": UFC_SCHEMA},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    fight_id: Mapped[int] = mapped_column(ForeignKey(_fk("ufc_fights.id")), index=True)
+    fighter_id: Mapped[int] = mapped_column(ForeignKey(_fk("ufc_fighters.id")))
+    pts: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ko: Mapped[float | None] = mapped_column(Float, nullable=True)
+    kod: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sub: Mapped[float | None] = mapped_column(Float, nullable=True)
+    subd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    td: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tdd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ctrl: Mapped[float | None] = mapped_column(Float, nullable=True)
+    str_vol: Mapped[float | None] = mapped_column(Float, nullable=True)
+    str_acc: Mapped[float | None] = mapped_column(Float, nullable=True)
+    str_def: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dist: Mapped[float | None] = mapped_column(Float, nullable=True)
+    clinch: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gnd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    durability: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
 class UFCMatchupPrediction(TimestampMixin, Base):
     __tablename__ = "ufc_matchup_predictions"
     __table_args__ = (

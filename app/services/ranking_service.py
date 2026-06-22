@@ -1,21 +1,16 @@
 """
-Fighter Rankings — Round-Level Multi-Dimensional Glicko v4
+Glicko Dimension Ratings — Round-Level Multi-Dimensional Glicko
 
-Processes every round in UFC history to build 16-dimensional fighter ratings
-with Glicko-style uncertainty tracking and KenPom iterative convergence.
+Processes every round in UFC history to build 15-dimensional fighter ratings
+with Glicko-style uncertainty tracking. These ratings serve two purposes:
 
-v3 improvements over v2:
-- Glicko-style uncertainty (sigma) per dimension — dynamic K-factors based
-  on how confident we are in each fighter's rating
-- KenPom iterative convergence — run full history multiple passes so early
-  fights are scored against accurate opponent ratings
-- Round-time normalization — finish rounds scale K by elapsed time so
-  finishers aren't penalized for fewer rounds
-- Recency weighting — recent rounds count more via time-decayed K
-- Opponent-relative str_acc — no more fixed 0.45 baseline
-- Continuous KO/Sub/TD scoring — no more binary min(x, 1) capping
-- P4P z-score normalization across weight classes
-- Empirically-derived composite weights via logistic regression
+1. **ML prediction features** — GlickoSnapshot records are the most predictive
+   features in the winner prediction model (model.py).
+2. **Radar chart dimensions** — Dimension profiles are saved to UFCFighterRanking
+   by points_ranking_service.py for frontend display.
+
+Rankings (rank ordering) are handled by points_ranking_service.py.
+This module only computes per-dimension Glicko ratings and snapshots.
 
 Run: python -m app.services.ranking_service
 """
@@ -33,7 +28,11 @@ from pathlib import Path
 from app.database import SessionLocal
 from app.models.ufc import (
     UFCEvent, UFCFight, UFCFighter, UFCFighterRanking, UFCFightStats,
+    UFCGlickoSnapshot,
 )
+
+# Re-exported for model.py and points_ranking_service.py
+__all__ = ["DIMENSIONS", "generate_rankings"]
 
 log = logging.getLogger("ranking_service")
 
@@ -52,7 +51,6 @@ SIGMA_GROWTH_C = 3.0  # daily sigma growth during inactivity
 # Recency decay
 RECENCY_DECAY = 0.3  # exponential decay rate: e^(-0.3 * years)
 INACTIVITY_DECAY_RATE = 0.001  # daily mu decay beyond 90 days inactive
-VOLUME_NORM_EXP = 0.25  # composite: raw / fights^exp (OWGR-inspired volume normalization)
 
 DIMENSIONS = [
     "pts", "ko", "kod", "sub", "subd",
@@ -839,9 +837,13 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines):
 
 
 def generate_rankings():
-    """Process all rounds in UFC history with Glicko uncertainty and iterative convergence."""
+    """Compute Glicko dimension ratings, save snapshots (for ML) and
+    dimension profiles to UFCFighterRanking (for radar chart display).
+
+    Rank ordering is handled by points_ranking_service.py which runs after this.
+    """
     log.info("=" * 60)
-    log.info("GENERATING FIGHTER RANKINGS (Round-Level Multi-Dim Glicko v4)")
+    log.info("COMPUTING GLICKO DIMENSION RATINGS")
     log.info("=" * 60)
 
     db = SessionLocal()
@@ -851,6 +853,22 @@ def generate_rankings():
         baselines = _compute_baselines(fight_map, rounds_by_fight)
         ratings, fighter_round_count, fighter_fight_count, fighter_last_fight_date, fighter_weight_class, sorted_fight_ids, fight_rating_snapshots = \
             _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines)
+
+        # --- Persist pre-fight Glicko snapshots to DB (used by ML model) ---
+        log.info(f"  Saving {len(fight_rating_snapshots)} Glicko snapshots to DB...")
+        db.query(UFCGlickoSnapshot).delete()
+        db.commit()
+        snapshot_rows = []
+        for (fight_id, fighter_id), dims in fight_rating_snapshots.items():
+            row = UFCGlickoSnapshot(
+                fight_id=int(fight_id),
+                fighter_id=int(fighter_id),
+                **{d: round(dims.get(d, 0.0), 4) for d in DIMENSIONS},
+            )
+            snapshot_rows.append(row)
+        db.bulk_save_objects(snapshot_rows)
+        db.commit()
+        log.info(f"  Saved {len(snapshot_rows)} snapshots")
 
         # --- Apply Glicko inactivity: sigma inflation + rating decay ---
         log.info("  Applying inactivity sigma inflation and rating decay...")
@@ -869,23 +887,17 @@ def generate_rankings():
                     )
                     ratings[fid][dim][0] *= decay_factor
 
-        # --- Compute composite scores ---
-        log.info("  Computing rankings...")
-
-        log.info("  Fitting composite model (GBT) from fight outcomes...")
-        composite_model = _fit_composite_model(
-            ratings, fight_map, sorted_fight_ids, fighter_round_count,
-        )
-
+        # --- Save dimension profiles to UFCFighterRanking ---
+        # These are temporary rows; points_ranking_service.py will read the
+        # feature_profile JSON, delete these rows, and re-create them with
+        # the correct Points+Elo rank ordering.
+        log.info("  Saving Glicko dimension profiles...")
         cutoff = today - timedelta(days=548)
 
         db.query(UFCFighterRanking).delete()
         db.commit()
 
-        # --- Per-weight-class rankings ---
-        wc_scores = {}
-        total_ranked = 0
-
+        total_saved = 0
         for wc in WEIGHT_CLASS_ORDER:
             if wc.startswith("p4p"):
                 continue
@@ -900,31 +912,7 @@ def generate_rankings():
             if not wc_fids:
                 continue
 
-            # Compute expected-win-rate against the field using GBT
-            scores = {}
-            if composite_model is not None and len(wc_fids) > 1:
-                import numpy as np
-                for fid in wc_fids:
-                    # Build feature vectors: this fighter vs every other
-                    X_vs = []
-                    for opp in wc_fids:
-                        if fid == opp:
-                            continue
-                        diffs = [ratings[fid][d][0] - ratings[opp][d][0] for d in DIMENSIONS]
-                        X_vs.append(diffs)
-                    probs = composite_model.predict_proba(np.array(X_vs))[:, 1]
-                    scores[fid] = float(probs.mean()) * 1000
-            else:
-                # Fallback to simple sum if model unavailable
-                for fid in wc_fids:
-                    fights = max(fighter_fight_count.get(fid, 1), 1)
-                    raw = sum(max(ratings[fid][d][0], 0) for d in DIMENSIONS)
-                    scores[fid] = raw / (fights ** VOLUME_NORM_EXP)
-
-            wc_scores[wc] = scores
-            ranked = sorted(wc_fids, key=lambda f: scores[f], reverse=True)
-
-            # Compute per-dimension min/max for percentile normalization (0-99 scale)
+            # Compute per-dimension min/max for percentile normalization (0-99)
             dim_mins = {}
             dim_maxs = {}
             for d in DIMENSIONS:
@@ -932,8 +920,7 @@ def generate_rankings():
                 dim_mins[d] = min(vals)
                 dim_maxs[d] = max(vals)
 
-            for rank, fid in enumerate(ranked, 1):
-                # Normalize each dimension to 0-99 percentile within weight class
+            for fid in wc_fids:
                 profile = {}
                 for d in DIMENSIONS:
                     raw = ratings[fid][d][0]
@@ -942,288 +929,29 @@ def generate_rankings():
                         profile[d] = round((raw - dim_mins[d]) / rng * 99, 1)
                     else:
                         profile[d] = 50.0
-                profile["composite"] = round(scores[fid], 2)
                 avg_sigma = sum(ratings[fid][d][1] for d in DIMENSIONS) / len(DIMENSIONS)
                 profile["uncertainty"] = round(avg_sigma, 1)
 
                 db.add(UFCFighterRanking(
                     fighter_id=int(fid),
                     weight_class=wc,
-                    rank=rank,
-                    score=round(scores[fid], 2),
-                    expected_wins=round(scores[fid], 2),
-                    total_opponents=len(ranked) - 1,
+                    rank=0,  # placeholder — points_ranking_service sets real ranks
+                    score=0.0,
+                    expected_wins=0.0,
+                    total_opponents=len(wc_fids) - 1,
                     feature_profile=json.dumps(profile),
                 ))
-                total_ranked += 1
-
-            f = fighter_info.get(ranked[0])
-            fi = fighter_info.get(ranked[0])
-            age_str = ""
-            if fi and fi.dob:
-                age = (today - fi.dob).days / 365.25
-                age_str = f", age={age:.0f}"
-            if f:
-                log.info(f"    {WEIGHT_CLASS_LABELS[wc]}: #1 {f.first_name} {f.last_name} "
-                         f"(score={scores[ranked[0]]:.1f}, {fighter_round_count[ranked[0]]} rnds{age_str})")
+                total_saved += 1
 
             db.commit()
 
-        # --- Pound-for-pound rankings (z-score normalized) ---
-        log.info("  Computing P4P rankings (z-score normalized)...")
-        mens_wcs = [w for w in WEIGHT_CLASS_ORDER if not w.startswith("w_") and not w.startswith("p4p")]
-        womens_wcs = [w for w in WEIGHT_CLASS_ORDER if w.startswith("w_")]
-
-        for p4p_key, wc_list, label in [("p4p_men", mens_wcs, "Men's P4P"), ("p4p_women", womens_wcs, "Women's P4P")]:
-            # Compute per-WC mean and std for z-score normalization
-            wc_stats = {}
-            for wc in wc_list:
-                if wc not in wc_scores or not wc_scores[wc]:
-                    continue
-                vals = list(wc_scores[wc].values())
-                mu = sum(vals) / len(vals)
-                std = (sum((v - mu) ** 2 for v in vals) / len(vals)) ** 0.5
-                wc_stats[wc] = (mu, max(std, 1.0))
-
-            p4p_fids = []
-            for wc in wc_list:
-                p4p_fids.extend([
-                    fid for fid, w in fighter_weight_class.items()
-                    if w == wc
-                    and fighter_round_count.get(fid, 0) >= MIN_ROUNDS
-                    and fighter_last_fight_date.get(fid, date.min) >= cutoff
-                    and fid in fighter_info
-                ])
-
-            if not p4p_fids:
-                continue
-
-            p4p_z_scores = {}
-            for fid in p4p_fids:
-                wc = fighter_weight_class[fid]
-                raw_score = wc_scores.get(wc, {}).get(fid, 0)
-                if wc in wc_stats:
-                    mu, std = wc_stats[wc]
-                    # Scale z-score to readable range: 500 + z*100
-                    # So average fighter ≈ 500, elite ≈ 800+
-                    p4p_z_scores[fid] = 500 + ((raw_score - mu) / std) * 100
-                else:
-                    p4p_z_scores[fid] = raw_score
-
-            p4p_ranked = sorted(p4p_fids, key=lambda f: p4p_z_scores[f], reverse=True)[:25]
-
-            # Compute per-dimension min/max across all P4P fighters
-            p4p_dim_mins = {}
-            p4p_dim_maxs = {}
-            for d in DIMENSIONS:
-                vals = [ratings[fid][d][0] for fid in p4p_fids]
-                p4p_dim_mins[d] = min(vals)
-                p4p_dim_maxs[d] = max(vals)
-
-            for rank, fid in enumerate(p4p_ranked, 1):
-                profile = {}
-                for d in DIMENSIONS:
-                    raw = ratings[fid][d][0]
-                    rng = p4p_dim_maxs[d] - p4p_dim_mins[d]
-                    if rng > 0:
-                        profile[d] = round((raw - p4p_dim_mins[d]) / rng * 99, 1)
-                    else:
-                        profile[d] = 50.0
-                profile["composite"] = round(p4p_z_scores[fid], 2)
-                avg_sigma = sum(ratings[fid][d][1] for d in DIMENSIONS) / len(DIMENSIONS)
-                profile["uncertainty"] = round(avg_sigma, 1)
-
-                db.add(UFCFighterRanking(
-                    fighter_id=int(fid),
-                    weight_class=p4p_key,
-                    rank=rank,
-                    score=round(p4p_z_scores[fid], 2),
-                    expected_wins=round(p4p_z_scores[fid], 2),
-                    total_opponents=len(p4p_ranked) - 1,
-                    feature_profile=json.dumps(profile),
-                ))
-                total_ranked += 1
-
-            f = fighter_info.get(p4p_ranked[0])
-            if f:
-                log.info(f"    {label}: #1 {f.first_name} {f.last_name} "
-                         f"(z-score={p4p_z_scores[p4p_ranked[0]]:.2f})")
-
-            db.commit()
-
-        log.info(f"  Ranked {total_ranked} fighters across all divisions")
-        log.info("  Rankings generation complete")
-
-    finally:
-        db.close()
-
-
-def _fit_composite_model(ratings, fight_map, sorted_fight_ids, fighter_round_count):
-    """
-    Fit a gradient-boosted tree on per-dimension rating differences to predict
-    fight outcomes. Returns the trained model for use in expected-win-rate scoring.
-
-    The GBT captures non-linear interactions between dimensions (e.g., elite TD
-    + poor TDD matchup) that logistic regression misses.
-    """
-    from sklearn.ensemble import HistGradientBoostingClassifier
-
-    X = []
-    y = []
-
-    for fight_id in sorted_fight_ids:
-        fight = fight_map[fight_id]
-        if fight["weight_class"] == "unknown" or not fight["winner_id"]:
-            continue
-
-        red_id = fight["red_id"]
-        blue_id = fight["blue_id"]
-
-        if red_id not in ratings or blue_id not in ratings:
-            continue
-        if fighter_round_count.get(red_id, 0) < MIN_ROUNDS or fighter_round_count.get(blue_id, 0) < MIN_ROUNDS:
-            continue
-
-        diffs = [ratings[red_id][d][0] - ratings[blue_id][d][0] for d in DIMENSIONS]
-        outcome = 1 if fight["winner_id"] == red_id else 0
-
-        X.append(diffs)
-        y.append(outcome)
-
-    if len(X) < 100:
-        log.info("    Insufficient data for GBT, returning None")
-        return None
-
-    log.info(f"    Training GBT on {len(X)} fights, {len(DIMENSIONS)} features")
-
-    model = HistGradientBoostingClassifier(
-        max_iter=500,
-        max_depth=3,
-        learning_rate=0.05,
-        min_samples_leaf=50,
-        l2_regularization=1.0,
-        random_state=42,
-    )
-    model.fit(X, y)
-
-    # Log training accuracy
-    train_acc = model.score(X, y)
-    log.info(f"    Training accuracy: {train_acc:.3f}")
-
-    return model
-
-
-def get_rankings() -> dict:
-    """Read rankings from DB."""
-    db = SessionLocal()
-    try:
-        rankings = (
-            db.query(UFCFighterRanking, UFCFighter)
-            .join(UFCFighter, UFCFighterRanking.fighter_id == UFCFighter.id)
-            .order_by(UFCFighterRanking.weight_class, UFCFighterRanking.rank)
-            .all()
-        )
-
-        if not rankings:
-            return {"weight_classes": [], "method": "none"}
-
-        wc_map = {}
-        for ranking, fighter in rankings:
-            wc = ranking.weight_class
-            if wc not in wc_map:
-                wc_map[wc] = []
-
-            profile = json.loads(ranking.feature_profile) if ranking.feature_profile else {}
-
-            wc_map[wc].append({
-                "id": str(fighter.id),
-                "first_name": fighter.first_name,
-                "last_name": fighter.last_name,
-                "nickname": fighter.nickname,
-                "wins": fighter.wins,
-                "losses": fighter.losses,
-                "draws": fighter.draws,
-                "country_code": fighter.country_code,
-                "image_url": fighter.image_url,
-                "rank": ranking.rank,
-                "score": round(ranking.score, 1),
-                "dimensions": {d: profile.get(d, 0) for d in DIMENSIONS},
-                "uncertainty": profile.get("uncertainty", 0),
-            })
-
-        return {
-            "weight_classes": [
-                {
-                    "key": wc,
-                    "label": WEIGHT_CLASS_LABELS.get(wc, wc),
-                    "fighters": wc_map[wc],
-                }
-                for wc in WEIGHT_CLASS_ORDER
-                if wc in wc_map
-            ],
-            "method": "round_glicko_v3",
-            "dimensions": DIMENSIONS,
-            "min_rounds": MIN_ROUNDS,
-        }
-
-    finally:
-        db.close()
-
-
-def run_validation():
-    """Run walk-forward validation using the same Glicko computation as generate_rankings."""
-    from app.services.ranking_validation import walk_forward_validate
-
-    log.info("=" * 60)
-    log.info("RANKING VALIDATION (Walk-Forward Backtesting)")
-    log.info("=" * 60)
-
-    db = SessionLocal()
-    try:
-        fight_map, rounds_by_fight, derived_totals, fighter_info = _load_data(db)
-        baselines = _compute_baselines(fight_map, rounds_by_fight)
-        ratings, fighter_round_count, fighter_fight_count, fighter_last_fight_date, fighter_weight_class, sorted_fight_ids, fight_rating_snapshots = \
-            _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines)
-
-        DEFAULTS = {
-            "pts": 3.0,
-            "ko": 1.5, "kod": 1.5,
-            "sub": 1.2, "subd": 1.2,
-            "td": 1.3, "tdd": 1.3,
-            "ctrl": 1.0,
-            "str_vol": 1.0, "str_acc": 0.8, "str_def": 0.9,
-            "dist": 0.7, "clinch": 0.6, "gnd": 0.8,
-            "durability": 1.0,
-        }
-
-        log.info("  Running walk-forward validation...")
-        results = walk_forward_validate(
-            ratings, fight_map, sorted_fight_ids, fighter_round_count,
-            DIMENSIONS, DEFAULTS,
-        )
-
-        log.info("=" * 60)
-        log.info("VALIDATION COMPLETE")
-        if results["avg"]:
-            avg = results["avg"]
-            log.info(f"  Accuracy:  {avg['accuracy']:.3f}")
-            log.info(f"  Log-loss:  {avg['log_loss']:.4f}")
-            log.info(f"  Brier:     {avg['brier']:.4f}")
-            log.info(f"  AUC-ROC:   {avg['auc']:.3f}")
-            log.info(f"  Folds:     {avg['n_folds']}")
-            log.info(f"  Test N:    {avg['total_test_n']}")
-        log.info("=" * 60)
-
-        return results
+        log.info(f"  Saved {total_saved} dimension profiles")
+        log.info("  Glicko computation complete")
 
     finally:
         db.close()
 
 
 if __name__ == "__main__":
-    import sys
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    if "--validate" in sys.argv:
-        run_validation()
-    else:
-        generate_rankings()
+    generate_rankings()

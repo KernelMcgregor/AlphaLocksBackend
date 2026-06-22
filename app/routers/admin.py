@@ -161,9 +161,14 @@ def trigger_method_predictions(background_tasks: BackgroundTasks):
 @router.post("/generate-rankings", dependencies=[Depends(require_admin_key)])
 def trigger_rankings(background_tasks: BackgroundTasks):
     from app.services.ranking_service import generate_rankings
+    from app.services.points_ranking_service import generate_rankings as generate_points_rankings
 
-    background_tasks.add_task(generate_rankings)
-    return {"message": "Rankings generation started in background"}
+    def _run_all():
+        generate_rankings()           # Glicko: dimension profiles + prediction features
+        generate_points_rankings()    # Points + Elo: final displayed rankings
+
+    background_tasks.add_task(_run_all)
+    return {"message": "Rankings generation started in background (Glicko + Points/Elo)"}
 
 
 # ---------------------------------------------------------------------------

@@ -453,20 +453,23 @@ def build_features(df: pd.DataFrame, round_data: pd.DataFrame = None) -> pd.Data
     )
     df["opp_resume"] = df.loc[opp_idx, "resume_score"].values if len(opp_idx) == len(df) else 0.0
 
-    # --- Glicko multi-dimensional ratings ---
-    log.info("  Computing Glicko ratings...")
+    # --- Glicko multi-dimensional ratings (from DB snapshots) ---
+    log.info("  Loading Glicko rating snapshots from DB...")
     try:
-        from app.services.ranking_service import (
-            _load_data as _glicko_load_data,
-            _compute_baselines as _glicko_baselines,
-            _run_glicko, DIMENSIONS as GLICKO_DIMS,
-        )
+        from app.services.ranking_service import DIMENSIONS as GLICKO_DIMS
+        from app.models.ufc import UFCGlickoSnapshot
         from app.database import SessionLocal as GlickoSession
         glicko_db = GlickoSession()
-        g_fight_map, g_rounds, g_derived, g_fighters = _glicko_load_data(glicko_db)
-        g_baselines = _glicko_baselines(g_fight_map, g_rounds)
-        _, _, _, _, _, _, glicko_snapshots = _run_glicko(g_fight_map, g_rounds, g_fighters, g_baselines)
+        snapshots = glicko_db.query(UFCGlickoSnapshot).all()
         glicko_db.close()
+
+        # Build lookup: {(fight_id, fighter_id): {dim: value}}
+        glicko_snapshots = {}
+        for s in snapshots:
+            glicko_snapshots[(s.fight_id, s.fighter_id)] = {
+                d: getattr(s, d, 0.0) or 0.0 for d in GLICKO_DIMS
+            }
+        log.info(f"  Loaded {len(glicko_snapshots)} Glicko snapshots")
 
         for dim in GLICKO_DIMS:
             df[f"glicko_{dim}"] = df.apply(
@@ -477,7 +480,7 @@ def build_features(df: pd.DataFrame, round_data: pd.DataFrame = None) -> pd.Data
             )
         log.info(f"  Added {len(GLICKO_DIMS)} Glicko features")
     except Exception as e:
-        log.warning(f"  Could not compute Glicko features: {e}")
+        log.warning(f"  Could not load Glicko features: {e}")
         from app.services.ranking_service import DIMENSIONS as GLICKO_DIMS
         for dim in GLICKO_DIMS:
             df[f"glicko_{dim}"] = 0.0
