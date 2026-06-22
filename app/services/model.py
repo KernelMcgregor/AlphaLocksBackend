@@ -453,6 +453,35 @@ def build_features(df: pd.DataFrame, round_data: pd.DataFrame = None) -> pd.Data
     )
     df["opp_resume"] = df.loc[opp_idx, "resume_score"].values if len(opp_idx) == len(df) else 0.0
 
+    # --- Glicko multi-dimensional ratings ---
+    log.info("  Computing Glicko ratings...")
+    try:
+        from app.services.ranking_service import (
+            _load_data as _glicko_load_data,
+            _compute_baselines as _glicko_baselines,
+            _run_glicko, DIMENSIONS as GLICKO_DIMS,
+        )
+        from app.database import SessionLocal as GlickoSession
+        glicko_db = GlickoSession()
+        g_fight_map, g_rounds, g_derived, g_fighters = _glicko_load_data(glicko_db)
+        g_baselines = _glicko_baselines(g_fight_map, g_rounds)
+        _, _, _, _, _, _, glicko_snapshots = _run_glicko(g_fight_map, g_rounds, g_fighters, g_baselines)
+        glicko_db.close()
+
+        for dim in GLICKO_DIMS:
+            df[f"glicko_{dim}"] = df.apply(
+                lambda r, d=dim: glicko_snapshots.get(
+                    (r["fight_id"], r["stats_fighter_id"]), {}
+                ).get(d, 0.0),
+                axis=1,
+            )
+        log.info(f"  Added {len(GLICKO_DIMS)} Glicko features")
+    except Exception as e:
+        log.warning(f"  Could not compute Glicko features: {e}")
+        from app.services.ranking_service import DIMENSIONS as GLICKO_DIMS
+        for dim in GLICKO_DIMS:
+            df[f"glicko_{dim}"] = 0.0
+
     # --- Elo-adjusted stats: multiply per-5 rates by (opp_elo / 1500) ---
     log.info("  Computing Elo-adjusted stats...")
     elo_weight = (df["opp_elo"] / 1500).clip(0.5, 2.0)
@@ -690,6 +719,8 @@ def build_matchup_df(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
                                                              "recent_r1_", "recent_late_", "recent_output_", "recent_ctrl_trend"))]
     feature_cols += [c for c in df.columns if c.startswith("style_") and c not in feature_cols]
     feature_cols += [c for c in df.columns if c.startswith("div_") and c not in feature_cols]
+    # Add Glicko multi-dimensional ratings
+    feature_cols += [c for c in df.columns if c.startswith("glicko_") and c not in feature_cols]
     # Deduplicate while preserving order
     feature_cols = list(dict.fromkeys(feature_cols))
 
@@ -711,8 +742,10 @@ def build_matchup_df(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
         matchup[f"diff_{col}"] = red[col].values - blue[col].values
 
     # Raw values for key features (both sides)
-    for col in ["elo", "elo_expected", "resume_score", "career_fights", "career_win_pct",
-                 "streak", "finish_rate", "style_matchup_adv"]:
+    raw_cols = ["elo", "elo_expected", "resume_score", "career_fights", "career_win_pct",
+                "streak", "finish_rate", "style_matchup_adv"]
+    raw_cols += [c for c in feature_cols if c.startswith("glicko_")]
+    for col in raw_cols:
         matchup[f"red_{col}"] = red[col].values
         matchup[f"blue_{col}"] = blue[col].values
 
