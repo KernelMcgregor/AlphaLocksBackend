@@ -245,6 +245,21 @@ def trigger_method_predictions(background_tasks: BackgroundTasks):
     return _start_task(background_tasks, "Method Predictions", generate_method_predictions)
 
 
+@router.post("/generate-glicko", dependencies=[Depends(require_admin_key)])
+def trigger_glicko(background_tasks: BackgroundTasks):
+    from app.services.glicko_service import compute_and_save_snapshots
+    from app.database import SessionLocal
+
+    def _run():
+        db = SessionLocal()
+        try:
+            compute_and_save_snapshots(db)
+        finally:
+            db.close()
+
+    return _start_task(background_tasks, "Generate Glicko Ratings", _run)
+
+
 @router.post("/generate-rankings", dependencies=[Depends(require_admin_key)])
 def trigger_rankings(background_tasks: BackgroundTasks):
     from app.services.ranking_service import generate_rankings

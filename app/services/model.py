@@ -456,7 +456,7 @@ def build_features(df: pd.DataFrame, round_data: pd.DataFrame = None) -> pd.Data
     # --- Glicko multi-dimensional ratings (from DB snapshots) ---
     log.info("  Loading Glicko rating snapshots from DB...")
     try:
-        from app.services.ranking_service import DIMENSIONS as GLICKO_DIMS
+        from app.services.glicko_service import DIMENSIONS as GLICKO_DIMS
         from app.models.ufc import UFCGlickoSnapshot
         from app.database import SessionLocal as GlickoSession
         glicko_db = GlickoSession()
@@ -481,7 +481,7 @@ def build_features(df: pd.DataFrame, round_data: pd.DataFrame = None) -> pd.Data
         log.info(f"  Added {len(GLICKO_DIMS)} Glicko features")
     except Exception as e:
         log.warning(f"  Could not load Glicko features: {e}")
-        from app.services.ranking_service import DIMENSIONS as GLICKO_DIMS
+        from app.services.glicko_service import DIMENSIONS as GLICKO_DIMS
         for dim in GLICKO_DIMS:
             df[f"glicko_{dim}"] = 0.0
 
@@ -847,7 +847,7 @@ def build_matchup_df(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
         log.info(f"    {name:50s} {score:.4f}")
 
     # Keep top N features + force-include odds features (sparse but powerful)
-    TOP_N = 35
+    TOP_N = 39
     selected = [name for name, _ in mi_ranked[:TOP_N]]
     odds_features = [c for c in feature_names if "odds" in c]
     for of in odds_features:
@@ -897,11 +897,11 @@ def train_gbt(matchup: pd.DataFrame, feature_names: list[str], odds_only: bool =
 
     model = HistGradientBoostingClassifier(
         max_iter=1000,
-        max_depth=4,
-        learning_rate=0.02,
-        max_features=0.7,
-        min_samples_leaf=30,
-        l2_regularization=2.0,
+        max_depth=3,
+        learning_rate=0.037,
+        max_features=0.65,
+        min_samples_leaf=32,
+        l2_regularization=4.4,
         max_bins=128,
         early_stopping=True,
         n_iter_no_change=75,
@@ -1235,6 +1235,12 @@ SIAMESE_FEATURES = [
     "streak", "days_since_last",
     # Style
     "style_matchup_adv",
+    # Glicko dimensions (15)
+    "glicko_pts", "glicko_ko", "glicko_kod", "glicko_sub", "glicko_subd",
+    "glicko_td", "glicko_tdd", "glicko_ctrl",
+    "glicko_str_vol", "glicko_str_acc", "glicko_str_def",
+    "glicko_dist", "glicko_clinch", "glicko_gnd",
+    "glicko_durability",
 ]
 
 
@@ -1404,175 +1410,165 @@ def train_siamese(df: pd.DataFrame, matchup: pd.DataFrame) -> dict:
 # ENSEMBLE
 # ===========================================================================
 
-def ensemble_results(p1, p2, p3, p4=None, matchup: pd.DataFrame = None, feature_names: list[str] = None):
-    """Stacked ensemble: train a logistic regression meta-learner on base model predictions."""
+def ensemble_results(gbt_result, siamese_result=None, matchup: pd.DataFrame = None, feature_names: list[str] = None):
+    """GBT + Siamese ensemble with quality gate.
+
+    Only includes Siamese if its AUC > 0.60. Otherwise falls back to GBT-only.
+    Uses stacked LogisticRegressionCV meta-learner on aligned test predictions.
+    """
     log.info("=" * 60)
-    log.info("STACKED ENSEMBLE (Meta-Learner) v5")
+    log.info("GBT + SIAMESE ENSEMBLE v6")
     log.info("=" * 60)
-    models = [("GBT", p1), ("RNN", p2)]
-    if p3: models.append(("GNN", p3))
-    if p4: models.append(("Siamese", p4))
+
+    models = [("GBT", gbt_result)]
+    if siamese_result:
+        models.append(("Siamese", siamese_result))
 
     log.info(f"\n  {'Model':<15s} {'Acc':>8s} {'AUC':>8s} {'LogLoss':>8s}")
     log.info(f"  {'-'*42}")
     for n, r in models:
         log.info(f"  {n:<15s} {r['accuracy']:>8.4f} {r['auc']:>8.4f} {r['log_loss']:>8.4f}")
 
-    # --- Align test sizes across models ---
-    # Different phases may have slightly different test sizes due to augmentation filtering.
-    # Truncate all to the minimum size so they can be stacked.
-    all_models = [("GBT", p1), ("RNN", p2)]
-    if p3: all_models.append(("GNN", p3))
-    if p4: all_models.append(("Siamese", p4))
-    min_len = min(len(r["test_y"]) for _, r in all_models)
-    matching = []
-    for name, r in all_models:
-        r["test_proba"] = r["test_proba"][:min_len]
-        r["test_y"] = r["test_y"][:min_len]
-        matching.append((name, r))
-    log.info(f"  Models aligned to test size {min_len}: {[m[0] for m in matching]}")
+    # Quality gate: only include Siamese if AUC > 0.60
+    if siamese_result and siamese_result["auc"] < 0.60:
+        log.info(f"\n  Siamese AUC ({siamese_result['auc']:.4f}) below quality gate (0.60)")
+        log.info("  Falling back to GBT-only")
+        return {"ensemble_proba": gbt_result["test_proba"], "test_y": gbt_result["test_y"],
+                "accuracy": gbt_result["accuracy"], "auc": gbt_result["auc"]}
 
-    # --- Weighted average baseline ---
-    if len(matching) >= 2:
-        weights = {"GBT": 0.40, "RNN": 0.15, "GNN": 0.10, "Siamese": 0.35}
-        ep = sum(weights.get(name, 0.1) * r["test_proba"] for name, r in matching)
-        tw = sum(weights.get(name, 0.1) for name, _ in matching)
-        ep /= tw
-        yt = p1["test_y"]
-        acc = accuracy_score(yt, (ep >= 0.5).astype(int))
-        auc = roc_auc_score(yt, ep); ll = log_loss(yt, ep)
-        log.info(f"\n  {'WEIGHTED AVG':<15s} {acc:>8.4f} {auc:>8.4f} {ll:>8.4f}")
+    if not siamese_result or siamese_result["auc"] < 0.60:
+        log.info("\n  No viable Siamese model — using GBT-only")
+        return {"ensemble_proba": gbt_result["test_proba"], "test_y": gbt_result["test_y"],
+                "accuracy": gbt_result["accuracy"], "auc": gbt_result["auc"]}
+
+    # --- Align test sizes ---
+    min_len = min(len(gbt_result["test_y"]), len(siamese_result["test_y"]))
+    gbt_proba = gbt_result["test_proba"][:min_len]
+    siam_proba = siamese_result["test_proba"][:min_len]
+    y_test = gbt_result["test_y"][:min_len]
+    log.info(f"\n  Aligned to test size: {min_len}")
 
     # --- Stacked meta-learner ---
-    if len(matching) >= 2:
-        from sklearn.linear_model import LogisticRegressionCV
+    from sklearn.linear_model import LogisticRegressionCV
 
-        # Stack base model predictions
-        stack_cols = [r["test_proba"] for _, r in matching]
-        col_names = [f"{name.lower()}_prob" for name, _ in matching]
+    X_stack = np.column_stack([gbt_proba, siam_proba])
+    # Interaction features
+    X_stack_ext = np.column_stack([
+        X_stack,
+        gbt_proba * siam_proba,       # product
+        gbt_proba - siam_proba,       # disagreement
+        np.abs(gbt_proba - siam_proba),  # abs disagreement
+    ])
+    ext_names = ["gbt_prob", "siamese_prob", "gbt_x_siam", "gbt_minus_siam", "abs_disagree"]
 
-        X_stack = np.column_stack(stack_cols)
-        y_stack = p1["test_y"]
+    # Split: first 60% for meta-train, last 40% for meta-test
+    meta_split = int(len(y_test) * 0.6)
+    X_meta_train, X_meta_test = X_stack_ext[:meta_split], X_stack_ext[meta_split:]
+    y_meta_train, y_meta_test = y_test[:meta_split], y_test[meta_split:]
 
-        # Add interaction features: pairwise products, differences, confidence metrics
-        interactions = []
-        interaction_names = []
-        for i in range(len(stack_cols)):
-            for j in range(i + 1, len(stack_cols)):
-                interactions.append(X_stack[:, i] * X_stack[:, j])
-                interaction_names.append(f"{col_names[i]}_x_{col_names[j]}")
-                interactions.append(X_stack[:, i] - X_stack[:, j])
-                interaction_names.append(f"{col_names[i]}_minus_{col_names[j]}")
+    log.info(f"  Meta-learner: train={meta_split} test={len(y_test) - meta_split}")
 
-        X_stack_ext = np.column_stack([
-            X_stack,
-            *interactions,
-            np.max(X_stack, axis=1),
-            np.min(X_stack, axis=1),
-            np.std(X_stack, axis=1),
-            np.mean(X_stack, axis=1),
-        ])
-        ext_names = col_names + interaction_names + ["max_conf", "min_conf", "disagreement", "avg_conf"]
+    meta_model = LogisticRegressionCV(
+        Cs=10, cv=5, scoring="neg_log_loss", max_iter=2000, random_state=42
+    )
+    meta_model.fit(X_meta_train, y_meta_train)
+    meta_proba = meta_model.predict_proba(X_meta_test)[:, 1]
 
-        # Split: first 60% for meta-train, last 40% for meta-test
-        meta_split = int(len(y_stack) * 0.6)
-        X_meta_train, X_meta_test = X_stack_ext[:meta_split], X_stack_ext[meta_split:]
-        y_meta_train, y_meta_test = y_stack[:meta_split], y_stack[meta_split:]
+    meta_acc = accuracy_score(y_meta_test, (meta_proba >= 0.5).astype(int))
+    meta_auc = roc_auc_score(y_meta_test, meta_proba)
+    meta_ll = log_loss(y_meta_test, meta_proba)
+    meta_brier = brier_score_loss(y_meta_test, meta_proba)
 
-        log.info(f"\n  Meta-learner: train={meta_split} test={len(y_stack) - meta_split}")
+    log.info(f"\n  {'STACKED':<15s} {meta_acc:>8.4f} {meta_auc:>8.4f} {meta_ll:>8.4f}")
+    log.info(f"  Brier score: {meta_brier:.4f}")
+    log.info(f"\n  Meta-learner coefficients:")
+    for name, coef in zip(ext_names, meta_model.coef_[0]):
+        log.info(f"    {name:25s} {coef:+.4f}")
+    log.info(f"    {'intercept':25s} {meta_model.intercept_[0]:+.4f}")
+    log.info(f"\n{classification_report(y_meta_test, (meta_proba >= 0.5).astype(int), target_names=['Blue', 'Red'])}")
 
-        # Logistic regression meta-learner (outputs calibrated probabilities)
-        meta_model = LogisticRegressionCV(
-            Cs=10, cv=5, scoring="neg_log_loss", max_iter=2000, random_state=42
-        )
-        meta_model.fit(X_meta_train, y_meta_train)
-        meta_proba = meta_model.predict_proba(X_meta_test)[:, 1]
+    # Compare ensemble vs GBT-only
+    gbt_only_acc = accuracy_score(y_meta_test, (gbt_proba[meta_split:] >= 0.5).astype(int))
+    gbt_only_auc = roc_auc_score(y_meta_test, gbt_proba[meta_split:])
+    log.info(f"  Ensemble AUC: {meta_auc:.4f} vs GBT-only AUC: {gbt_only_auc:.4f}")
+    if meta_auc < gbt_only_auc:
+        log.info("  Ensemble underperforms GBT-only — recommending GBT-only for production")
 
-        meta_acc = accuracy_score(y_meta_test, (meta_proba >= 0.5).astype(int))
-        meta_auc = roc_auc_score(y_meta_test, meta_proba)
-        meta_ll = log_loss(y_meta_test, meta_proba)
-        meta_brier = brier_score_loss(y_meta_test, meta_proba)
-
-        log.info(f"  {'STACKED':<15s} {meta_acc:>8.4f} {meta_auc:>8.4f} {meta_ll:>8.4f}")
-        log.info(f"  Brier score: {meta_brier:.4f}")
-        log.info(f"\n  Meta-learner coefficients:")
-        for name, coef in zip(ext_names, meta_model.coef_[0]):
-            log.info(f"    {name:25s} {coef:+.4f}")
-        log.info(f"    {'intercept':25s} {meta_model.intercept_[0]:+.4f}")
-        log.info(f"\n{classification_report(y_meta_test, (meta_proba >= 0.5).astype(int), target_names=['Blue', 'Red'])}")
-
-        # Save meta-model
-        with open(MODEL_DIR / "meta_model_v5.pkl", "wb") as f:
-            pickle.dump({"model": meta_model, "feature_names": ext_names}, f)
-        log.info(f"  Saved meta-model to {MODEL_DIR / 'meta_model_v5.pkl'}")
-
-        yt = y_meta_test
-        ep = meta_proba
-        acc, auc = meta_acc, meta_auc
-    else:
-        log.warning("  Model test sizes don't match — falling back to GBT only")
-        yt, ep = p1["test_y"], p1["test_proba"]
-        acc, auc = p1["accuracy"], p1["auc"]
+    # Save meta-model
+    with open(MODEL_DIR / "meta_model_v5.pkl", "wb") as f:
+        pickle.dump({"model": meta_model, "feature_names": ext_names}, f)
+    log.info(f"  Saved meta-model to {MODEL_DIR / 'meta_model_v5.pkl'}")
 
     best = max(models, key=lambda x: x[1]["auc"])
     log.info(f"\n  Best individual model by AUC: {best[0]} ({best[1]['auc']:.4f})")
 
-    return {"ensemble_proba": ep, "test_y": yt, "accuracy": acc, "auc": auc}
+    return {"ensemble_proba": meta_proba, "test_y": y_meta_test,
+            "accuracy": meta_acc, "auc": meta_auc}
 
 
 # ===========================================================================
 # PROBABILITY CALIBRATION
 # ===========================================================================
 
-def calibrate_model(matchup: pd.DataFrame, feature_names: list[str]) -> dict:
-    """Train with Platt scaling and isotonic regression calibration."""
+def calibrate_model(matchup: pd.DataFrame, feature_names: list[str],
+                    gbt_model=None) -> dict:
+    """Calibrate the Phase 1 GBT model's probabilities using Platt/isotonic.
+
+    Reuses the already-trained GBT model (80% train). Splits the 20% test set
+    into calibration (10%) and final test (10%) to fit and evaluate calibration.
+    """
     log.info("=" * 60)
     log.info("PROBABILITY CALIBRATION")
     log.info("=" * 60)
 
+    if gbt_model is None:
+        # Fallback: load saved model
+        with open(MODEL_DIR / "gbt_v3.pkl", "rb") as f:
+            saved = pickle.load(f)
+        gbt_model = saved["model"]
+        feature_names = saved["features"]
+        log.info("  Loaded Phase 1 GBT from disk")
+
     matchup = matchup.sort_values("date").reset_index(drop=True)
-    # 3-way split: train (60%), calibration (20%), test (20%)
-    n = len(matchup)
-    s1, s2 = int(n * 0.6), int(n * 0.8)
-    train, cal, test = matchup.iloc[:s1], matchup.iloc[s1:s2], matchup.iloc[s2:]
+    has_aug = "_augmented" in matchup.columns
 
-    # Remove odds features for pure model
-    pure_features = [f for f in feature_names if "odds" not in f and "elo_vs_odds" not in f]
+    # Same 80/20 split as Phase 1
+    split_idx = int(len(matchup) * 0.8)
+    test_all = matchup.iloc[split_idx:]
+    test = test_all[~test_all["_augmented"]] if has_aug else test_all
 
-    X_train, y_train = train[pure_features].values, train["red_wins"].values
-    X_cal, y_cal = cal[pure_features].values, cal["red_wins"].values
-    X_test, y_test = test[pure_features].values, test["red_wins"].values
+    # Split the test set: first half for calibration, second half for evaluation
+    cal_split = int(len(test) * 0.5)
+    cal_set = test.iloc[:cal_split]
+    eval_set = test.iloc[cal_split:]
 
-    log.info(f"  Train: {len(train)} | Calibration: {len(cal)} | Test: {len(test)}")
-    log.info(f"  Test period: {test['date'].min()} to {test['date'].max()}")
-    log.info(f"  Pure features (no odds): {len(pure_features)}")
+    X_cal, y_cal = cal_set[feature_names].values, cal_set["red_wins"].values
+    X_eval, y_eval = eval_set[feature_names].values, eval_set["red_wins"].values
 
-    # Base model
-    base_model = HistGradientBoostingClassifier(
-        max_iter=1000, max_depth=4, learning_rate=0.02, max_features=0.7,
-        min_samples_leaf=30, l2_regularization=2.0, max_bins=128,
-        early_stopping=True, n_iter_no_change=75, validation_fraction=0.15,
-        random_state=42,
-    )
-    base_model.fit(X_train, y_train)
-    raw_proba = base_model.predict_proba(X_test)[:, 1]
-    raw_cal_proba = base_model.predict_proba(X_cal)[:, 1]
+    log.info(f"  Using Phase 1 GBT (trained on 80% data)")
+    log.info(f"  Calibration: {len(cal_set)} | Eval: {len(eval_set)}")
+    log.info(f"  Eval period: {eval_set['date'].min()} to {eval_set['date'].max()}")
+    log.info(f"  Features: {len(feature_names)}")
+
+    # Get raw probabilities from the Phase 1 model
+    raw_cal_proba = gbt_model.predict_proba(X_cal)[:, 1]
+    raw_eval_proba = gbt_model.predict_proba(X_eval)[:, 1]
 
     # --- Platt scaling (sigmoid) ---
     from sklearn.linear_model import LogisticRegression
     platt = LogisticRegression(C=1e10, solver="lbfgs", max_iter=10000)
     platt.fit(raw_cal_proba.reshape(-1, 1), y_cal)
-    platt_proba = platt.predict_proba(raw_proba.reshape(-1, 1))[:, 1]
+    platt_proba = platt.predict_proba(raw_eval_proba.reshape(-1, 1))[:, 1]
 
     # --- Isotonic regression ---
     from sklearn.isotonic import IsotonicRegression
     iso = IsotonicRegression(y_min=0.01, y_max=0.99, out_of_bounds="clip")
     iso.fit(raw_cal_proba, y_cal)
-    iso_proba = iso.predict(raw_proba)
+    iso_proba = iso.predict(raw_eval_proba)
 
     # --- Evaluate calibration ---
     methods = [
-        ("Raw (uncalibrated)", raw_proba),
+        ("Raw (uncalibrated)", raw_eval_proba),
         ("Platt scaling", platt_proba),
         ("Isotonic regression", iso_proba),
     ]
@@ -1581,10 +1577,10 @@ def calibrate_model(matchup: pd.DataFrame, feature_names: list[str]) -> dict:
 
     best_method, best_brier = None, float("inf")
     for name, proba in methods:
-        acc = accuracy_score(y_test, (proba >= 0.5).astype(int))
-        auc = roc_auc_score(y_test, proba)
-        ll = log_loss(y_test, proba)
-        brier = brier_score_loss(y_test, proba)
+        acc = accuracy_score(y_eval, (proba >= 0.5).astype(int))
+        auc = roc_auc_score(y_eval, proba)
+        ll = log_loss(y_eval, proba)
+        brier = brier_score_loss(y_eval, proba)
         log.info(f"  {name:<25s} {acc:>7.4f} {auc:>7.4f} {ll:>8.4f} {brier:>7.4f}")
         if brier < best_brier:
             best_brier, best_method = brier, name
@@ -1597,7 +1593,7 @@ def calibrate_model(matchup: pd.DataFrame, feature_names: list[str]) -> dict:
     log.info(f"  {'-'*50}")
     for name, proba in methods:
         log.info(f"\n  {name}:")
-        prob_true, prob_pred = calibration_curve(y_test, proba, n_bins=10, strategy="uniform")
+        prob_true, prob_pred = calibration_curve(y_eval, proba, n_bins=10, strategy="uniform")
         for pt, pp in zip(prob_true, prob_pred):
             gap = abs(pt - pp)
             bar = "#" * int(gap * 100)
@@ -1605,25 +1601,32 @@ def calibrate_model(matchup: pd.DataFrame, feature_names: list[str]) -> dict:
 
     # Save calibrated model
     calibrated = {
-        "base_model": base_model,
+        "base_model": gbt_model,
         "platt": platt,
         "isotonic": iso,
-        "features": pure_features,
+        "features": feature_names,
         "best_method": best_method,
     }
     with open(MODEL_DIR / "calibrated_model.pkl", "wb") as f:
         pickle.dump(calibrated, f)
     log.info(f"\n  Saved calibrated model to {MODEL_DIR / 'calibrated_model.pkl'}")
 
-    # Return the best calibrated probabilities for betting sim
-    best_proba = platt_proba if "Platt" in best_method else iso_proba
+    # Return calibrated probabilities for betting sim — use FULL test set
+    # (fit calibration on first half, apply to full test for betting sim)
+    X_test_full = test[feature_names].values
+    y_test_full = test["red_wins"].values
+    raw_full = gbt_model.predict_proba(X_test_full)[:, 1]
+    platt_full = platt.predict_proba(raw_full.reshape(-1, 1))[:, 1]
+    iso_full = iso.predict(raw_full)
+    best_full = platt_full if "Platt" in best_method else (iso_full if "Isotonic" in best_method else raw_full)
+
     return {
-        "raw_proba": raw_proba,
-        "platt_proba": platt_proba,
-        "iso_proba": iso_proba,
-        "best_proba": best_proba,
+        "raw_proba": raw_full,
+        "platt_proba": platt_full,
+        "iso_proba": iso_full,
+        "best_proba": best_full,
         "best_method": best_method,
-        "test_y": y_test,
+        "test_y": y_test_full,
         "test_df": test,
     }
 
@@ -1856,9 +1859,9 @@ def betting_simulation(cal_results: dict) -> None:
 # ===========================================================================
 
 def run(phases=None):
-    if phases is None: phases = [1, 2, 3, 4]
+    if phases is None: phases = [1, 4]  # GBT + Siamese (dropped RNN/GNN)
     log.info("=" * 60)
-    log.info("UFC Fight Winner Prediction Pipeline v5")
+    log.info("UFC Fight Winner Prediction Pipeline v6")
     log.info("=" * 60)
 
     df, round_data = load_fight_data()
@@ -1873,18 +1876,21 @@ def run(phases=None):
     if 2 in phases: results["rnn"] = train_rnn(df, matchup)
     if 3 in phases: results["gnn"] = train_gnn(df, matchup)
     if 4 in phases: results["siamese"] = train_siamese(df, matchup)
-    if "gbt_full" in results and "rnn" in results:
+
+    # GBT + Siamese ensemble (with quality gate)
+    if "gbt_full" in results:
         ensemble_results(
-            results["gbt_full"], results["rnn"], results.get("gnn"), results.get("siamese"),
+            results["gbt_full"], results.get("siamese"),
             matchup=matchup, feature_names=features,
         )
 
-    # Calibration + Betting Simulation (always run)
-    cal_results = calibrate_model(matchup, features)
+    # Calibration + Betting Simulation (use Phase 1 GBT model)
+    gbt_model = results["gbt_full"]["model"] if "gbt_full" in results else None
+    cal_results = calibrate_model(matchup, features, gbt_model=gbt_model)
     betting_simulation(cal_results)
 
     log.info("\n" + "=" * 60)
-    log.info("Pipeline v5 complete.")
+    log.info("Pipeline v6 complete.")
     log.info("=" * 60)
 
 
@@ -2032,7 +2038,7 @@ def generate_predictions():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--phase", type=int, choices=[1, 2, 3])
+    parser.add_argument("--phase", type=int, choices=[1, 2, 3, 4])
     parser.add_argument("--predict", action="store_true", help="Generate predictions for all fights")
     args = parser.parse_args()
     if args.predict:
