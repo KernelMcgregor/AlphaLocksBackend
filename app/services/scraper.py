@@ -957,6 +957,86 @@ def run_recent_update():
 
 
 # ---------------------------------------------------------------------------
+# Scrape last event (re-scrape the most recent event to fill in results)
+# ---------------------------------------------------------------------------
+
+def run_scrape_last_event():
+    """Re-scrape the most recent event in the DB to fill in missing results.
+
+    Finds the latest event by date, re-scrapes all its fights from ufcstats.com,
+    and upserts them (filling in winners, method, round, etc.).
+    """
+    log.info("Starting scrape of last event")
+    scraper = Scraper()
+    db = SessionLocal()
+
+    try:
+        # Find the most recent event
+        last_event = db.query(UFCEvent).order_by(UFCEvent.date.desc()).first()
+        if not last_event:
+            log.info("No events in DB")
+            return
+
+        log.info(f"Re-scraping event: {last_event.name} ({last_event.date})")
+
+        # Get the event page URL from ufcstats_id
+        event_url = f"{BASE_URL}/event-details/{last_event.ufcstats_id}"
+        fight_links = scrape_event_fights(scraper, event_url)
+        log.info(f"Found {len(fight_links)} fights")
+
+        if not fight_links:
+            # Try completed events page to find the event link
+            all_completed = scrape_all_events(scraper)
+            for ev in all_completed:
+                if ev["ufcstats_id"] == last_event.ufcstats_id:
+                    fight_links = scrape_event_fights(scraper, ev["link"])
+                    log.info(f"Found {len(fight_links)} fights via completed events page")
+                    break
+
+        fighter_ids_to_update = set()
+        for fight_url in fight_links:
+            fight_data = scrape_fight_details(scraper, fight_url)
+            if not fight_data:
+                continue
+            fight_data["date"] = last_event.date
+            upsert_fight(db, fight_data, last_event.id)
+
+            red_id = _extract_id(fight_data.get("red_url", ""))
+            blue_id = _extract_id(fight_data.get("blue_url", ""))
+            if red_id:
+                fighter_ids_to_update.add(red_id)
+            if blue_id:
+                fighter_ids_to_update.add(blue_id)
+            time.sleep(REQUEST_DELAY)
+
+        # Update fighter records
+        if fighter_ids_to_update:
+            log.info(f"Updating records for {len(fighter_ids_to_update)} fighters")
+            fighters_from_listing = _scrape_fighter_listings_only(scraper)
+            fighters_to_upsert = [
+                f for f in fighters_from_listing if f["ufcstats_id"] in fighter_ids_to_update
+            ]
+            if fighters_to_upsert:
+                upsert_fighters(db, fighters_to_upsert)
+                log.info(f"Updated {len(fighters_to_upsert)} fighter records")
+
+        log.info("Scrape last event complete")
+
+    except Exception:
+        log.exception("Scrape last event failed")
+        db.rollback()
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+        try:
+            scraper.close()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
 # Main scrape orchestration
 # ---------------------------------------------------------------------------
 

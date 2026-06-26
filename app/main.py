@@ -106,24 +106,33 @@ def run_migrations():
 def scheduled_scrape():
     import logging
     log = logging.getLogger("scheduled_scrape")
+    from app.routers.admin import record_run
 
     from app.services.scraper import run_recent_update
-    run_recent_update()
+    try:
+        run_recent_update()
+        record_run("Recent Update", "done")
+    except Exception as e:
+        log.error(f"Recent update failed: {e}")
+        record_run("Recent Update", "error", str(e))
 
-    # Regenerate predictions with existing models (no retraining)
     try:
         from app.services.model import generate_predictions
         generate_predictions()
         log.info("Winner predictions regenerated")
+        record_run("Generate Predictions", "done")
     except Exception as e:
         log.error(f"Winner prediction generation failed: {e}")
+        record_run("Generate Predictions", "error", str(e))
 
     try:
         from app.services.method_model import generate_method_predictions
         generate_method_predictions()
         log.info("Method predictions regenerated")
+        record_run("Method Predictions", "done")
     except Exception as e:
         log.error(f"Method prediction generation failed: {e}")
+        record_run("Method Predictions", "error", str(e))
 
     try:
         from app.services.ranking_service import generate_rankings
@@ -136,27 +145,35 @@ def scheduled_scrape():
         from app.services.points_ranking_service import generate_rankings as generate_points_rankings
         generate_points_rankings()
         log.info("Points + Elo fighter rankings generated")
+        record_run("Generate Rankings", "done")
     except Exception as e:
         log.error(f"Points + Elo ranking generation failed: {e}")
+        record_run("Generate Rankings", "error", str(e))
 
     try:
         from app.services.preview_service import generate_all_upcoming_previews
         generate_all_upcoming_previews()
         log.info("Fight previews generated")
+        record_run("Generate All Previews", "done")
     except Exception as e:
         log.error(f"Fight preview generation failed: {e}")
+        record_run("Generate All Previews", "error", str(e))
 
+    record_run("Full Pipeline", "done")
 
 
 def scheduled_bovada_scrape():
     import logging
     log = logging.getLogger("scheduled_bovada")
+    from app.routers.admin import record_run
     try:
         from app.services.bovada_scraper import scrape_bovada_method_odds
         scrape_bovada_method_odds()
         log.info("Bovada method odds scraped")
+        record_run("Bovada Odds", "done")
     except Exception as e:
         log.error(f"Bovada method odds scrape failed: {e}")
+        record_run("Bovada Odds", "error", str(e))
 
 
 @asynccontextmanager

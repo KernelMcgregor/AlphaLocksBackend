@@ -1927,6 +1927,8 @@ def generate_predictions():
                                                              "recent_r1_", "recent_late_", "recent_output_", "recent_ctrl_trend"))]
     feature_cols += [c for c in df.columns if c.startswith("style_") and c not in feature_cols]
     feature_cols += [c for c in df.columns if c.startswith("div_") and c not in feature_cols]
+    # Add Glicko multi-dimensional ratings
+    feature_cols += [c for c in df.columns if c.startswith("glicko_") and c not in feature_cols]
     feature_cols = list(dict.fromkeys(feature_cols))
 
     for col in feature_cols:
@@ -1944,8 +1946,10 @@ def generate_predictions():
     for col in feature_cols:
         matchup[f"diff_{col}"] = red[col].values - blue[col].values
 
-    for col in ["elo", "elo_expected", "resume_score", "career_fights", "career_win_pct",
-                 "streak", "finish_rate", "style_matchup_adv"]:
+    raw_cols = ["elo", "elo_expected", "resume_score", "career_fights", "career_win_pct",
+                 "streak", "finish_rate", "style_matchup_adv"]
+    raw_cols += [c for c in feature_cols if c.startswith("glicko_")]
+    for col in raw_cols:
         matchup[f"red_{col}"] = red[col].values
         matchup[f"blue_{col}"] = blue[col].values
 
