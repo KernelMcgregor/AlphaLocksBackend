@@ -1,88 +1,88 @@
-2026-06-26 16:16:39,775 INFO [model] ============================================================
-2026-06-26 16:16:39,775 INFO [model] UFC Fight Winner Prediction Pipeline v6
-2026-06-26 16:16:39,775 INFO [model] ============================================================
-2026-06-26 16:16:39,775 INFO [model] Loading data from database...
-2026-06-26 16:16:39,894 INFO [model]   Loaded 4500 fighters
-2026-06-26 16:16:41,348 INFO [model]   Loaded 22148 fight-stat rows (11074 unique fights)
-2026-06-26 16:16:41,348 INFO [model]   Loading per-round stats...
-2026-06-26 16:16:43,168 INFO [model]   Loaded 53080 per-round stat rows
-2026-06-26 16:16:43,269 INFO [model] Building features...
-2026-06-26 16:16:43,447 INFO [model]   Computing defensive stats...
-2026-06-26 16:16:43,964 INFO [model]   Computing Elo ratings...
-2026-06-26 16:16:44,437 INFO [model]   Computing resume scores...
-2026-06-26 16:16:44,604 INFO [model]   Loading Glicko rating snapshots from DB...
-2026-06-26 16:16:44,896 INFO [model]   Loaded 21032 Glicko snapshots
-2026-06-26 16:16:46,681 INFO [model]   Added 15 Glicko features
-2026-06-26 16:16:46,681 INFO [model]   Computing Elo-adjusted stats...
-2026-06-26 16:16:46,683 INFO [model]   Computing rolling career averages...
-2026-06-26 16:17:10,533 INFO [model]   Computing streaks and career stats...
-2026-06-26 16:17:11,881 INFO [model]   Computing composite features...
-2026-06-26 16:17:11,885 INFO [model]   Computing round-by-round profiles...
-2026-06-26 16:17:21,376 INFO [model]   Computing fighter style clusters (k=6)...
-2026-06-26 16:17:21,611 INFO [model]     Style 0 (425 fighters): SigStr/5=10.7 TD/5=0.2 Sub/5=0.2 Ctrl/5=23.6 GndStr/5=0.8 top=ctrl_per5
-2026-06-26 16:17:21,611 INFO [model]     Style 1 (919 fighters): SigStr/5=7.4 TD/5=0.1 Sub/5=0.1 Ctrl/5=17.2 GndStr/5=0.8 top=ctrl_per5
-2026-06-26 16:17:21,611 INFO [model]     Style 2 (147 fighters): SigStr/5=36.4 TD/5=0.7 Sub/5=0.4 Ctrl/5=55.8 GndStr/5=14.3 top=ctrl_per5
-2026-06-26 16:17:21,611 INFO [model]     Style 3 (1197 fighters): SigStr/5=23.6 TD/5=0.3 Sub/5=0.2 Ctrl/5=33.2 GndStr/5=2.3 top=ctrl_per5
-2026-06-26 16:17:21,612 INFO [model]     Style 4 (1053 fighters): SigStr/5=13.1 TD/5=1.2 Sub/5=0.3 Ctrl/5=90.6 GndStr/5=3.7 top=ctrl_per5
-2026-06-26 16:17:21,612 INFO [model]     Style 5 (69 fighters): SigStr/5=6.4 TD/5=1.2 Sub/5=3.9 Ctrl/5=44.0 GndStr/5=1.6 top=ctrl_per5
-2026-06-26 16:17:22,051 INFO [model]   Style matchup matrix computed (6x6)
-2026-06-26 16:17:22,481 INFO [model]   Feature matrix shape: (22148, 286)
-2026-06-26 16:17:22,515 INFO [model] Building matchup feature matrix...
-2026-06-26 16:17:22,620 INFO [model]   Loading odds from database...
-2026-06-26 16:17:23,559 INFO [model]   Odds matched: 2781/11074 fights (25.1%)
-2026-06-26 16:17:23,578 INFO [model]   Filtered to modern era (2015+): 6313 fights (dropped 4761 pre-2015)
-2026-06-26 16:17:23,579 INFO [model]   Red win rate (modern): 0.552
-2026-06-26 16:17:23,579 INFO [model]   Applying corner-swap augmentation...
-2026-06-26 16:17:23,624 INFO [model]   After augmentation: 12626 rows (6313 original + 6313 mirrored)
-2026-06-26 16:17:23,625 INFO [model]   Running feature selection (mutual information)...
-2026-06-26 16:17:29,721 INFO [model]   Top 30 features by mutual information:
-2026-06-26 16:17:29,723 INFO [model]     diff_glicko_str_def                                0.0963
-2026-06-26 16:17:29,723 INFO [model]     diff_glicko_kod                                    0.0958
-2026-06-26 16:17:29,723 INFO [model]     diff_glicko_str_acc                                0.0915
-2026-06-26 16:17:29,723 INFO [model]     diff_glicko_str_vol                                0.0879
-2026-06-26 16:17:29,728 INFO [model]     diff_glicko_dist                                   0.0874
-2026-06-26 16:17:29,728 INFO [model]     diff_glicko_clinch                                 0.0858
-2026-06-26 16:17:29,728 INFO [model]     diff_glicko_gnd                                    0.0790
-2026-06-26 16:17:29,728 INFO [model]     diff_glicko_pts                                    0.0776
-2026-06-26 16:17:29,729 INFO [model]     diff_glicko_ctrl                                   0.0742
-2026-06-26 16:17:29,729 INFO [model]     diff_glicko_td                                     0.0742
-2026-06-26 16:17:29,729 INFO [model]     diff_glicko_subd                                   0.0732
-2026-06-26 16:17:29,729 INFO [model]     diff_glicko_tdd                                    0.0705
-2026-06-26 16:17:29,729 INFO [model]     diff_glicko_durability                             0.0556
-2026-06-26 16:17:29,729 INFO [model]     elo_vs_odds                                        0.0440
-2026-06-26 16:17:29,729 INFO [model]     odds_blue_prob                                     0.0432
-2026-06-26 16:17:29,729 INFO [model]     odds_diff                                          0.0427
-2026-06-26 16:17:29,729 INFO [model]     blue_glicko_str_acc                                0.0374
-2026-06-26 16:17:29,729 INFO [model]     diff_glicko_sub                                    0.0365
-2026-06-26 16:17:29,729 INFO [model]     blue_glicko_kod                                    0.0360
-2026-06-26 16:17:29,729 INFO [model]     red_glicko_str_def                                 0.0355
-2026-06-26 16:17:29,729 INFO [model]     red_glicko_str_acc                                 0.0349
-2026-06-26 16:17:29,729 INFO [model]     blue_glicko_clinch                                 0.0340
-2026-06-26 16:17:29,729 INFO [model]     red_glicko_kod                                     0.0339
-2026-06-26 16:17:29,729 INFO [model]     blue_glicko_str_def                                0.0339
-2026-06-26 16:17:29,729 INFO [model]     odds_red_prob                                      0.0335
-2026-06-26 16:17:29,729 INFO [model]     odds_blue_american                                 0.0324
-2026-06-26 16:17:29,729 INFO [model]     red_glicko_tdd                                     0.0322
-2026-06-26 16:17:29,729 INFO [model]     odds_red_american                                  0.0321
-2026-06-26 16:17:29,729 INFO [model]     red_glicko_clinch                                  0.0318
-2026-06-26 16:17:29,729 INFO [model]     blue_glicko_tdd                                    0.0314
-2026-06-26 16:17:29,729 INFO [model]   Selected 40 features (39 MI + 7 odds, from 239)
-2026-06-26 16:17:29,729 INFO [model]   Matchup matrix: 12626 fights
-2026-06-26 16:17:29,729 INFO [model]   Red win rate: 0.500
-2026-06-26 16:17:29,730 INFO [model]   Date range: 2015-01-03 to 2026-07-25
-2026-06-26 16:17:29,737 INFO [model] ============================================================
-2026-06-26 16:17:29,737 INFO [model] PHASE 1: Gradient Boosting (full)
-2026-06-26 16:17:29,737 INFO [model] ============================================================
-2026-06-26 16:17:29,755 INFO [model]   Train: 10100 (2015-01-03 to 2024-06-01)
-2026-06-26 16:17:29,756 INFO [model]   Test:  1262 original (2024-06-08 to 2026-07-25)
-2026-06-26 16:17:29,756 INFO [model]   Train red win rate: 0.500 | Test: 0.519
-2026-06-26 16:17:30,394 INFO [model] 
+2026-06-27 03:04:45,471 INFO [model] ============================================================
+2026-06-27 03:04:45,471 INFO [model] UFC Fight Winner Prediction Pipeline v6
+2026-06-27 03:04:45,471 INFO [model] ============================================================
+2026-06-27 03:04:45,471 INFO [model] Loading data from database...
+2026-06-27 03:04:45,594 INFO [model]   Loaded 4500 fighters
+2026-06-27 03:04:46,876 INFO [model]   Loaded 22148 fight-stat rows (11074 unique fights)
+2026-06-27 03:04:46,876 INFO [model]   Loading per-round stats...
+2026-06-27 03:04:48,660 INFO [model]   Loaded 53080 per-round stat rows
+2026-06-27 03:04:48,764 INFO [model] Building features...
+2026-06-27 03:04:48,940 INFO [model]   Computing defensive stats...
+2026-06-27 03:04:49,448 INFO [model]   Computing Elo ratings...
+2026-06-27 03:04:49,902 INFO [model]   Computing resume scores...
+2026-06-27 03:04:50,064 INFO [model]   Loading Glicko rating snapshots from DB...
+2026-06-27 03:04:50,358 INFO [model]   Loaded 21032 Glicko snapshots
+2026-06-27 03:04:52,104 INFO [model]   Added 15 Glicko features
+2026-06-27 03:04:52,104 INFO [model]   Computing Elo-adjusted stats...
+2026-06-27 03:04:52,105 INFO [model]   Computing rolling career averages...
+2026-06-27 03:05:18,205 INFO [model]   Computing streaks and career stats...
+2026-06-27 03:05:19,732 INFO [model]   Computing composite features...
+2026-06-27 03:05:19,737 INFO [model]   Computing round-by-round profiles...
+2026-06-27 03:05:29,427 INFO [model]   Computing fighter style clusters (k=6)...
+2026-06-27 03:05:29,617 INFO [model]     Style 0 (425 fighters): SigStr/5=10.7 TD/5=0.2 Sub/5=0.2 Ctrl/5=23.6 GndStr/5=0.8 top=ctrl_per5
+2026-06-27 03:05:29,617 INFO [model]     Style 1 (919 fighters): SigStr/5=7.4 TD/5=0.1 Sub/5=0.1 Ctrl/5=17.2 GndStr/5=0.8 top=ctrl_per5
+2026-06-27 03:05:29,617 INFO [model]     Style 2 (147 fighters): SigStr/5=36.4 TD/5=0.7 Sub/5=0.4 Ctrl/5=55.8 GndStr/5=14.3 top=ctrl_per5
+2026-06-27 03:05:29,617 INFO [model]     Style 3 (1197 fighters): SigStr/5=23.6 TD/5=0.3 Sub/5=0.2 Ctrl/5=33.2 GndStr/5=2.3 top=ctrl_per5
+2026-06-27 03:05:29,618 INFO [model]     Style 4 (1053 fighters): SigStr/5=13.1 TD/5=1.2 Sub/5=0.3 Ctrl/5=90.6 GndStr/5=3.7 top=ctrl_per5
+2026-06-27 03:05:29,618 INFO [model]     Style 5 (69 fighters): SigStr/5=6.4 TD/5=1.2 Sub/5=3.9 Ctrl/5=44.0 GndStr/5=1.6 top=ctrl_per5
+2026-06-27 03:05:30,019 INFO [model]   Style matchup matrix computed (6x6)
+2026-06-27 03:05:30,418 INFO [model]   Feature matrix shape: (22148, 286)
+2026-06-27 03:05:30,453 INFO [model] Building matchup feature matrix...
+2026-06-27 03:05:30,561 INFO [model]   Loading odds from database...
+2026-06-27 03:05:31,528 INFO [model]   Odds matched: 2781/11074 fights (25.1%)
+2026-06-27 03:05:31,548 INFO [model]   Filtered to modern era (2015+): 6313 fights (dropped 4761 pre-2015)
+2026-06-27 03:05:31,548 INFO [model]   Red win rate (modern): 0.552
+2026-06-27 03:05:31,548 INFO [model]   Applying corner-swap augmentation...
+2026-06-27 03:05:31,596 INFO [model]   After augmentation: 12626 rows (6313 original + 6313 mirrored)
+2026-06-27 03:05:31,596 INFO [model]   Running feature selection (mutual information)...
+2026-06-27 03:05:38,076 INFO [model]   Top 30 features by mutual information:
+2026-06-27 03:05:38,077 INFO [model]     diff_glicko_str_def                                0.0963
+2026-06-27 03:05:38,077 INFO [model]     diff_glicko_kod                                    0.0958
+2026-06-27 03:05:38,077 INFO [model]     diff_glicko_str_acc                                0.0915
+2026-06-27 03:05:38,077 INFO [model]     diff_glicko_str_vol                                0.0879
+2026-06-27 03:05:38,077 INFO [model]     diff_glicko_dist                                   0.0874
+2026-06-27 03:05:38,077 INFO [model]     diff_glicko_clinch                                 0.0858
+2026-06-27 03:05:38,077 INFO [model]     diff_glicko_gnd                                    0.0790
+2026-06-27 03:05:38,077 INFO [model]     diff_glicko_pts                                    0.0776
+2026-06-27 03:05:38,077 INFO [model]     diff_glicko_ctrl                                   0.0742
+2026-06-27 03:05:38,077 INFO [model]     diff_glicko_td                                     0.0742
+2026-06-27 03:05:38,077 INFO [model]     diff_glicko_subd                                   0.0732
+2026-06-27 03:05:38,077 INFO [model]     diff_glicko_tdd                                    0.0705
+2026-06-27 03:05:38,077 INFO [model]     diff_glicko_durability                             0.0556
+2026-06-27 03:05:38,077 INFO [model]     elo_vs_odds                                        0.0440
+2026-06-27 03:05:38,077 INFO [model]     odds_blue_prob                                     0.0432
+2026-06-27 03:05:38,077 INFO [model]     odds_diff                                          0.0427
+2026-06-27 03:05:38,077 INFO [model]     blue_glicko_str_acc                                0.0374
+2026-06-27 03:05:38,077 INFO [model]     diff_glicko_sub                                    0.0365
+2026-06-27 03:05:38,077 INFO [model]     blue_glicko_kod                                    0.0360
+2026-06-27 03:05:38,077 INFO [model]     red_glicko_str_def                                 0.0355
+2026-06-27 03:05:38,077 INFO [model]     red_glicko_str_acc                                 0.0349
+2026-06-27 03:05:38,077 INFO [model]     blue_glicko_clinch                                 0.0340
+2026-06-27 03:05:38,077 INFO [model]     red_glicko_kod                                     0.0339
+2026-06-27 03:05:38,077 INFO [model]     blue_glicko_str_def                                0.0339
+2026-06-27 03:05:38,077 INFO [model]     odds_red_prob                                      0.0335
+2026-06-27 03:05:38,077 INFO [model]     odds_blue_american                                 0.0324
+2026-06-27 03:05:38,077 INFO [model]     red_glicko_tdd                                     0.0322
+2026-06-27 03:05:38,077 INFO [model]     odds_red_american                                  0.0321
+2026-06-27 03:05:38,077 INFO [model]     red_glicko_clinch                                  0.0318
+2026-06-27 03:05:38,077 INFO [model]     blue_glicko_tdd                                    0.0314
+2026-06-27 03:05:38,077 INFO [model]   Selected 40 features (39 MI + 7 odds, from 239)
+2026-06-27 03:05:38,077 INFO [model]   Matchup matrix: 12626 fights
+2026-06-27 03:05:38,077 INFO [model]   Red win rate: 0.500
+2026-06-27 03:05:38,079 INFO [model]   Date range: 2015-01-03 to 2026-07-25
+2026-06-27 03:05:38,089 INFO [model] ============================================================
+2026-06-27 03:05:38,089 INFO [model] PHASE 1: Gradient Boosting (full)
+2026-06-27 03:05:38,089 INFO [model] ============================================================
+2026-06-27 03:05:38,113 INFO [model]   Train: 10100 (2015-01-03 to 2024-06-01)
+2026-06-27 03:05:38,113 INFO [model]   Test:  1262 original (2024-06-08 to 2026-07-25)
+2026-06-27 03:05:38,113 INFO [model]   Train red win rate: 0.500 | Test: 0.519
+2026-06-27 03:05:38,944 INFO [model] 
   --- Gradient Boosting v3 Results ---
-2026-06-26 16:17:30,394 INFO [model]   Baseline (majority): 0.5190
-2026-06-26 16:17:30,394 INFO [model]   Accuracy:  0.7100 (+0.1910 vs baseline)
-2026-06-26 16:17:30,394 INFO [model]   AUC-ROC:   0.8079
-2026-06-26 16:17:30,394 INFO [model]   Log Loss:  0.5364
-2026-06-26 16:17:30,397 INFO [model] 
+2026-06-27 03:05:38,944 INFO [model]   Baseline (majority): 0.5190
+2026-06-27 03:05:38,944 INFO [model]   Accuracy:  0.7100 (+0.1910 vs baseline)
+2026-06-27 03:05:38,944 INFO [model]   AUC-ROC:   0.8079
+2026-06-27 03:05:38,944 INFO [model]   Log Loss:  0.5364
+2026-06-27 03:05:38,948 INFO [model] 
               precision    recall  f1-score   support
 
    Blue wins       0.72      0.65      0.68       607
@@ -92,43 +92,43 @@
    macro avg       0.71      0.71      0.71      1262
 weighted avg       0.71      0.71      0.71      1262
 
-2026-06-26 16:17:30,402 INFO [model]   Computing feature importances...
-2026-06-26 16:17:36,160 INFO [model]   Top 20 features by permutation importance:
-2026-06-26 16:17:36,160 INFO [model]     diff_glicko_str_def                                0.0124
-2026-06-26 16:17:36,160 INFO [model]     diff_glicko_kod                                    0.0053
-2026-06-26 16:17:36,160 INFO [model]     red_glicko_td                                      0.0053
-2026-06-26 16:17:36,160 INFO [model]     red_glicko_subd                                    0.0052
-2026-06-26 16:17:36,160 INFO [model]     diff_glicko_str_vol                                0.0052
-2026-06-26 16:17:36,160 INFO [model]     odds_diff                                          0.0048
-2026-06-26 16:17:36,160 INFO [model]     red_glicko_str_acc                                 0.0033
-2026-06-26 16:17:36,160 INFO [model]     red_glicko_dist                                    0.0027
-2026-06-26 16:17:36,160 INFO [model]     diff_glicko_ctrl                                   0.0026
-2026-06-26 16:17:36,160 INFO [model]     blue_glicko_subd                                   0.0025
-2026-06-26 16:17:36,160 INFO [model]     elo_vs_odds                                        0.0025
-2026-06-26 16:17:36,160 INFO [model]     red_glicko_str_def                                 0.0017
-2026-06-26 16:17:36,160 INFO [model]     red_glicko_str_vol                                 0.0017
-2026-06-26 16:17:36,160 INFO [model]     blue_glicko_ctrl                                   0.0015
-2026-06-26 16:17:36,160 INFO [model]     red_glicko_clinch                                  0.0015
-2026-06-26 16:17:36,160 INFO [model]     blue_glicko_clinch                                 0.0013
-2026-06-26 16:17:36,160 INFO [model]     diff_glicko_sub                                    0.0013
-2026-06-26 16:17:36,160 INFO [model]     red_glicko_tdd                                     0.0007
-2026-06-26 16:17:36,160 INFO [model]     diff_glicko_dist                                   0.0006
-2026-06-26 16:17:36,160 INFO [model]     blue_glicko_tdd                                    0.0006
-2026-06-26 16:17:36,169 INFO [model]   Saved to /Users/rafeburns/Downloads/ALocks/alocks-backend/models/UFC/h2h/gbt_v3.pkl
-2026-06-26 16:17:36,172 INFO [model] ============================================================
-2026-06-26 16:17:36,172 INFO [model] PHASE 1: Gradient Boosting (odds-only)
-2026-06-26 16:17:36,172 INFO [model] ============================================================
-2026-06-26 16:17:36,201 INFO [model]   Filtered to 5562 fights with odds (from 12626)
-2026-06-26 16:17:36,206 INFO [model]   Train: 4449 (2020-06-13 to 2025-05-17)
-2026-06-26 16:17:36,206 INFO [model]   Test:  557 original (2025-05-17 to 2026-07-11)
-2026-06-26 16:17:36,206 INFO [model]   Train red win rate: 0.500 | Test: 0.515
-2026-06-26 16:17:36,541 INFO [model] 
+2026-06-27 03:05:38,952 INFO [model]   Computing feature importances...
+2026-06-27 03:05:45,371 INFO [model]   Top 20 features by permutation importance:
+2026-06-27 03:05:45,371 INFO [model]     diff_glicko_str_def                                0.0124
+2026-06-27 03:05:45,371 INFO [model]     diff_glicko_kod                                    0.0053
+2026-06-27 03:05:45,371 INFO [model]     red_glicko_td                                      0.0053
+2026-06-27 03:05:45,371 INFO [model]     red_glicko_subd                                    0.0052
+2026-06-27 03:05:45,372 INFO [model]     diff_glicko_str_vol                                0.0052
+2026-06-27 03:05:45,372 INFO [model]     odds_diff                                          0.0048
+2026-06-27 03:05:45,372 INFO [model]     red_glicko_str_acc                                 0.0033
+2026-06-27 03:05:45,372 INFO [model]     red_glicko_dist                                    0.0027
+2026-06-27 03:05:45,372 INFO [model]     diff_glicko_ctrl                                   0.0026
+2026-06-27 03:05:45,372 INFO [model]     blue_glicko_subd                                   0.0025
+2026-06-27 03:05:45,372 INFO [model]     elo_vs_odds                                        0.0025
+2026-06-27 03:05:45,372 INFO [model]     red_glicko_str_def                                 0.0017
+2026-06-27 03:05:45,372 INFO [model]     red_glicko_str_vol                                 0.0017
+2026-06-27 03:05:45,372 INFO [model]     blue_glicko_ctrl                                   0.0015
+2026-06-27 03:05:45,372 INFO [model]     red_glicko_clinch                                  0.0015
+2026-06-27 03:05:45,372 INFO [model]     blue_glicko_clinch                                 0.0013
+2026-06-27 03:05:45,372 INFO [model]     diff_glicko_sub                                    0.0013
+2026-06-27 03:05:45,372 INFO [model]     red_glicko_tdd                                     0.0007
+2026-06-27 03:05:45,372 INFO [model]     diff_glicko_dist                                   0.0006
+2026-06-27 03:05:45,372 INFO [model]     blue_glicko_tdd                                    0.0006
+2026-06-27 03:05:45,377 INFO [model]   Saved to /Users/rafeburns/Downloads/ALocks/alocks-backend/models/UFC/h2h/gbt_v3.pkl
+2026-06-27 03:05:45,381 INFO [model] ============================================================
+2026-06-27 03:05:45,381 INFO [model] PHASE 1: Gradient Boosting (odds-only)
+2026-06-27 03:05:45,381 INFO [model] ============================================================
+2026-06-27 03:05:45,429 INFO [model]   Filtered to 5562 fights with odds (from 12626)
+2026-06-27 03:05:45,698 INFO [model]   Train: 4449 (2020-06-13 to 2025-05-17)
+2026-06-27 03:05:45,700 INFO [model]   Test:  557 original (2025-05-17 to 2026-07-11)
+2026-06-27 03:05:45,700 INFO [model]   Train red win rate: 0.500 | Test: 0.515
+2026-06-27 03:05:46,431 INFO [model] 
   --- Gradient Boosting v3 Results ---
-2026-06-26 16:17:36,541 INFO [model]   Baseline (majority): 0.5153
-2026-06-26 16:17:36,541 INFO [model]   Accuracy:  0.7289 (+0.2136 vs baseline)
-2026-06-26 16:17:36,541 INFO [model]   AUC-ROC:   0.8164
-2026-06-26 16:17:36,541 INFO [model]   Log Loss:  0.5252
-2026-06-26 16:17:36,543 INFO [model] 
+2026-06-27 03:05:46,431 INFO [model]   Baseline (majority): 0.5153
+2026-06-27 03:05:46,431 INFO [model]   Accuracy:  0.7289 (+0.2136 vs baseline)
+2026-06-27 03:05:46,431 INFO [model]   AUC-ROC:   0.8164
+2026-06-27 03:05:46,431 INFO [model]   Log Loss:  0.5252
+2026-06-27 03:05:46,436 INFO [model] 
               precision    recall  f1-score   support
 
    Blue wins       0.73      0.70      0.71       270
@@ -138,277 +138,508 @@ weighted avg       0.71      0.71      0.71      1262
    macro avg       0.73      0.73      0.73       557
 weighted avg       0.73      0.73      0.73       557
 
-2026-06-26 16:17:36,543 INFO [model]   Computing feature importances...
-2026-06-26 16:17:39,547 INFO [model]   Top 20 features by permutation importance:
-2026-06-26 16:17:39,547 INFO [model]     diff_glicko_dist                                   0.0074
-2026-06-26 16:17:39,547 INFO [model]     red_glicko_str_vol                                 0.0018
-2026-06-26 16:17:39,547 INFO [model]     red_glicko_subd                                    0.0011
-2026-06-26 16:17:39,547 INFO [model]     odds_fav_is_red                                    0.0000
-2026-06-26 16:17:39,547 INFO [model]     blue_glicko_kod                                    -0.0002
-2026-06-26 16:17:39,547 INFO [model]     red_glicko_dist                                    -0.0002
-2026-06-26 16:17:39,547 INFO [model]     diff_glicko_str_acc                                -0.0004
-2026-06-26 16:17:39,548 INFO [model]     diff_glicko_ctrl                                   -0.0005
-2026-06-26 16:17:39,548 INFO [model]     diff_glicko_sub                                    -0.0009
-2026-06-26 16:17:39,548 INFO [model]     blue_glicko_str_def                                -0.0011
-2026-06-26 16:17:39,548 INFO [model]     blue_glicko_subd                                   -0.0011
-2026-06-26 16:17:39,548 INFO [model]     blue_glicko_str_acc                                -0.0013
-2026-06-26 16:17:39,548 INFO [model]     red_glicko_kod                                     -0.0013
-2026-06-26 16:17:39,548 INFO [model]     diff_glicko_str_def                                -0.0016
-2026-06-26 16:17:39,548 INFO [model]     diff_glicko_subd                                   -0.0016
-2026-06-26 16:17:39,548 INFO [model]     diff_glicko_kod                                    -0.0018
-2026-06-26 16:17:39,548 INFO [model]     diff_glicko_str_vol                                -0.0020
-2026-06-26 16:17:39,548 INFO [model]     blue_glicko_dist                                   -0.0020
-2026-06-26 16:17:39,548 INFO [model]     blue_glicko_str_vol                                -0.0025
-2026-06-26 16:17:39,548 INFO [model]     diff_glicko_tdd                                    -0.0027
-2026-06-26 16:17:39,549 INFO [model]   Saved to /Users/rafeburns/Downloads/ALocks/alocks-backend/models/UFC/h2h/gbt_v3.pkl
-2026-06-26 16:17:39,550 INFO [model] ============================================================
-2026-06-26 16:17:39,550 INFO [model] GBT + SIAMESE ENSEMBLE v6
-2026-06-26 16:17:39,550 INFO [model] ============================================================
-2026-06-26 16:17:39,550 INFO [model] 
+2026-06-27 03:05:46,437 INFO [model]   Computing feature importances...
+2026-06-27 03:05:52,705 INFO [model]   Top 20 features by permutation importance:
+2026-06-27 03:05:52,706 INFO [model]     diff_glicko_dist                                   0.0074
+2026-06-27 03:05:52,706 INFO [model]     red_glicko_str_vol                                 0.0018
+2026-06-27 03:05:52,706 INFO [model]     red_glicko_subd                                    0.0011
+2026-06-27 03:05:52,706 INFO [model]     odds_fav_is_red                                    0.0000
+2026-06-27 03:05:52,706 INFO [model]     blue_glicko_kod                                    -0.0002
+2026-06-27 03:05:52,706 INFO [model]     red_glicko_dist                                    -0.0002
+2026-06-27 03:05:52,706 INFO [model]     diff_glicko_str_acc                                -0.0004
+2026-06-27 03:05:52,706 INFO [model]     diff_glicko_ctrl                                   -0.0005
+2026-06-27 03:05:52,706 INFO [model]     diff_glicko_sub                                    -0.0009
+2026-06-27 03:05:52,706 INFO [model]     blue_glicko_str_def                                -0.0011
+2026-06-27 03:05:52,706 INFO [model]     blue_glicko_subd                                   -0.0011
+2026-06-27 03:05:52,706 INFO [model]     blue_glicko_str_acc                                -0.0013
+2026-06-27 03:05:52,707 INFO [model]     red_glicko_kod                                     -0.0013
+2026-06-27 03:05:52,707 INFO [model]     diff_glicko_str_def                                -0.0016
+2026-06-27 03:05:52,707 INFO [model]     diff_glicko_subd                                   -0.0016
+2026-06-27 03:05:52,707 INFO [model]     diff_glicko_kod                                    -0.0018
+2026-06-27 03:05:52,707 INFO [model]     diff_glicko_str_vol                                -0.0020
+2026-06-27 03:05:52,707 INFO [model]     blue_glicko_dist                                   -0.0020
+2026-06-27 03:05:52,707 INFO [model]     blue_glicko_str_vol                                -0.0025
+2026-06-27 03:05:52,707 INFO [model]     diff_glicko_tdd                                    -0.0027
+2026-06-27 03:05:52,711 INFO [model]   Saved to /Users/rafeburns/Downloads/ALocks/alocks-backend/models/UFC/h2h/gbt_v3.pkl
+2026-06-27 03:05:52,714 INFO [model] ============================================================
+2026-06-27 03:05:52,714 INFO [model] PHASE 4: Siamese Neural Network
+2026-06-27 03:05:52,714 INFO [model] ============================================================
+2026-06-27 03:05:52,753 INFO [model]   Using 61 features per fighter
+2026-06-27 03:05:53,192 INFO [model]   Data: 6313 fights, 61 features per fighter
+2026-06-27 03:05:53,216 INFO [model]   Train: 5050 | Test: 1263
+2026-06-27 03:05:53,313 INFO [model]   Device: mps
+2026-06-27 03:05:55,501 INFO [model]   Epoch   0: train=0.6574 test=0.5778 lr=0.001000
+2026-06-27 03:05:59,425 INFO [model]   Epoch  10: train=0.5830 test=0.5594 lr=0.001000
+2026-06-27 03:06:02,985 INFO [model]   Epoch  20: train=0.5492 test=0.5812 lr=0.000500
+2026-06-27 03:06:06,524 INFO [model]   Epoch  30: train=0.5178 test=0.5972 lr=0.000250
+2026-06-27 03:06:06,980 INFO [model]   Early stopping at epoch 31
+2026-06-27 03:06:06,996 INFO [model] 
+  --- Siamese v5 Results ---
+2026-06-27 03:06:06,996 INFO [model]   Accuracy: 0.6683 | AUC: 0.7555 | LogLoss: 0.5915
+2026-06-27 03:06:07,000 INFO [model] 
+              precision    recall  f1-score   support
+
+        Blue       0.66      0.62      0.64       607
+         Red       0.67      0.71      0.69       656
+
+    accuracy                           0.67      1263
+   macro avg       0.67      0.67      0.67      1263
+weighted avg       0.67      0.67      0.67      1263
+
+2026-06-27 03:06:07,023 INFO [model] ============================================================
+2026-06-27 03:06:07,023 INFO [model] GBT + SIAMESE ENSEMBLE v6
+2026-06-27 03:06:07,023 INFO [model] ============================================================
+2026-06-27 03:06:07,023 INFO [model] 
   Model                Acc      AUC  LogLoss
-2026-06-26 16:17:39,551 INFO [model]   ------------------------------------------
-2026-06-26 16:17:39,551 INFO [model]   GBT               0.7100   0.8079   0.5364
-2026-06-26 16:17:39,551 INFO [model] 
-  No viable Siamese model — using GBT-only
-2026-06-26 16:17:39,551 INFO [model] ============================================================
-2026-06-26 16:17:39,551 INFO [model] PROBABILITY CALIBRATION
-2026-06-26 16:17:39,551 INFO [model] ============================================================
-2026-06-26 16:17:39,569 INFO [model]   Using Phase 1 GBT (trained on 80% data)
-2026-06-26 16:17:39,569 INFO [model]   Calibration: 631 | Eval: 631
-2026-06-26 16:17:39,569 INFO [model]   Eval period: 2025-06-28 to 2026-07-25
-2026-06-26 16:17:39,569 INFO [model]   Features: 40
-2026-06-26 16:17:39,586 INFO [model] 
+2026-06-27 03:06:07,023 INFO [model]   ------------------------------------------
+2026-06-27 03:06:07,024 INFO [model]   GBT               0.7100   0.8079   0.5364
+2026-06-27 03:06:07,024 INFO [model]   Siamese           0.6683   0.7555   0.5915
+2026-06-27 03:06:07,024 INFO [model] 
+  Aligned to test size: 1262
+2026-06-27 03:06:07,024 INFO [model]   Meta-learner: train=757 test=505
+2026-06-27 03:06:07,091 INFO [model] 
+  STACKED           0.7069   0.7728   0.5812
+2026-06-27 03:06:07,091 INFO [model]   Brier score: 0.1987
+2026-06-27 03:06:07,091 INFO [model] 
+  Meta-learner coefficients:
+2026-06-27 03:06:07,091 INFO [model]     gbt_prob                  +3.1724
+2026-06-27 03:06:07,091 INFO [model]     siamese_prob              +1.2018
+2026-06-27 03:06:07,091 INFO [model]     gbt_x_siam                +1.5042
+2026-06-27 03:06:07,091 INFO [model]     gbt_minus_siam            +1.9706
+2026-06-27 03:06:07,091 INFO [model]     abs_disagree              +0.8724
+2026-06-27 03:06:07,091 INFO [model]     intercept                 -2.7741
+2026-06-27 03:06:07,095 INFO [model] 
+              precision    recall  f1-score   support
+
+        Blue       0.75      0.67      0.71       269
+         Red       0.67      0.75      0.70       236
+
+    accuracy                           0.71       505
+   macro avg       0.71      0.71      0.71       505
+weighted avg       0.71      0.71      0.71       505
+
+2026-06-27 03:06:07,096 INFO [model]   Ensemble AUC: 0.7728 vs GBT-only AUC: 0.7707
+2026-06-27 03:06:07,096 INFO [model]   Saved meta-model to /Users/rafeburns/Downloads/ALocks/alocks-backend/models/UFC/h2h/meta_model_v5.pkl
+2026-06-27 03:06:07,096 INFO [model] 
+  Best individual model by AUC: GBT (0.8079)
+2026-06-27 03:06:07,096 INFO [model] ============================================================
+2026-06-27 03:06:07,096 INFO [model] PROBABILITY CALIBRATION
+2026-06-27 03:06:07,096 INFO [model] ============================================================
+2026-06-27 03:06:07,139 INFO [model]   Using Phase 1 GBT (trained on 80% data)
+2026-06-27 03:06:07,139 INFO [model]   Platt/Isotonic calibration: 631 | Eval: 631
+2026-06-27 03:06:07,140 INFO [model]   Eval period: 2025-06-28 to 2026-07-25
+2026-06-27 03:06:07,140 INFO [model]   Features: 40
+2026-06-27 03:06:07,175 INFO [model] 
+  Generating Venn-Abers calibration data via 5-fold CV on training set...
+2026-06-27 03:06:07,610 INFO [model]     Fold 1: train=4040, val=1011
+2026-06-27 03:06:07,917 INFO [model]     Fold 2: train=4041, val=1010
+2026-06-27 03:06:08,411 INFO [model]     Fold 3: train=4041, val=1010
+2026-06-27 03:06:08,775 INFO [model]     Fold 4: train=4041, val=1010
+2026-06-27 03:06:09,011 INFO [model]     Fold 5: train=4041, val=1010
+2026-06-27 03:06:09,011 INFO [model]   Venn-Abers calibration samples: 5051
+2026-06-27 03:06:09,028 INFO [model]   VA interval widths — mean: 0.0102, median: 0.0032, p90: 0.0193
+2026-06-27 03:06:09,030 INFO [model]   Isotonic (k-fold) fitted on 5051 out-of-fold samples
+2026-06-27 03:06:09,030 INFO [model] 
   Method                        Acc     AUC  LogLoss   Brier
-2026-06-26 16:17:39,586 INFO [model]   ----------------------------------------------------------
-2026-06-26 16:17:39,588 INFO [model]   Raw (uncalibrated)         0.6815  0.7945   0.5542  0.1880
-2026-06-26 16:17:39,590 INFO [model]   Platt scaling              0.6783  0.7945   0.5602  0.1910
-2026-06-26 16:17:39,591 INFO [model]   Isotonic regression        0.7496  0.7921   0.5620  0.1877
-2026-06-26 16:17:39,591 INFO [model] 
+2026-06-27 03:06:09,030 INFO [model]   ----------------------------------------------------------
+2026-06-27 03:06:09,032 INFO [model]   Raw (uncalibrated)         0.6815  0.7945   0.5542  0.1880
+2026-06-27 03:06:09,033 INFO [model]   Platt scaling              0.6783  0.7945   0.5602  0.1910
+2026-06-27 03:06:09,035 INFO [model]   Isotonic regression        0.7496  0.7921   0.5620  0.1877
+2026-06-27 03:06:09,037 INFO [model]   Isotonic (k-fold)          0.6846  0.7939   0.5577  0.1884
+2026-06-27 03:06:09,039 INFO [model]   Venn-Abers (k-fold)        0.6846  0.7937   0.5566  0.1884
+2026-06-27 03:06:09,039 INFO [model] 
   Best calibration: Isotonic regression (Brier=0.1877)
-2026-06-26 16:17:39,591 INFO [model] 
+2026-06-27 03:06:09,039 INFO [model] 
   Reliability Diagram (10 bins):
-2026-06-26 16:17:39,591 INFO [model]            Bin  Predicted     Actual   Count      Gap
-2026-06-26 16:17:39,591 INFO [model]   --------------------------------------------------
-2026-06-26 16:17:39,591 INFO [model] 
+2026-06-27 03:06:09,039 INFO [model]            Bin  Predicted     Actual   Count      Gap
+2026-06-27 03:06:09,039 INFO [model]   --------------------------------------------------
+2026-06-27 03:06:09,039 INFO [model] 
   Raw (uncalibrated):
-2026-06-26 16:17:39,591 INFO [model]        0.071 →    0.071  gap=0.000 
-2026-06-26 16:17:39,591 INFO [model]        0.156 →    0.105  gap=0.051 #####
-2026-06-26 16:17:39,591 INFO [model]        0.249 →    0.172  gap=0.077 #######
-2026-06-26 16:17:39,591 INFO [model]        0.348 →    0.403  gap=0.055 #####
-2026-06-26 16:17:39,591 INFO [model]        0.457 →    0.321  gap=0.136 #############
-2026-06-26 16:17:39,591 INFO [model]        0.540 →    0.291  gap=0.248 ########################
-2026-06-26 16:17:39,591 INFO [model]        0.647 →    0.611  gap=0.036 ###
-2026-06-26 16:17:39,591 INFO [model]        0.755 →    0.787  gap=0.033 ###
-2026-06-26 16:17:39,592 INFO [model]        0.853 →    0.889  gap=0.036 ###
-2026-06-26 16:17:39,592 INFO [model]        0.919 →    0.952  gap=0.033 ###
-2026-06-26 16:17:39,592 INFO [model] 
+2026-06-27 03:06:09,039 INFO [model]        0.071 →    0.071  gap=0.000 
+2026-06-27 03:06:09,039 INFO [model]        0.156 →    0.105  gap=0.051 #####
+2026-06-27 03:06:09,039 INFO [model]        0.249 →    0.172  gap=0.077 #######
+2026-06-27 03:06:09,039 INFO [model]        0.348 →    0.403  gap=0.055 #####
+2026-06-27 03:06:09,039 INFO [model]        0.457 →    0.321  gap=0.136 #############
+2026-06-27 03:06:09,039 INFO [model]        0.540 →    0.291  gap=0.248 ########################
+2026-06-27 03:06:09,039 INFO [model]        0.647 →    0.611  gap=0.036 ###
+2026-06-27 03:06:09,039 INFO [model]        0.755 →    0.787  gap=0.033 ###
+2026-06-27 03:06:09,039 INFO [model]        0.853 →    0.889  gap=0.036 ###
+2026-06-27 03:06:09,039 INFO [model]        0.919 →    0.952  gap=0.033 ###
+2026-06-27 03:06:09,039 INFO [model] 
   Platt scaling:
-2026-06-26 16:17:39,592 INFO [model]        0.083 →    0.080  gap=0.003 
-2026-06-26 16:17:39,592 INFO [model]        0.155 →    0.132  gap=0.023 ##
-2026-06-26 16:17:39,592 INFO [model]        0.249 →    0.365  gap=0.117 ###########
-2026-06-26 16:17:39,592 INFO [model]        0.337 →    0.319  gap=0.018 #
-2026-06-26 16:17:39,592 INFO [model]        0.448 →    0.333  gap=0.115 ###########
-2026-06-26 16:17:39,592 INFO [model]        0.544 →    0.235  gap=0.308 ##############################
-2026-06-26 16:17:39,592 INFO [model]        0.653 →    0.554  gap=0.100 #########
-2026-06-26 16:17:39,592 INFO [model]        0.750 →    0.655  gap=0.096 #########
-2026-06-26 16:17:39,592 INFO [model]        0.854 →    0.826  gap=0.028 ##
-2026-06-26 16:17:39,592 INFO [model]        0.917 →    0.926  gap=0.009 
-2026-06-26 16:17:39,592 INFO [model] 
+2026-06-27 03:06:09,040 INFO [model]        0.083 →    0.080  gap=0.003 
+2026-06-27 03:06:09,040 INFO [model]        0.155 →    0.132  gap=0.023 ##
+2026-06-27 03:06:09,040 INFO [model]        0.249 →    0.365  gap=0.117 ###########
+2026-06-27 03:06:09,040 INFO [model]        0.337 →    0.319  gap=0.018 #
+2026-06-27 03:06:09,040 INFO [model]        0.448 →    0.333  gap=0.115 ###########
+2026-06-27 03:06:09,040 INFO [model]        0.544 →    0.235  gap=0.308 ##############################
+2026-06-27 03:06:09,040 INFO [model]        0.653 →    0.554  gap=0.100 #########
+2026-06-27 03:06:09,040 INFO [model]        0.750 →    0.655  gap=0.096 #########
+2026-06-27 03:06:09,040 INFO [model]        0.854 →    0.826  gap=0.028 ##
+2026-06-27 03:06:09,040 INFO [model]        0.917 →    0.926  gap=0.009 
+2026-06-27 03:06:09,040 INFO [model] 
   Isotonic regression:
-2026-06-26 16:17:39,592 INFO [model]        0.060 →    0.095  gap=0.035 ###
-2026-06-26 16:17:39,592 INFO [model]        0.182 →    0.250  gap=0.068 ######
-2026-06-26 16:17:39,592 INFO [model]        0.230 →    0.152  gap=0.079 #######
-2026-06-26 16:17:39,592 INFO [model]        0.318 →    0.398  gap=0.080 ########
-2026-06-26 16:17:39,592 INFO [model]        0.471 →    0.250  gap=0.221 ######################
-2026-06-26 16:17:39,592 INFO [model]        0.659 →    0.587  gap=0.072 #######
-2026-06-26 16:17:39,592 INFO [model]        0.748 →    0.722  gap=0.026 ##
-2026-06-26 16:17:39,592 INFO [model]        0.865 →    0.805  gap=0.060 ######
-2026-06-26 16:17:39,592 INFO [model]        0.955 →    0.892  gap=0.063 ######
-2026-06-26 16:17:39,594 INFO [model] 
+2026-06-27 03:06:09,040 INFO [model]        0.060 →    0.095  gap=0.035 ###
+2026-06-27 03:06:09,040 INFO [model]        0.182 →    0.250  gap=0.068 ######
+2026-06-27 03:06:09,040 INFO [model]        0.230 →    0.152  gap=0.079 #######
+2026-06-27 03:06:09,040 INFO [model]        0.318 →    0.398  gap=0.080 ########
+2026-06-27 03:06:09,040 INFO [model]        0.471 →    0.250  gap=0.221 ######################
+2026-06-27 03:06:09,040 INFO [model]        0.659 →    0.587  gap=0.072 #######
+2026-06-27 03:06:09,040 INFO [model]        0.748 →    0.722  gap=0.026 ##
+2026-06-27 03:06:09,040 INFO [model]        0.865 →    0.805  gap=0.060 ######
+2026-06-27 03:06:09,040 INFO [model]        0.955 →    0.892  gap=0.063 ######
+2026-06-27 03:06:09,040 INFO [model] 
+  Isotonic (k-fold):
+2026-06-27 03:06:09,041 INFO [model]        0.051 →    0.074  gap=0.023 ##
+2026-06-27 03:06:09,041 INFO [model]        0.144 →    0.118  gap=0.027 ##
+2026-06-27 03:06:09,041 INFO [model]        0.259 →    0.198  gap=0.061 ######
+2026-06-27 03:06:09,041 INFO [model]        0.306 →    0.400  gap=0.094 #########
+2026-06-27 03:06:09,041 INFO [model]        0.442 →    0.336  gap=0.106 ##########
+2026-06-27 03:06:09,041 INFO [model]        0.528 →    0.253  gap=0.276 ###########################
+2026-06-27 03:06:09,041 INFO [model]        0.663 →    0.618  gap=0.045 ####
+2026-06-27 03:06:09,041 INFO [model]        0.746 →    0.792  gap=0.046 ####
+2026-06-27 03:06:09,041 INFO [model]        0.828 →    0.881  gap=0.053 #####
+2026-06-27 03:06:09,041 INFO [model]        0.910 →    0.944  gap=0.034 ###
+2026-06-27 03:06:09,041 INFO [model] 
+  Venn-Abers (k-fold):
+2026-06-27 03:06:09,041 INFO [model]        0.098 →    0.071  gap=0.026 ##
+2026-06-27 03:06:09,041 INFO [model]        0.142 →    0.107  gap=0.035 ###
+2026-06-27 03:06:09,041 INFO [model]        0.262 →    0.183  gap=0.079 #######
+2026-06-27 03:06:09,041 INFO [model]        0.307 →    0.413  gap=0.106 ##########
+2026-06-27 03:06:09,041 INFO [model]        0.443 →    0.336  gap=0.107 ##########
+2026-06-27 03:06:09,041 INFO [model]        0.536 →    0.296  gap=0.240 ########################
+2026-06-27 03:06:09,041 INFO [model]        0.676 →    0.646  gap=0.031 ###
+2026-06-27 03:06:09,041 INFO [model]        0.761 →    0.800  gap=0.039 ###
+2026-06-27 03:06:09,041 INFO [model]        0.843 →    0.897  gap=0.054 #####
+2026-06-27 03:06:09,041 INFO [model]        0.907 →    1.000  gap=0.093 #########
+2026-06-27 03:06:09,044 INFO [model] 
   Saved calibrated model to /Users/rafeburns/Downloads/ALocks/alocks-backend/models/UFC/h2h/calibrated_model.pkl
-2026-06-26 16:17:39,607 INFO [model] ============================================================
-2026-06-26 16:17:39,607 INFO [model] BETTING SIMULATION (VIG-ADJUSTED)
-2026-06-26 16:17:39,607 INFO [model] ============================================================
-2026-06-26 16:17:39,610 INFO [model]   Test fights with odds: 1049
-2026-06-26 16:17:39,610 INFO [model]   Test period: 2024-06-08 to 2026-07-11
-2026-06-26 16:17:39,610 INFO [model]   Red win rate in test: 0.537
-2026-06-26 16:17:39,611 INFO [model] 
+2026-06-27 03:06:09,045 INFO [model] ============================================================
+2026-06-27 03:06:09,045 INFO [model] BETTING SIMULATION (VIG-ADJUSTED)
+2026-06-27 03:06:09,045 INFO [model] ============================================================
+2026-06-27 03:06:09,048 INFO [model]   Test fights with odds: 510
+2026-06-27 03:06:09,048 INFO [model]   Test period: 2025-06-28 to 2026-07-11
+2026-06-27 03:06:09,048 INFO [model]   Red win rate in test: 0.510
+2026-06-27 03:06:09,049 INFO [model] 
   Average vig: 0.000
-2026-06-26 16:17:39,611 INFO [model]   Market accuracy (fair): 0.6826
-2026-06-26 16:17:39,611 INFO [model] 
+2026-06-27 03:06:09,049 INFO [model]   Market accuracy (fair): 0.6706
+2026-06-27 03:06:09,049 INFO [model] 
 ────────────────────────────────────────────────────────────
-2026-06-26 16:17:39,611 INFO [model]   Raw (uncalibrated)
-2026-06-26 16:17:39,611 INFO [model] ────────────────────────────────────────────────────────────
-2026-06-26 16:17:39,611 INFO [model] 
+2026-06-27 03:06:09,049 INFO [model]   Raw (uncalibrated)
+2026-06-27 03:06:09,049 INFO [model] ────────────────────────────────────────────────────────────
+2026-06-27 03:06:09,049 INFO [model] 
   Strategy 1: Flat $100 bet on model pick (every fight)
-2026-06-26 16:17:39,612 INFO [model]     Bets: 1049 | Wins: 772 (73.6%)
-2026-06-26 16:17:39,612 INFO [model]     Profit: $17236.13 | Wagered: $104900 | ROI: +16.43%
-2026-06-26 16:17:39,733 INFO [model] 
+2026-06-27 03:06:09,050 INFO [model]     Bets: 510 | Wins: 370 (72.5%)
+2026-06-27 03:06:09,050 INFO [model]     Profit: $7703.26 | Wagered: $51000 | ROI: +15.10%
+2026-06-27 03:06:09,115 INFO [model] 
   Strategy 2: Value bets (edge > 3%, vig-adjusted, +EV only)
-2026-06-26 16:17:39,733 INFO [model]     Bets: 891/1049 | Wins: 589 (66.1%)
-2026-06-26 16:17:39,733 INFO [model]     Profit: $25907.45 | Wagered: $89100 | ROI: +29.08%
-2026-06-26 16:17:39,733 INFO [model]     Avg edge: 0.145
-2026-06-26 16:17:39,734 INFO [model]     Avg EV: 1.307
-2026-06-26 16:17:39,734 INFO [model]     Favorites: 477 bets, 396 wins (83.0%), P&L: $10643.45
-2026-06-26 16:17:39,734 INFO [model]     Underdogs: 414 bets, 193 wins (46.6%), P&L: $15264.00
-2026-06-26 16:17:39,835 INFO [model] 
+2026-06-27 03:06:09,115 INFO [model]     Bets: 443/510 | Wins: 291 (65.7%)
+2026-06-27 03:06:09,115 INFO [model]     Profit: $12837.94 | Wagered: $44300 | ROI: +28.98%
+2026-06-27 03:06:09,115 INFO [model]     Avg edge: 0.142
+2026-06-27 03:06:09,115 INFO [model]     Avg EV: 1.297
+2026-06-27 03:06:09,115 INFO [model]     Favorites: 224 bets, 186 wins (83.0%), P&L: $4634.94
+2026-06-27 03:06:09,115 INFO [model]     Underdogs: 219 bets, 105 wins (47.9%), P&L: $8203.00
+2026-06-27 03:06:09,176 INFO [model] 
   Strategy 2: Value bets (edge > 5%, vig-adjusted, +EV only)
-2026-06-26 16:17:39,835 INFO [model]     Bets: 802/1049 | Wins: 533 (66.5%)
-2026-06-26 16:17:39,835 INFO [model]     Profit: $23918.45 | Wagered: $80200 | ROI: +29.82%
-2026-06-26 16:17:39,835 INFO [model]     Avg edge: 0.156
-2026-06-26 16:17:39,835 INFO [model]     Avg EV: 1.334
-2026-06-26 16:17:39,835 INFO [model]     Favorites: 430 bets, 359 wins (83.5%), P&L: $10061.45
-2026-06-26 16:17:39,835 INFO [model]     Underdogs: 372 bets, 174 wins (46.8%), P&L: $13857.00
-2026-06-26 16:17:39,910 INFO [model] 
+2026-06-27 03:06:09,176 INFO [model]     Bets: 401/510 | Wins: 267 (66.6%)
+2026-06-27 03:06:09,176 INFO [model]     Profit: $11939.28 | Wagered: $40100 | ROI: +29.77%
+2026-06-27 03:06:09,176 INFO [model]     Avg edge: 0.153
+2026-06-27 03:06:09,176 INFO [model]     Avg EV: 1.320
+2026-06-27 03:06:09,176 INFO [model]     Favorites: 205 bets, 173 wins (84.4%), P&L: $4656.28
+2026-06-27 03:06:09,176 INFO [model]     Underdogs: 196 bets, 94 wins (48.0%), P&L: $7283.00
+2026-06-27 03:06:09,217 INFO [model] 
   Strategy 2: Value bets (edge > 8%, vig-adjusted, +EV only)
-2026-06-26 16:17:39,910 INFO [model]     Bets: 643/1049 | Wins: 448 (69.7%)
-2026-06-26 16:17:39,910 INFO [model]     Profit: $25869.53 | Wagered: $64300 | ROI: +40.23%
-2026-06-26 16:17:39,910 INFO [model]     Avg edge: 0.179
-2026-06-26 16:17:39,910 INFO [model]     Avg EV: 1.389
-2026-06-26 16:17:39,910 INFO [model]     Favorites: 338 bets, 292 wins (86.4%), P&L: $9890.53
-2026-06-26 16:17:39,910 INFO [model]     Underdogs: 305 bets, 156 wins (51.1%), P&L: $15979.00
-2026-06-26 16:17:39,976 INFO [model] 
+2026-06-27 03:06:09,217 INFO [model]     Bets: 320/510 | Wins: 219 (68.4%)
+2026-06-27 03:06:09,217 INFO [model]     Profit: $12234.24 | Wagered: $32000 | ROI: +38.23%
+2026-06-27 03:06:09,217 INFO [model]     Avg edge: 0.175
+2026-06-27 03:06:09,217 INFO [model]     Avg EV: 1.374
+2026-06-27 03:06:09,217 INFO [model]     Favorites: 158 bets, 135 wins (85.4%), P&L: $4169.24
+2026-06-27 03:06:09,218 INFO [model]     Underdogs: 162 bets, 84 wins (51.9%), P&L: $8065.00
+2026-06-27 03:06:09,249 INFO [model] 
   Strategy 2: Value bets (edge > 10%, vig-adjusted, +EV only)
-2026-06-26 16:17:39,976 INFO [model]     Bets: 561/1049 | Wins: 395 (70.4%)
-2026-06-26 16:17:39,976 INFO [model]     Profit: $24166.24 | Wagered: $56100 | ROI: +43.08%
-2026-06-26 16:17:39,976 INFO [model]     Avg edge: 0.192
-2026-06-26 16:17:39,976 INFO [model]     Avg EV: 1.421
-2026-06-26 16:17:39,976 INFO [model]     Favorites: 294 bets, 257 wins (87.4%), P&L: $9506.24
-2026-06-26 16:17:39,976 INFO [model]     Underdogs: 267 bets, 138 wins (51.7%), P&L: $14660.00
-2026-06-26 16:17:40,017 INFO [model] 
+2026-06-27 03:06:09,249 INFO [model]     Bets: 277/510 | Wins: 192 (69.3%)
+2026-06-27 03:06:09,249 INFO [model]     Profit: $11485.00 | Wagered: $27700 | ROI: +41.46%
+2026-06-27 03:06:09,249 INFO [model]     Avg edge: 0.189
+2026-06-27 03:06:09,250 INFO [model]     Avg EV: 1.406
+2026-06-27 03:06:09,250 INFO [model]     Favorites: 136 bets, 118 wins (86.8%), P&L: $4089.00
+2026-06-27 03:06:09,250 INFO [model]     Underdogs: 141 bets, 74 wins (52.5%), P&L: $7396.00
+2026-06-27 03:06:09,269 INFO [model] 
   Strategy 2: Value bets (edge > 15%, vig-adjusted, +EV only)
-2026-06-26 16:17:40,017 INFO [model]     Bets: 351/1049 | Wins: 249 (70.9%)
-2026-06-26 16:17:40,018 INFO [model]     Profit: $19196.60 | Wagered: $35100 | ROI: +54.69%
-2026-06-26 16:17:40,018 INFO [model]     Avg edge: 0.234
-2026-06-26 16:17:40,018 INFO [model]     Avg EV: 1.540
-2026-06-26 16:17:40,018 INFO [model]     Favorites: 168 bets, 147 wins (87.5%), P&L: $6295.60
-2026-06-26 16:17:40,018 INFO [model]     Underdogs: 183 bets, 102 wins (55.7%), P&L: $12901.00
-2026-06-26 16:17:40,018 INFO [model] 
+2026-06-27 03:06:09,269 INFO [model]     Bets: 164/510 | Wins: 118 (72.0%)
+2026-06-27 03:06:09,269 INFO [model]     Profit: $9735.77 | Wagered: $16400 | ROI: +59.36%
+2026-06-27 03:06:09,269 INFO [model]     Avg edge: 0.236
+2026-06-27 03:06:09,269 INFO [model]     Avg EV: 1.534
+2026-06-27 03:06:09,269 INFO [model]     Favorites: 72 bets, 63 wins (87.5%), P&L: $2661.77
+2026-06-27 03:06:09,270 INFO [model]     Underdogs: 92 bets, 55 wins (59.8%), P&L: $7074.00
+2026-06-27 03:06:09,270 INFO [model] 
   Strategy 3: Quarter-Kelly sizing (edge > 3%, vig-adjusted)
-2026-06-26 16:17:40,019 INFO [model]     Bets placed: 891 | Wins: 589
-2026-06-26 16:17:40,019 INFO [model]     Starting: $10,000.00 → Ending: $823,102,173.74
-2026-06-26 16:17:40,019 INFO [model]     Return: +8230921.74%
-2026-06-26 16:17:40,019 INFO [model]     Max drawdown: 43.4%
-2026-06-26 16:17:40,019 INFO [model] 
+2026-06-27 03:06:09,270 INFO [model]     Bets placed: 443 | Wins: 291
+2026-06-27 03:06:09,270 INFO [model]     Starting: $10,000.00 → Ending: $2,517,994.69
+2026-06-27 03:06:09,270 INFO [model]     Return: +25079.95%
+2026-06-27 03:06:09,270 INFO [model]     Max drawdown: 33.2%
+2026-06-27 03:06:09,270 INFO [model] 
 ────────────────────────────────────────────────────────────
-2026-06-26 16:17:40,019 INFO [model]   Platt scaling
-2026-06-26 16:17:40,019 INFO [model] ────────────────────────────────────────────────────────────
-2026-06-26 16:17:40,019 INFO [model] 
+2026-06-27 03:06:09,270 INFO [model]   Platt scaling
+2026-06-27 03:06:09,270 INFO [model] ────────────────────────────────────────────────────────────
+2026-06-27 03:06:09,270 INFO [model] 
   Strategy 1: Flat $100 bet on model pick (every fight)
-2026-06-26 16:17:40,020 INFO [model]     Bets: 1049 | Wins: 769 (73.3%)
-2026-06-26 16:17:40,020 INFO [model]     Profit: $16473.11 | Wagered: $104900 | ROI: +15.70%
-2026-06-26 16:17:40,128 INFO [model] 
+2026-06-27 03:06:09,271 INFO [model]     Bets: 510 | Wins: 368 (72.2%)
+2026-06-27 03:06:09,271 INFO [model]     Profit: $7069.65 | Wagered: $51000 | ROI: +13.86%
+2026-06-27 03:06:09,323 INFO [model] 
   Strategy 2: Value bets (edge > 3%, vig-adjusted, +EV only)
-2026-06-26 16:17:40,128 INFO [model]     Bets: 936/1049 | Wins: 660 (70.5%)
-2026-06-26 16:17:40,128 INFO [model]     Profit: $26643.30 | Wagered: $93600 | ROI: +28.47%
-2026-06-26 16:17:40,128 INFO [model]     Avg edge: 0.167
-2026-06-26 16:17:40,128 INFO [model]     Avg EV: 1.310
-2026-06-26 16:17:40,128 INFO [model]     Favorites: 605 bets, 491 wins (81.2%), P&L: $10759.30
-2026-06-26 16:17:40,128 INFO [model]     Underdogs: 331 bets, 169 wins (51.1%), P&L: $15884.00
-2026-06-26 16:17:40,229 INFO [model] 
+2026-06-27 03:06:09,323 INFO [model]     Bets: 453/510 | Wins: 313 (69.1%)
+2026-06-27 03:06:09,323 INFO [model]     Profit: $12330.17 | Wagered: $45300 | ROI: +27.22%
+2026-06-27 03:06:09,323 INFO [model]     Avg edge: 0.167
+2026-06-27 03:06:09,323 INFO [model]     Avg EV: 1.305
+2026-06-27 03:06:09,323 INFO [model]     Favorites: 276 bets, 221 wins (80.1%), P&L: $4211.17
+2026-06-27 03:06:09,323 INFO [model]     Underdogs: 177 bets, 92 wins (52.0%), P&L: $8119.00
+2026-06-27 03:06:09,372 INFO [model] 
   Strategy 2: Value bets (edge > 5%, vig-adjusted, +EV only)
-2026-06-26 16:17:40,229 INFO [model]     Bets: 870/1049 | Wins: 623 (71.6%)
-2026-06-26 16:17:40,229 INFO [model]     Profit: $26370.61 | Wagered: $87000 | ROI: +30.31%
-2026-06-26 16:17:40,229 INFO [model]     Avg edge: 0.177
-2026-06-26 16:17:40,229 INFO [model]     Avg EV: 1.329
-2026-06-26 16:17:40,229 INFO [model]     Favorites: 572 bets, 466 wins (81.5%), P&L: $10362.61
-2026-06-26 16:17:40,229 INFO [model]     Underdogs: 298 bets, 157 wins (52.7%), P&L: $16008.00
-2026-06-26 16:17:40,315 INFO [model] 
+2026-06-27 03:06:09,372 INFO [model]     Bets: 420/510 | Wins: 297 (70.7%)
+2026-06-27 03:06:09,372 INFO [model]     Profit: $12490.33 | Wagered: $42000 | ROI: +29.74%
+2026-06-27 03:06:09,372 INFO [model]     Avg edge: 0.177
+2026-06-27 03:06:09,372 INFO [model]     Avg EV: 1.323
+2026-06-27 03:06:09,372 INFO [model]     Favorites: 265 bets, 212 wins (80.0%), P&L: $3950.33
+2026-06-27 03:06:09,372 INFO [model]     Underdogs: 155 bets, 85 wins (54.8%), P&L: $8540.00
+2026-06-27 03:06:09,414 INFO [model] 
   Strategy 2: Value bets (edge > 8%, vig-adjusted, +EV only)
-2026-06-26 16:17:40,316 INFO [model]     Bets: 742/1049 | Wins: 544 (73.3%)
-2026-06-26 16:17:40,316 INFO [model]     Profit: $25612.67 | Wagered: $74200 | ROI: +34.52%
-2026-06-26 16:17:40,316 INFO [model]     Avg edge: 0.197
-2026-06-26 16:17:40,316 INFO [model]     Avg EV: 1.371
-2026-06-26 16:17:40,316 INFO [model]     Favorites: 488 bets, 406 wins (83.2%), P&L: $10923.67
-2026-06-26 16:17:40,316 INFO [model]     Underdogs: 254 bets, 138 wins (54.3%), P&L: $14689.00
-2026-06-26 16:17:40,391 INFO [model] 
+2026-06-27 03:06:09,414 INFO [model]     Bets: 360/510 | Wins: 265 (73.6%)
+2026-06-27 03:06:09,414 INFO [model]     Profit: $12798.77 | Wagered: $36000 | ROI: +35.55%
+2026-06-27 03:06:09,415 INFO [model]     Avg edge: 0.195
+2026-06-27 03:06:09,415 INFO [model]     Avg EV: 1.362
+2026-06-27 03:06:09,415 INFO [model]     Favorites: 231 bets, 191 wins (82.7%), P&L: $4688.77
+2026-06-27 03:06:09,415 INFO [model]     Underdogs: 129 bets, 74 wins (57.4%), P&L: $8110.00
+2026-06-27 03:06:09,452 INFO [model] 
   Strategy 2: Value bets (edge > 10%, vig-adjusted, +EV only)
-2026-06-26 16:17:40,392 INFO [model]     Bets: 649/1049 | Wins: 475 (73.2%)
-2026-06-26 16:17:40,392 INFO [model]     Profit: $24552.54 | Wagered: $64900 | ROI: +37.83%
-2026-06-26 16:17:40,392 INFO [model]     Avg edge: 0.212
-2026-06-26 16:17:40,392 INFO [model]     Avg EV: 1.408
-2026-06-26 16:17:40,392 INFO [model]     Favorites: 415 bets, 345 wins (83.1%), P&L: $10057.54
-2026-06-26 16:17:40,392 INFO [model]     Underdogs: 234 bets, 130 wins (55.6%), P&L: $14495.00
-2026-06-26 16:17:40,446 INFO [model] 
+2026-06-27 03:06:09,452 INFO [model]     Bets: 313/510 | Wins: 230 (73.5%)
+2026-06-27 03:06:09,452 INFO [model]     Profit: $12064.87 | Wagered: $31300 | ROI: +38.55%
+2026-06-27 03:06:09,452 INFO [model]     Avg edge: 0.211
+2026-06-27 03:06:09,452 INFO [model]     Avg EV: 1.402
+2026-06-27 03:06:09,452 INFO [model]     Favorites: 192 bets, 162 wins (84.4%), P&L: $4688.87
+2026-06-27 03:06:09,452 INFO [model]     Underdogs: 121 bets, 68 wins (56.2%), P&L: $7376.00
+2026-06-27 03:06:09,478 INFO [model] 
   Strategy 2: Value bets (edge > 15%, vig-adjusted, +EV only)
-2026-06-26 16:17:40,446 INFO [model]     Bets: 458/1049 | Wins: 343 (74.9%)
-2026-06-26 16:17:40,446 INFO [model]     Profit: $20313.61 | Wagered: $45800 | ROI: +44.35%
-2026-06-26 16:17:40,446 INFO [model]     Avg edge: 0.248
-2026-06-26 16:17:40,446 INFO [model]     Avg EV: 1.493
-2026-06-26 16:17:40,446 INFO [model]     Favorites: 281 bets, 241 wins (85.8%), P&L: $9163.61
-2026-06-26 16:17:40,446 INFO [model]     Underdogs: 177 bets, 102 wins (57.6%), P&L: $11150.00
-2026-06-26 16:17:40,446 INFO [model] 
+2026-06-27 03:06:09,478 INFO [model]     Bets: 216/510 | Wins: 159 (73.6%)
+2026-06-27 03:06:09,478 INFO [model]     Profit: $8971.08 | Wagered: $21600 | ROI: +41.53%
+2026-06-27 03:06:09,478 INFO [model]     Avg edge: 0.250
+2026-06-27 03:06:09,478 INFO [model]     Avg EV: 1.493
+2026-06-27 03:06:09,479 INFO [model]     Favorites: 129 bets, 109 wins (84.5%), P&L: $3842.08
+2026-06-27 03:06:09,479 INFO [model]     Underdogs: 87 bets, 50 wins (57.5%), P&L: $5129.00
+2026-06-27 03:06:09,479 INFO [model] 
   Strategy 3: Quarter-Kelly sizing (edge > 3%, vig-adjusted)
-2026-06-26 16:17:40,447 INFO [model]     Bets placed: 936 | Wins: 660
-2026-06-26 16:17:40,447 INFO [model]     Starting: $10,000.00 → Ending: $798,819,505.81
-2026-06-26 16:17:40,447 INFO [model]     Return: +7988095.06%
-2026-06-26 16:17:40,447 INFO [model]     Max drawdown: 39.0%
-2026-06-26 16:17:40,448 INFO [model] 
+2026-06-27 03:06:09,479 INFO [model]     Bets placed: 453 | Wins: 313
+2026-06-27 03:06:09,479 INFO [model]     Starting: $10,000.00 → Ending: $2,075,098.99
+2026-06-27 03:06:09,479 INFO [model]     Return: +20650.99%
+2026-06-27 03:06:09,479 INFO [model]     Max drawdown: 28.0%
+2026-06-27 03:06:09,479 INFO [model] 
 ────────────────────────────────────────────────────────────
-2026-06-26 16:17:40,448 INFO [model]   Isotonic regression
-2026-06-26 16:17:40,448 INFO [model] ────────────────────────────────────────────────────────────
-2026-06-26 16:17:40,448 INFO [model] 
+2026-06-27 03:06:09,479 INFO [model]   Isotonic regression
+2026-06-27 03:06:09,479 INFO [model] ────────────────────────────────────────────────────────────
+2026-06-27 03:06:09,480 INFO [model] 
   Strategy 1: Flat $100 bet on model pick (every fight)
-2026-06-26 16:17:40,448 INFO [model]     Bets: 1049 | Wins: 787 (75.0%)
-2026-06-26 16:17:40,448 INFO [model]     Profit: $21407.92 | Wagered: $104900 | ROI: +20.41%
-2026-06-26 16:17:40,555 INFO [model] 
+2026-06-27 03:06:09,480 INFO [model]     Bets: 510 | Wins: 378 (74.1%)
+2026-06-27 03:06:09,480 INFO [model]     Profit: $10038.05 | Wagered: $51000 | ROI: +19.68%
+2026-06-27 03:06:09,536 INFO [model] 
   Strategy 2: Value bets (edge > 3%, vig-adjusted, +EV only)
-2026-06-26 16:17:40,555 INFO [model]     Bets: 928/1049 | Wins: 658 (70.9%)
-2026-06-26 16:17:40,555 INFO [model]     Profit: $28011.81 | Wagered: $92800 | ROI: +30.19%
-2026-06-26 16:17:40,555 INFO [model]     Avg edge: 0.179
-2026-06-26 16:17:40,555 INFO [model]     Avg EV: 1.335
-2026-06-26 16:17:40,555 INFO [model]     Favorites: 573 bets, 477 wins (83.2%), P&L: $11248.81
-2026-06-26 16:17:40,555 INFO [model]     Underdogs: 355 bets, 181 wins (51.0%), P&L: $16763.00
-2026-06-26 16:17:40,656 INFO [model] 
+2026-06-27 03:06:09,536 INFO [model]     Bets: 456/510 | Wins: 312 (68.4%)
+2026-06-27 03:06:09,536 INFO [model]     Profit: $12038.51 | Wagered: $45600 | ROI: +26.40%
+2026-06-27 03:06:09,536 INFO [model]     Avg edge: 0.176
+2026-06-27 03:06:09,536 INFO [model]     Avg EV: 1.325
+2026-06-27 03:06:09,536 INFO [model]     Favorites: 267 bets, 216 wins (80.9%), P&L: $3917.51
+2026-06-27 03:06:09,537 INFO [model]     Underdogs: 189 bets, 96 wins (50.8%), P&L: $8121.00
+2026-06-27 03:06:09,590 INFO [model] 
   Strategy 2: Value bets (edge > 5%, vig-adjusted, +EV only)
-2026-06-26 16:17:40,656 INFO [model]     Bets: 873/1049 | Wins: 626 (71.7%)
-2026-06-26 16:17:40,656 INFO [model]     Profit: $27430.46 | Wagered: $87300 | ROI: +31.42%
-2026-06-26 16:17:40,656 INFO [model]     Avg edge: 0.188
-2026-06-26 16:17:40,656 INFO [model]     Avg EV: 1.353
-2026-06-26 16:17:40,656 INFO [model]     Favorites: 546 bets, 456 wins (83.5%), P&L: $10980.46
-2026-06-26 16:17:40,656 INFO [model]     Underdogs: 327 bets, 170 wins (52.0%), P&L: $16450.00
-2026-06-26 16:17:40,746 INFO [model] 
+2026-06-27 03:06:09,590 INFO [model]     Bets: 427/510 | Wins: 299 (70.0%)
+2026-06-27 03:06:09,590 INFO [model]     Profit: $12016.59 | Wagered: $42700 | ROI: +28.14%
+2026-06-27 03:06:09,590 INFO [model]     Avg edge: 0.185
+2026-06-27 03:06:09,590 INFO [model]     Avg EV: 1.342
+2026-06-27 03:06:09,590 INFO [model]     Favorites: 258 bets, 210 wins (81.4%), P&L: $3974.59
+2026-06-27 03:06:09,590 INFO [model]     Underdogs: 169 bets, 89 wins (52.7%), P&L: $8042.00
+2026-06-27 03:06:09,635 INFO [model] 
   Strategy 2: Value bets (edge > 8%, vig-adjusted, +EV only)
-2026-06-26 16:17:40,746 INFO [model]     Bets: 761/1049 | Wins: 564 (74.1%)
-2026-06-26 16:17:40,746 INFO [model]     Profit: $27323.95 | Wagered: $76100 | ROI: +35.91%
-2026-06-26 16:17:40,746 INFO [model]     Avg edge: 0.206
-2026-06-26 16:17:40,746 INFO [model]     Avg EV: 1.389
-2026-06-26 16:17:40,746 INFO [model]     Favorites: 486 bets, 416 wins (85.6%), P&L: $11501.95
-2026-06-26 16:17:40,746 INFO [model]     Underdogs: 275 bets, 148 wins (53.8%), P&L: $15822.00
-2026-06-26 16:17:40,828 INFO [model] 
+2026-06-27 03:06:09,635 INFO [model]     Bets: 363/510 | Wins: 266 (73.3%)
+2026-06-27 03:06:09,636 INFO [model]     Profit: $12172.11 | Wagered: $36300 | ROI: +33.53%
+2026-06-27 03:06:09,636 INFO [model]     Avg edge: 0.206
+2026-06-27 03:06:09,636 INFO [model]     Avg EV: 1.383
+2026-06-27 03:06:09,636 INFO [model]     Favorites: 227 bets, 191 wins (84.1%), P&L: $4644.11
+2026-06-27 03:06:09,636 INFO [model]     Underdogs: 136 bets, 75 wins (55.1%), P&L: $7528.00
+2026-06-27 03:06:09,676 INFO [model] 
   Strategy 2: Value bets (edge > 10%, vig-adjusted, +EV only)
-2026-06-26 16:17:40,828 INFO [model]     Bets: 703/1049 | Wins: 529 (75.2%)
-2026-06-26 16:17:40,828 INFO [model]     Profit: $27246.09 | Wagered: $70300 | ROI: +38.76%
-2026-06-26 16:17:40,828 INFO [model]     Avg edge: 0.215
-2026-06-26 16:17:40,828 INFO [model]     Avg EV: 1.409
-2026-06-26 16:17:40,828 INFO [model]     Favorites: 452 bets, 390 wins (86.3%), P&L: $11244.09
-2026-06-26 16:17:40,828 INFO [model]     Underdogs: 251 bets, 139 wins (55.4%), P&L: $16002.00
-2026-06-26 16:17:40,888 INFO [model] 
+2026-06-27 03:06:09,677 INFO [model]     Bets: 335/510 | Wins: 249 (74.3%)
+2026-06-27 03:06:09,677 INFO [model]     Profit: $11899.42 | Wagered: $33500 | ROI: +35.52%
+2026-06-27 03:06:09,677 INFO [model]     Avg edge: 0.216
+2026-06-27 03:06:09,677 INFO [model]     Avg EV: 1.401
+2026-06-27 03:06:09,677 INFO [model]     Favorites: 214 bets, 181 wins (84.6%), P&L: $4457.42
+2026-06-27 03:06:09,677 INFO [model]     Underdogs: 121 bets, 68 wins (56.2%), P&L: $7442.00
+2026-06-27 03:06:09,708 INFO [model] 
   Strategy 2: Value bets (edge > 15%, vig-adjusted, +EV only)
-2026-06-26 16:17:40,888 INFO [model]     Bets: 513/1049 | Wins: 393 (76.6%)
-2026-06-26 16:17:40,888 INFO [model]     Profit: $22814.20 | Wagered: $51300 | ROI: +44.47%
-2026-06-26 16:17:40,888 INFO [model]     Avg edge: 0.249
-2026-06-26 16:17:40,888 INFO [model]     Avg EV: 1.485
-2026-06-26 16:17:40,888 INFO [model]     Favorites: 316 bets, 279 wins (88.3%), P&L: $9456.20
-2026-06-26 16:17:40,888 INFO [model]     Underdogs: 197 bets, 114 wins (57.9%), P&L: $13358.00
-2026-06-26 16:17:40,888 INFO [model] 
+2026-06-27 03:06:09,708 INFO [model]     Bets: 245/510 | Wins: 183 (74.7%)
+2026-06-27 03:06:09,708 INFO [model]     Profit: $9660.12 | Wagered: $24500 | ROI: +39.43%
+2026-06-27 03:06:09,708 INFO [model]     Avg edge: 0.250
+2026-06-27 03:06:09,708 INFO [model]     Avg EV: 1.477
+2026-06-27 03:06:09,708 INFO [model]     Favorites: 147 bets, 127 wins (86.4%), P&L: $3672.12
+2026-06-27 03:06:09,708 INFO [model]     Underdogs: 98 bets, 56 wins (57.1%), P&L: $5988.00
+2026-06-27 03:06:09,708 INFO [model] 
   Strategy 3: Quarter-Kelly sizing (edge > 3%, vig-adjusted)
-2026-06-26 16:17:40,890 INFO [model]     Bets placed: 928 | Wins: 658
-2026-06-26 16:17:40,890 INFO [model]     Starting: $10,000.00 → Ending: $2,601,245,820.99
-2026-06-26 16:17:40,890 INFO [model]     Return: +26012358.21%
-2026-06-26 16:17:40,890 INFO [model]     Max drawdown: 41.5%
-2026-06-26 16:17:40,890 INFO [model] 
+2026-06-27 03:06:09,709 INFO [model]     Bets placed: 456 | Wins: 312
+2026-06-27 03:06:09,709 INFO [model]     Starting: $10,000.00 → Ending: $2,363,289.04
+2026-06-27 03:06:09,710 INFO [model]     Return: +23532.89%
+2026-06-27 03:06:09,710 INFO [model]     Max drawdown: 21.0%
+2026-06-27 03:06:09,710 INFO [model] 
+────────────────────────────────────────────────────────────
+2026-06-27 03:06:09,710 INFO [model]   Isotonic (k-fold)
+2026-06-27 03:06:09,710 INFO [model] ────────────────────────────────────────────────────────────
+2026-06-27 03:06:09,710 INFO [model] 
+  Strategy 1: Flat $100 bet on model pick (every fight)
+2026-06-27 03:06:09,710 INFO [model]     Bets: 510 | Wins: 372 (72.9%)
+2026-06-27 03:06:09,710 INFO [model]     Profit: $8170.18 | Wagered: $51000 | ROI: +16.02%
+2026-06-27 03:06:09,763 INFO [model] 
+  Strategy 2: Value bets (edge > 3%, vig-adjusted, +EV only)
+2026-06-27 03:06:09,763 INFO [model]     Bets: 437/510 | Wins: 282 (64.5%)
+2026-06-27 03:06:09,763 INFO [model]     Profit: $11038.27 | Wagered: $43700 | ROI: +25.26%
+2026-06-27 03:06:09,764 INFO [model]     Avg edge: 0.147
+2026-06-27 03:06:09,764 INFO [model]     Avg EV: 1.308
+2026-06-27 03:06:09,764 INFO [model]     Favorites: 222 bets, 184 wins (82.9%), P&L: $4610.27
+2026-06-27 03:06:09,764 INFO [model]     Underdogs: 215 bets, 98 wins (45.6%), P&L: $6428.00
+2026-06-27 03:06:09,860 INFO [model] 
+  Strategy 2: Value bets (edge > 5%, vig-adjusted, +EV only)
+2026-06-27 03:06:09,861 INFO [model]     Bets: 397/510 | Wins: 270 (68.0%)
+2026-06-27 03:06:09,861 INFO [model]     Profit: $12791.55 | Wagered: $39700 | ROI: +32.22%
+2026-06-27 03:06:09,862 INFO [model]     Avg edge: 0.158
+2026-06-27 03:06:09,862 INFO [model]     Avg EV: 1.330
+2026-06-27 03:06:09,863 INFO [model]     Favorites: 209 bets, 176 wins (84.2%), P&L: $4803.55
+2026-06-27 03:06:09,863 INFO [model]     Underdogs: 188 bets, 94 wins (50.0%), P&L: $7988.00
+2026-06-27 03:06:10,196 INFO [model] 
+  Strategy 2: Value bets (edge > 8%, vig-adjusted, +EV only)
+2026-06-27 03:06:10,196 INFO [model]     Bets: 320/510 | Wins: 220 (68.8%)
+2026-06-27 03:06:10,196 INFO [model]     Profit: $12096.42 | Wagered: $32000 | ROI: +37.80%
+2026-06-27 03:06:10,196 INFO [model]     Avg edge: 0.180
+2026-06-27 03:06:10,196 INFO [model]     Avg EV: 1.385
+2026-06-27 03:06:10,196 INFO [model]     Favorites: 161 bets, 138 wins (85.7%), P&L: $4489.42
+2026-06-27 03:06:10,196 INFO [model]     Underdogs: 159 bets, 82 wins (51.6%), P&L: $7607.00
+2026-06-27 03:06:10,250 INFO [model] 
+  Strategy 2: Value bets (edge > 10%, vig-adjusted, +EV only)
+2026-06-27 03:06:10,251 INFO [model]     Bets: 280/510 | Wins: 193 (68.9%)
+2026-06-27 03:06:10,251 INFO [model]     Profit: $11207.32 | Wagered: $28000 | ROI: +40.03%
+2026-06-27 03:06:10,251 INFO [model]     Avg edge: 0.193
+2026-06-27 03:06:10,251 INFO [model]     Avg EV: 1.414
+2026-06-27 03:06:10,251 INFO [model]     Favorites: 139 bets, 119 wins (85.6%), P&L: $3953.32
+2026-06-27 03:06:10,251 INFO [model]     Underdogs: 141 bets, 74 wins (52.5%), P&L: $7254.00
+2026-06-27 03:06:10,275 INFO [model] 
+  Strategy 2: Value bets (edge > 15%, vig-adjusted, +EV only)
+2026-06-27 03:06:10,275 INFO [model]     Bets: 167/510 | Wins: 119 (71.3%)
+2026-06-27 03:06:10,275 INFO [model]     Profit: $8379.09 | Wagered: $16700 | ROI: +50.17%
+2026-06-27 03:06:10,275 INFO [model]     Avg edge: 0.240
+2026-06-27 03:06:10,275 INFO [model]     Avg EV: 1.522
+2026-06-27 03:06:10,275 INFO [model]     Favorites: 79 bets, 67 wins (84.8%), P&L: $2397.09
+2026-06-27 03:06:10,275 INFO [model]     Underdogs: 88 bets, 52 wins (59.1%), P&L: $5982.00
+2026-06-27 03:06:10,275 INFO [model] 
+  Strategy 3: Quarter-Kelly sizing (edge > 3%, vig-adjusted)
+2026-06-27 03:06:10,276 INFO [model]     Bets placed: 437 | Wins: 282
+2026-06-27 03:06:10,276 INFO [model]     Starting: $10,000.00 → Ending: $2,120,595.18
+2026-06-27 03:06:10,276 INFO [model]     Return: +21105.95%
+2026-06-27 03:06:10,276 INFO [model]     Max drawdown: 31.4%
+2026-06-27 03:06:10,276 INFO [model] 
+────────────────────────────────────────────────────────────
+2026-06-27 03:06:10,276 INFO [model]   Venn-Abers (k-fold)
+2026-06-27 03:06:10,276 INFO [model] ────────────────────────────────────────────────────────────
+2026-06-27 03:06:10,276 INFO [model] 
+  Strategy 1: Flat $100 bet on model pick (every fight)
+2026-06-27 03:06:10,276 INFO [model]     Bets: 510 | Wins: 372 (72.9%)
+2026-06-27 03:06:10,276 INFO [model]     Profit: $8170.18 | Wagered: $51000 | ROI: +16.02%
+2026-06-27 03:06:10,332 INFO [model] 
+  Strategy 2: Value bets (edge > 3%, vig-adjusted, +EV only)
+2026-06-27 03:06:10,332 INFO [model]     Bets: 431/510 | Wins: 277 (64.3%)
+2026-06-27 03:06:10,332 INFO [model]     Profit: $11451.71 | Wagered: $43100 | ROI: +26.57%
+2026-06-27 03:06:10,332 INFO [model]     Avg edge: 0.142
+2026-06-27 03:06:10,333 INFO [model]     Avg EV: 1.304
+2026-06-27 03:06:10,333 INFO [model]     Favorites: 215 bets, 178 wins (82.8%), P&L: $4603.71
+2026-06-27 03:06:10,333 INFO [model]     Underdogs: 216 bets, 99 wins (45.8%), P&L: $6848.00
+2026-06-27 03:06:10,383 INFO [model] 
+  Strategy 2: Value bets (edge > 5%, vig-adjusted, +EV only)
+2026-06-27 03:06:10,383 INFO [model]     Bets: 385/510 | Wins: 258 (67.0%)
+2026-06-27 03:06:10,383 INFO [model]     Profit: $12434.90 | Wagered: $38500 | ROI: +32.30%
+2026-06-27 03:06:10,383 INFO [model]     Avg edge: 0.154
+2026-06-27 03:06:10,383 INFO [model]     Avg EV: 1.332
+2026-06-27 03:06:10,383 INFO [model]     Favorites: 193 bets, 164 wins (85.0%), P&L: $4846.90
+2026-06-27 03:06:10,383 INFO [model]     Underdogs: 192 bets, 94 wins (49.0%), P&L: $7588.00
+2026-06-27 03:06:10,424 INFO [model] 
+  Strategy 2: Value bets (edge > 8%, vig-adjusted, +EV only)
+2026-06-27 03:06:10,424 INFO [model]     Bets: 310/510 | Wins: 209 (67.4%)
+2026-06-27 03:06:10,424 INFO [model]     Profit: $11727.61 | Wagered: $31000 | ROI: +37.83%
+2026-06-27 03:06:10,424 INFO [model]     Avg edge: 0.175
+2026-06-27 03:06:10,424 INFO [model]     Avg EV: 1.387
+2026-06-27 03:06:10,424 INFO [model]     Favorites: 149 bets, 127 wins (85.2%), P&L: $4320.61
+2026-06-27 03:06:10,424 INFO [model]     Underdogs: 161 bets, 82 wins (50.9%), P&L: $7407.00
+2026-06-27 03:06:10,458 INFO [model] 
+  Strategy 2: Value bets (edge > 10%, vig-adjusted, +EV only)
+2026-06-27 03:06:10,458 INFO [model]     Bets: 262/510 | Wins: 177 (67.6%)
+2026-06-27 03:06:10,458 INFO [model]     Profit: $11018.68 | Wagered: $26200 | ROI: +42.06%
+2026-06-27 03:06:10,459 INFO [model]     Avg edge: 0.191
+2026-06-27 03:06:10,459 INFO [model]     Avg EV: 1.424
+2026-06-27 03:06:10,459 INFO [model]     Favorites: 121 bets, 103 wins (85.1%), P&L: $3764.68
+2026-06-27 03:06:10,459 INFO [model]     Underdogs: 141 bets, 74 wins (52.5%), P&L: $7254.00
+2026-06-27 03:06:10,478 INFO [model] 
+  Strategy 2: Value bets (edge > 15%, vig-adjusted, +EV only)
+2026-06-27 03:06:10,478 INFO [model]     Bets: 149/510 | Wins: 103 (69.1%)
+2026-06-27 03:06:10,479 INFO [model]     Profit: $8070.25 | Wagered: $14900 | ROI: +54.16%
+2026-06-27 03:06:10,479 INFO [model]     Avg edge: 0.240
+2026-06-27 03:06:10,479 INFO [model]     Avg EV: 1.552
+2026-06-27 03:06:10,479 INFO [model]     Favorites: 61 bets, 51 wins (83.6%), P&L: $2088.25
+2026-06-27 03:06:10,479 INFO [model]     Underdogs: 88 bets, 52 wins (59.1%), P&L: $5982.00
+2026-06-27 03:06:10,479 INFO [model] 
+  Strategy 3: Quarter-Kelly sizing (edge > 3%, vig-adjusted)
+2026-06-27 03:06:10,480 INFO [model]     Bets placed: 431 | Wins: 277
+2026-06-27 03:06:10,480 INFO [model]     Starting: $10,000.00 → Ending: $2,004,346.36
+2026-06-27 03:06:10,480 INFO [model]     Return: +19943.46%
+2026-06-27 03:06:10,480 INFO [model]     Max drawdown: 31.4%
+2026-06-27 03:06:10,480 INFO [model] 
+────────────────────────────────────────────────────────────
+2026-06-27 03:06:10,480 INFO [model]   Venn-Abers Interval-Filtered Strategies
+2026-06-27 03:06:10,480 INFO [model] ────────────────────────────────────────────────────────────
+2026-06-27 03:06:10,480 INFO [model]   VA interval widths — mean: 0.0113, median: 0.0036, p75: 0.0089, p90: 0.0212, max: 0.1111
+2026-06-27 03:06:10,480 INFO [model] 
+  --- VA Point Estimate Edge (>3%) + Interval Filter ---
+2026-06-27 03:06:10,480 INFO [model]     interval        <0.5%:  242 bets, 138 wins (57.0%), $  +7485.34, ROI: +30.93%
+2026-06-27 03:06:10,481 INFO [model]     interval        <1.0%:  333 bets, 201 wins (60.4%), $  +9975.48, ROI: +29.96%
+2026-06-27 03:06:10,481 INFO [model]     interval        <2.0%:  381 bets, 236 wins (61.9%), $ +10417.79, ROI: +27.34%
+2026-06-27 03:06:10,482 INFO [model]     interval        <5.0%:  411 bets, 259 wins (63.0%), $ +11065.81, ROI: +26.92%
+2026-06-27 03:06:10,482 INFO [model]     interval       <10.0%:  419 bets, 266 wins (63.5%), $ +11216.82, ROI: +26.77%
+2026-06-27 03:06:10,483 INFO [model]     interval    no filter:  431 bets, 277 wins (64.3%), $ +11451.71, ROI: +26.57%
+2026-06-27 03:06:10,483 INFO [model] 
+  --- Conservative Edge (va_prob_low) vs Point Estimate ---
+2026-06-27 03:06:10,484 INFO [model] 
+    Edge > 3%:
+2026-06-27 03:06:10,484 INFO [model]       Point estimate:  431 bets, 277 wins (64.3%), $ +11451.71, ROI: +26.57%
+2026-06-27 03:06:10,484 INFO [model]       Conservative:    425 bets, 272 wins (64.0%), $ +10983.06, ROI: +25.84%
+2026-06-27 03:06:10,485 INFO [model] 
+    Edge > 5%:
+2026-06-27 03:06:10,485 INFO [model]       Point estimate:  385 bets, 258 wins (67.0%), $ +12434.90, ROI: +32.30%
+2026-06-27 03:06:10,485 INFO [model]       Conservative:    376 bets, 255 wins (67.8%), $ +12973.42, ROI: +34.50%
+2026-06-27 03:06:10,486 INFO [model] 
+    Edge > 8%:
+2026-06-27 03:06:10,486 INFO [model]       Point estimate:  310 bets, 209 wins (67.4%), $ +11727.61, ROI: +37.83%
+2026-06-27 03:06:10,486 INFO [model]       Conservative:    302 bets, 206 wins (68.2%), $ +12136.74, ROI: +40.19%
+2026-06-27 03:06:10,486 INFO [model] 
+    Edge > 10%:
+2026-06-27 03:06:10,486 INFO [model]       Point estimate:  262 bets, 177 wins (67.6%), $ +11018.68, ROI: +42.06%
+2026-06-27 03:06:10,486 INFO [model]       Conservative:    256 bets, 174 wins (68.0%), $ +10888.68, ROI: +42.53%
+2026-06-27 03:06:10,487 INFO [model] 
+    Edge > 15%:
+2026-06-27 03:06:10,487 INFO [model]       Point estimate:  149 bets, 103 wins (69.1%), $  +8070.25, ROI: +54.16%
+2026-06-27 03:06:10,487 INFO [model]       Conservative:    145 bets, 101 wins (69.7%), $  +8166.67, ROI: +56.32%
+2026-06-27 03:06:10,487 INFO [model] 
 ============================================================
-2026-06-26 16:17:40,890 INFO [model] BETTING SUMMARY
-2026-06-26 16:17:40,890 INFO [model] ============================================================
-2026-06-26 16:17:40,890 INFO [model]   Test period: 2024-06-08 to 2026-07-11
-2026-06-26 16:17:40,890 INFO [model]   Total fights with odds: 1049
-2026-06-26 16:17:40,890 INFO [model]   Market (vig-adjusted) accuracy: 0.6826
-2026-06-26 16:17:40,891 INFO [model]   Model accuracy: 0.7502
-2026-06-26 16:17:40,891 INFO [model]   Best calibration method: Isotonic regression
-2026-06-26 16:17:40,891 INFO [model]   Key insight: profitability requires finding +EV spots where
-2026-06-26 16:17:40,891 INFO [model]   model_prob * decimal_odds > 1.0 (positive expected value)
-2026-06-26 16:17:40,891 INFO [model] 
+2026-06-27 03:06:10,487 INFO [model] BETTING SUMMARY
+2026-06-27 03:06:10,487 INFO [model] ============================================================
+2026-06-27 03:06:10,488 INFO [model]   Test period: 2025-06-28 to 2026-07-11
+2026-06-27 03:06:10,488 INFO [model]   Total fights with odds: 510
+2026-06-27 03:06:10,488 INFO [model]   Market (vig-adjusted) accuracy: 0.6706
+2026-06-27 03:06:10,488 INFO [model]   VA model accuracy: 0.7294
+2026-06-27 03:06:10,488 INFO [model]   Best calibration method: Isotonic regression
+2026-06-27 03:06:10,488 INFO [model]   Key insight: profitability requires finding +EV spots where
+2026-06-27 03:06:10,488 INFO [model]   model_prob * decimal_odds > 1.0 (positive expected value)
+2026-06-27 03:06:10,489 INFO [model] 
 ============================================================
-2026-06-26 16:17:40,891 INFO [model] Pipeline v6 complete.
-2026-06-26 16:17:40,891 INFO [model] ============================================================
+2026-06-27 03:06:10,489 INFO [model] Pipeline v6 complete.
+2026-06-27 03:06:10,489 INFO [model] ============================================================

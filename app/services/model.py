@@ -35,6 +35,8 @@ from sklearn.cluster import KMeans
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.calibration import CalibratedClassifierCV, calibration_curve
+from sklearn.model_selection import StratifiedKFold
+from venn_abers import VennAbers
 from sklearn.metrics import (
     accuracy_score,
     brier_score_loss,
@@ -1512,17 +1514,19 @@ def ensemble_results(gbt_result, siamese_result=None, matchup: pd.DataFrame = No
 
 def calibrate_model(matchup: pd.DataFrame, feature_names: list[str],
                     gbt_model=None) -> dict:
-    """Calibrate the Phase 1 GBT model's probabilities using Platt/isotonic.
+    """Calibrate the Phase 1 GBT model using Platt, isotonic, and Venn-Abers.
 
     Reuses the already-trained GBT model (80% train). Splits the 20% test set
     into calibration (10%) and final test (10%) to fit and evaluate calibration.
+
+    Venn-Abers uses k-fold CV on the training set to generate ~5,000 out-of-fold
+    calibration samples, then applies leave-one-out isotonic per prediction.
     """
     log.info("=" * 60)
     log.info("PROBABILITY CALIBRATION")
     log.info("=" * 60)
 
     if gbt_model is None:
-        # Fallback: load saved model
         with open(MODEL_DIR / "gbt_v3.pkl", "rb") as f:
             saved = pickle.load(f)
         gbt_model = saved["model"]
@@ -1534,10 +1538,11 @@ def calibrate_model(matchup: pd.DataFrame, feature_names: list[str],
 
     # Same 80/20 split as Phase 1
     split_idx = int(len(matchup) * 0.8)
+    train_all = matchup.iloc[:split_idx]
     test_all = matchup.iloc[split_idx:]
     test = test_all[~test_all["_augmented"]] if has_aug else test_all
 
-    # Split the test set: first half for calibration, second half for evaluation
+    # Split the test set: first half for Platt/isotonic calibration, second half for evaluation
     cal_split = int(len(test) * 0.5)
     cal_set = test.iloc[:cal_split]
     eval_set = test.iloc[cal_split:]
@@ -1546,7 +1551,7 @@ def calibrate_model(matchup: pd.DataFrame, feature_names: list[str],
     X_eval, y_eval = eval_set[feature_names].values, eval_set["red_wins"].values
 
     log.info(f"  Using Phase 1 GBT (trained on 80% data)")
-    log.info(f"  Calibration: {len(cal_set)} | Eval: {len(eval_set)}")
+    log.info(f"  Platt/Isotonic calibration: {len(cal_set)} | Eval: {len(eval_set)}")
     log.info(f"  Eval period: {eval_set['date'].min()} to {eval_set['date'].max()}")
     log.info(f"  Features: {len(feature_names)}")
 
@@ -1566,11 +1571,59 @@ def calibrate_model(matchup: pd.DataFrame, feature_names: list[str],
     iso.fit(raw_cal_proba, y_cal)
     iso_proba = iso.predict(raw_eval_proba)
 
-    # --- Evaluate calibration ---
+    # --- Venn-Abers with k-fold CV calibration data ---
+    log.info(f"\n  Generating Venn-Abers calibration data via 5-fold CV on training set...")
+    # Use only non-augmented rows for k-fold to avoid data leakage from mirrored fights
+    train_orig = train_all[~train_all["_augmented"]] if has_aug else train_all
+    X_train_orig = train_orig[feature_names].values
+    y_train_orig = train_orig["red_wins"].values
+
+    skf = StratifiedKFold(n_splits=5, shuffle=False)  # no shuffle to respect temporal ordering
+    oof_proba = np.full(len(train_orig), np.nan)
+
+    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X_train_orig, y_train_orig)):
+        fold_model = HistGradientBoostingClassifier(
+            max_iter=1000, max_depth=3, learning_rate=0.037,
+            max_features=0.65, min_samples_leaf=32, l2_regularization=4.4,
+            max_bins=128, early_stopping=True, n_iter_no_change=75,
+            validation_fraction=0.15, random_state=42,
+        )
+        fold_model.fit(X_train_orig[train_idx], y_train_orig[train_idx])
+        oof_proba[val_idx] = fold_model.predict_proba(X_train_orig[val_idx])[:, 1]
+        log.info(f"    Fold {fold_idx + 1}: train={len(train_idx)}, val={len(val_idx)}")
+
+    log.info(f"  Venn-Abers calibration samples: {np.sum(~np.isnan(oof_proba))}")
+
+    # Fit Venn-Abers on out-of-fold predictions
+    va = VennAbers()
+    oof_proba_2d = np.column_stack([1 - oof_proba, oof_proba])
+    va.fit(p_cal=oof_proba_2d, y_cal=y_train_orig)
+
+    # Get VA predictions on eval set
+    eval_proba_2d = np.column_stack([1 - raw_eval_proba, raw_eval_proba])
+    va_prime, va_p0p1 = va.predict_proba(p_test=eval_proba_2d)
+    va_proba = va_prime[:, 1]  # calibrated red_prob
+    va_p0 = va_p0p1[:, 0]     # lower bound
+    va_p1 = va_p0p1[:, 1]     # upper bound
+    va_widths = va_p1 - va_p0
+
+    log.info(f"  VA interval widths — mean: {va_widths.mean():.4f}, "
+             f"median: {np.median(va_widths):.4f}, p90: {np.percentile(va_widths, 90):.4f}")
+
+    # --- Isotonic regression with k-fold CV data ---
+    from sklearn.isotonic import IsotonicRegression as IR
+    iso_kfold = IR(y_min=0.01, y_max=0.99, out_of_bounds="clip")
+    iso_kfold.fit(oof_proba, y_train_orig)
+    iso_kfold_proba = iso_kfold.predict(raw_eval_proba)
+    log.info(f"  Isotonic (k-fold) fitted on {len(oof_proba)} out-of-fold samples")
+
+    # --- Evaluate all calibration methods ---
     methods = [
         ("Raw (uncalibrated)", raw_eval_proba),
         ("Platt scaling", platt_proba),
         ("Isotonic regression", iso_proba),
+        ("Isotonic (k-fold)", iso_kfold_proba),
+        ("Venn-Abers (k-fold)", va_proba),
     ]
     log.info(f"\n  {'Method':<25s} {'Acc':>7s} {'AUC':>7s} {'LogLoss':>8s} {'Brier':>7s}")
     log.info(f"  {'-'*58}")
@@ -1604,6 +1657,8 @@ def calibrate_model(matchup: pd.DataFrame, feature_names: list[str],
         "base_model": gbt_model,
         "platt": platt,
         "isotonic": iso,
+        "isotonic_kfold": iso_kfold,
+        "venn_abers": va,
         "features": feature_names,
         "best_method": best_method,
     }
@@ -1611,23 +1666,23 @@ def calibrate_model(matchup: pd.DataFrame, feature_names: list[str],
         pickle.dump(calibrated, f)
     log.info(f"\n  Saved calibrated model to {MODEL_DIR / 'calibrated_model.pkl'}")
 
-    # Return calibrated probabilities for betting sim — use FULL test set
-    # (fit calibration on first half, apply to full test for betting sim)
-    X_test_full = test[feature_names].values
-    y_test_full = test["red_wins"].values
-    raw_full = gbt_model.predict_proba(X_test_full)[:, 1]
-    platt_full = platt.predict_proba(raw_full.reshape(-1, 1))[:, 1]
-    iso_full = iso.predict(raw_full)
-    best_full = platt_full if "Platt" in best_method else (iso_full if "Isotonic" in best_method else raw_full)
+    # Return calibrated probabilities for betting sim — eval set only
+    raw_eval = raw_eval_proba
+    platt_eval = platt.predict_proba(raw_eval.reshape(-1, 1))[:, 1]
+    iso_eval = iso.predict(raw_eval)
 
     return {
-        "raw_proba": raw_full,
-        "platt_proba": platt_full,
-        "iso_proba": iso_full,
-        "best_proba": best_full,
+        "raw_proba": raw_eval,
+        "platt_proba": platt_eval,
+        "iso_proba": iso_eval,
+        "iso_kfold_proba": iso_kfold_proba,
+        "va_proba": va_proba,
+        "va_p0": va_p0,
+        "va_p1": va_p1,
         "best_method": best_method,
-        "test_y": y_test_full,
-        "test_df": test,
+        "test_y": y_eval,
+        "test_df": eval_set,
+        "venn_abers": va,
     }
 
 
@@ -1671,7 +1726,11 @@ def betting_simulation(cal_results: dict) -> None:
     raw_proba_odds = cal_results["raw_proba"][has_odds.values]
     platt_proba_odds = cal_results["platt_proba"][has_odds.values]
     iso_proba_odds = cal_results["iso_proba"][has_odds.values]
-    best_proba_odds = cal_results["best_proba"][has_odds.values]
+    iso_kfold_proba_odds = cal_results["iso_kfold_proba"][has_odds.values]
+    va_proba_odds = cal_results["va_proba"][has_odds.values]
+    va_p0_odds = cal_results["va_p0"][has_odds.values]
+    va_p1_odds = cal_results["va_p1"][has_odds.values]
+    va_widths_odds = va_p1_odds - va_p0_odds
 
     log.info(f"  Test fights with odds: {len(odds_test)}")
     log.info(f"  Test period: {odds_test['date'].min()} to {odds_test['date'].max()}")
@@ -1701,6 +1760,8 @@ def betting_simulation(cal_results: dict) -> None:
         ("Raw (uncalibrated)", raw_proba_odds),
         ("Platt scaling", platt_proba_odds),
         ("Isotonic regression", iso_proba_odds),
+        ("Isotonic (k-fold)", iso_kfold_proba_odds),
+        ("Venn-Abers (k-fold)", va_proba_odds),
     ]
 
     for method_name, model_proba in proba_methods:
@@ -1841,6 +1902,119 @@ def betting_simulation(cal_results: dict) -> None:
         log.info(f"    Return: {(bankroll - start) / start * 100:+.2f}%")
         log.info(f"    Max drawdown: {max_dd:.1%}")
 
+    # --- VA interval-filtered strategies ---
+    log.info(f"\n{'─'*60}")
+    log.info(f"  Venn-Abers Interval-Filtered Strategies")
+    log.info(f"{'─'*60}")
+    log.info(f"  VA interval widths — mean: {va_widths_odds.mean():.4f}, "
+             f"median: {np.median(va_widths_odds):.4f}, "
+             f"p75: {np.percentile(va_widths_odds, 75):.4f}, "
+             f"p90: {np.percentile(va_widths_odds, 90):.4f}, "
+             f"max: {va_widths_odds.max():.4f}")
+
+    # Strategy: VA point estimate edge > 3% + interval width filter
+    log.info(f"\n  --- VA Point Estimate Edge (>3%) + Interval Filter ---")
+    for max_width in [0.005, 0.01, 0.02, 0.05, 0.10, 1.0]:
+        narrow = va_widths_odds < max_width
+        profit, bets, wins = 0, 0, 0
+        for i in range(len(odds_test)):
+            if not narrow[i]:
+                continue
+            edge_red = va_proba_odds[i] - market_red_fair[i]
+            edge_blue = (1 - va_proba_odds[i]) - market_blue_fair[i]
+            ev_red = va_proba_odds[i] * odds_red_dec[i]
+            ev_blue = (1 - va_proba_odds[i]) * odds_blue_dec[i]
+
+            if edge_red > 0.03 and ev_red > 1.0:
+                bets += 1
+                if odds_y[i] == 1:
+                    profit += (odds_red_dec[i] - 1) * 100
+                    wins += 1
+                else:
+                    profit -= 100
+            elif edge_blue > 0.03 and ev_blue > 1.0:
+                bets += 1
+                if odds_y[i] == 0:
+                    profit += (odds_blue_dec[i] - 1) * 100
+                    wins += 1
+                else:
+                    profit -= 100
+
+        label = f"<{max_width:.1%}" if max_width < 1.0 else "no filter"
+        if bets > 0:
+            roi = profit / (bets * 100) * 100
+            log.info(f"    interval {label:>12s}: {bets:>4d} bets, "
+                     f"{wins} wins ({wins/bets:.1%}), ${profit:>+10.2f}, ROI: {roi:+.2f}%")
+        else:
+            log.info(f"    interval {label:>12s}: no bets (0/{int(narrow.sum())} fights pass filter)")
+
+    # Strategy: Conservative edge using va_prob_low (p0) instead of point estimate
+    log.info(f"\n  --- Conservative Edge (va_prob_low) vs Point Estimate ---")
+    for min_edge in [0.03, 0.05, 0.08, 0.10, 0.15]:
+        # Conservative: use p0 (lower bound) for edge calculation
+        c_profit, c_bets, c_wins = 0, 0, 0
+        # Normal: use point estimate (for comparison)
+        n_profit, n_bets, n_wins = 0, 0, 0
+        for i in range(len(odds_test)):
+            va_red = va_proba_odds[i]
+            va_blue = 1 - va_red
+            p0_red = va_p0_odds[i]   # conservative red prob
+            p0_blue = 1 - va_p1_odds[i]  # conservative blue prob (1 - upper bound of red)
+
+            # Normal edge (point estimate)
+            edge_red_n = va_red - market_red_fair[i]
+            edge_blue_n = va_blue - market_blue_fair[i]
+            ev_red_n = va_red * odds_red_dec[i]
+            ev_blue_n = va_blue * odds_blue_dec[i]
+
+            if edge_red_n > min_edge and ev_red_n > 1.0:
+                n_bets += 1
+                if odds_y[i] == 1:
+                    n_profit += (odds_red_dec[i] - 1) * 100
+                    n_wins += 1
+                else:
+                    n_profit -= 100
+            elif edge_blue_n > min_edge and ev_blue_n > 1.0:
+                n_bets += 1
+                if odds_y[i] == 0:
+                    n_profit += (odds_blue_dec[i] - 1) * 100
+                    n_wins += 1
+                else:
+                    n_profit -= 100
+
+            # Conservative edge (use p0/lower bound)
+            edge_red_c = p0_red - market_red_fair[i]
+            edge_blue_c = p0_blue - market_blue_fair[i]
+            ev_red_c = p0_red * odds_red_dec[i]
+            ev_blue_c = p0_blue * odds_blue_dec[i]
+
+            if edge_red_c > min_edge and ev_red_c > 1.0:
+                c_bets += 1
+                if odds_y[i] == 1:
+                    c_profit += (odds_red_dec[i] - 1) * 100
+                    c_wins += 1
+                else:
+                    c_profit -= 100
+            elif edge_blue_c > min_edge and ev_blue_c > 1.0:
+                c_bets += 1
+                if odds_y[i] == 0:
+                    c_profit += (odds_blue_dec[i] - 1) * 100
+                    c_wins += 1
+                else:
+                    c_profit -= 100
+
+        log.info(f"\n    Edge > {min_edge:.0%}:")
+        if n_bets > 0:
+            log.info(f"      Point estimate: {n_bets:>4d} bets, {n_wins} wins ({n_wins/n_bets:.1%}), "
+                     f"${n_profit:>+10.2f}, ROI: {n_profit/(n_bets*100)*100:+.2f}%")
+        else:
+            log.info(f"      Point estimate: no bets")
+        if c_bets > 0:
+            log.info(f"      Conservative:   {c_bets:>4d} bets, {c_wins} wins ({c_wins/c_bets:.1%}), "
+                     f"${c_profit:>+10.2f}, ROI: {c_profit/(c_bets*100)*100:+.2f}%")
+        else:
+            log.info(f"      Conservative:   no bets")
+
     # --- Final summary ---
     log.info(f"\n{'='*60}")
     log.info(f"BETTING SUMMARY")
@@ -1848,7 +2022,7 @@ def betting_simulation(cal_results: dict) -> None:
     log.info(f"  Test period: {odds_test['date'].min()} to {odds_test['date'].max()}")
     log.info(f"  Total fights with odds: {len(odds_test)}")
     log.info(f"  Market (vig-adjusted) accuracy: {accuracy_score(odds_y, (market_red_fair >= 0.5).astype(int)):.4f}")
-    log.info(f"  Model accuracy: {accuracy_score(odds_y, (best_proba_odds >= 0.5).astype(int)):.4f}")
+    log.info(f"  VA model accuracy: {accuracy_score(odds_y, (va_proba_odds >= 0.5).astype(int)):.4f}")
     log.info(f"  Best calibration method: {cal_results['best_method']}")
     log.info(f"  Key insight: profitability requires finding +EV spots where")
     log.info(f"  model_prob * decimal_odds > 1.0 (positive expected value)")
@@ -1910,9 +2084,7 @@ def generate_predictions():
         cal = pickle.load(f)
 
     base_model = cal["base_model"]
-    platt = cal["platt"]
     features = cal["features"]
-    best_method = cal["best_method"]
 
     # Build features for all fights
     df, round_data = load_fight_data()
@@ -1969,11 +2141,13 @@ def generate_predictions():
     X = matchup[features].values
     raw_proba = base_model.predict_proba(X)[:, 1]
 
-    if "Platt" in best_method:
-        calibrated_proba = platt.predict_proba(raw_proba.reshape(-1, 1))[:, 1]
-    else:
-        iso = cal["isotonic"]
-        calibrated_proba = iso.predict(raw_proba)
+    # Use raw GBT probabilities for all-fights predictions (frontend display).
+    # Calibrated model (VA) is saved separately for future picks/betting page.
+    cal_proba = raw_proba
+    va_low = None
+    va_high = None
+    log.info(f"  Using raw GBT probabilities for {len(raw_proba)} predictions")
+    log.info(f"  (Calibrated model saved separately for future picks page)")
 
     # Compute SHAP values for the GBT model
     import shap
@@ -2001,15 +2175,19 @@ def generate_predictions():
 
         count = 0
         shap_count = 0
-        for i, (fight_id, prob) in enumerate(zip(matchup.index, calibrated_proba)):
+        for i, (fight_id, prob) in enumerate(zip(matchup.index, cal_proba)):
             predicted_winner = "red" if prob >= 0.5 else "blue"
             confidence = abs(prob - 0.5)
-            db.add(UFCFightPrediction(
+            pred = UFCFightPrediction(
                 fight_id=int(fight_id),
                 predicted_winner=predicted_winner,
                 confidence=round(float(confidence), 4),
                 red_prob=round(float(prob), 4),
-            ))
+            )
+            if va_low is not None:
+                pred.va_prob_low = round(float(va_low[i]), 4)
+                pred.va_prob_high = round(float(va_high[i]), 4)
+            db.add(pred)
             count += 1
 
             # Store top 20 SHAP values for this fight

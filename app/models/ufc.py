@@ -219,6 +219,8 @@ class UFCFightPrediction(TimestampMixin, Base):
     predicted_winner: Mapped[str] = mapped_column(String(4))  # 'red' or 'blue'
     confidence: Mapped[float] = mapped_column(Float)  # 0.0 to 0.5
     red_prob: Mapped[float] = mapped_column(Float)  # calibrated probability red wins
+    va_prob_low: Mapped[float | None] = mapped_column(Float, nullable=True)  # Venn-Abers p0 (lower bound)
+    va_prob_high: Mapped[float | None] = mapped_column(Float, nullable=True)  # Venn-Abers p1 (upper bound)
 
     fight: Mapped["UFCFight"] = relationship()
 
