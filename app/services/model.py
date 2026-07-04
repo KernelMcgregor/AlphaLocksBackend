@@ -2163,14 +2163,9 @@ def generate_predictions():
     from app.models.ufc import UFCFightPrediction, UFCFightShapValue
     db = SessionLocal()
     try:
-        # Delete in batches to avoid CockroachDB serialization errors
         for Model in [UFCFightShapValue, UFCFightPrediction]:
-            while True:
-                ids = [r[0] for r in db.query(Model.id).limit(5000).all()]
-                if not ids:
-                    break
-                db.query(Model).filter(Model.id.in_(ids)).delete(synchronize_session=False)
-                db.commit()
+            db.query(Model).delete(synchronize_session=False)
+            db.commit()
             log.info(f"  Cleared {Model.__tablename__}")
 
         count = 0
@@ -2204,7 +2199,7 @@ def generate_predictions():
                 ))
                 shap_count += 1
 
-            # Commit every 100 fights to avoid CockroachDB transaction size limits
+            # Commit every 100 fights to avoid large transactions
             if count % 100 == 0:
                 db.commit()
 

@@ -1,16 +1,7 @@
 import datetime as dt
 from typing import Optional
 
-from pydantic import BaseModel, field_serializer
-
-
-class BigIntStr(BaseModel):
-    """Mixin: serialize all int IDs as strings so JS doesn't lose precision on CockroachDB big IDs."""
-
-    @field_serializer("id", check_fields=False)
-    @classmethod
-    def serialize_id(cls, v):
-        return str(v) if v is not None else None
+from pydantic import BaseModel
 
 
 # --- Fighters ---
@@ -36,7 +27,7 @@ class UFCFighterCreate(UFCFighterBase):
     pass
 
 
-class UFCFighterResponse(BigIntStr, UFCFighterBase):
+class UFCFighterResponse(UFCFighterBase):
     id: int
     created_at: dt.datetime
     updated_at: dt.datetime
@@ -57,7 +48,7 @@ class UFCEventCreate(UFCEventBase):
     pass
 
 
-class UFCEventResponse(BigIntStr, UFCEventBase):
+class UFCEventResponse(UFCEventBase):
     id: int
     created_at: dt.datetime
 
@@ -85,17 +76,13 @@ class UFCFightBase(BaseModel):
     fight_time_seconds: Optional[int] = None
     max_fight_time_seconds: Optional[int] = None
 
-    @field_serializer("event_id", "red_fighter_id", "blue_fighter_id", "winner_id", check_fields=False)
-    @classmethod
-    def serialize_fk_ids(cls, v):
-        return str(v) if v is not None else None
 
 
 class UFCFightCreate(UFCFightBase):
     pass
 
 
-class UFCFightResponse(BigIntStr, UFCFightBase):
+class UFCFightResponse(UFCFightBase):
     id: int
     created_at: dt.datetime
     updated_at: dt.datetime
@@ -215,10 +202,6 @@ class UFCFightStatsBase(BaseModel):
     rev15: Optional[float] = None
     rev_abs15: Optional[float] = None
 
-    @field_serializer("fight_id", "fighter_id", check_fields=False)
-    @classmethod
-    def serialize_stat_fk_ids(cls, v):
-        return str(v) if v is not None else None
 
 
 class UFCFightStatsCreate(UFCFightStatsBase):
@@ -227,7 +210,7 @@ class UFCFightStatsCreate(UFCFightStatsBase):
 
 # --- Fighter Career Stats ---
 
-class UFCFighterCareerStatsResponse(BigIntStr, BaseModel):
+class UFCFighterCareerStatsResponse(BaseModel):
     id: int
     fighter_id: int
 
@@ -336,15 +319,10 @@ class UFCFighterCareerStatsResponse(BigIntStr, BaseModel):
     # Metadata
     computed_at: Optional[dt.datetime] = None
 
-    @field_serializer("fighter_id", check_fields=False)
-    @classmethod
-    def serialize_fighter_id(cls, v):
-        return str(v) if v is not None else None
-
     model_config = {"from_attributes": True}
 
 
-class UFCFightStatsResponse(BigIntStr, UFCFightStatsBase):
+class UFCFightStatsResponse(UFCFightStatsBase):
     id: int
     created_at: dt.datetime
     updated_at: dt.datetime
