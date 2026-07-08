@@ -153,35 +153,35 @@ def trigger_scrape(
     background_tasks: BackgroundTasks,
     mode: str = Query(default="full", pattern="^(full|update)$"),
 ):
-    from app.services.scraper import run_scrape
+    from app.services.ufc.scraper import run_scrape
 
     return _start_task(background_tasks, f"Scrape ({mode})", run_scrape, mode=mode)
 
 
 @router.post("/scrape-upcoming", dependencies=[Depends(require_admin_key)])
 def trigger_upcoming_scrape(background_tasks: BackgroundTasks):
-    from app.services.scraper import scrape_upcoming
+    from app.services.ufc.scraper import scrape_upcoming
 
     return _start_task(background_tasks, "Scrape Upcoming", scrape_upcoming)
 
 
 @router.post("/scrape-recent", dependencies=[Depends(require_admin_key)])
 def trigger_recent_update(background_tasks: BackgroundTasks):
-    from app.services.scraper import run_recent_update
+    from app.services.ufc.scraper import run_recent_update
 
     return _start_task(background_tasks, "Recent Update", run_recent_update)
 
 
 @router.post("/scrape-last-event", dependencies=[Depends(require_admin_key)])
 def trigger_scrape_last_event(background_tasks: BackgroundTasks):
-    from app.services.scraper import run_scrape_last_event
+    from app.services.ufc.scraper import run_scrape_last_event
 
     return _start_task(background_tasks, "Scrape Last Event", run_scrape_last_event)
 
 
 @router.post("/scrape-live-odds", dependencies=[Depends(require_admin_key)])
 def trigger_live_odds_scrape(background_tasks: BackgroundTasks):
-    from app.services.odds_scraper import run_live_odds_scrape
+    from app.services.ufc.odds_scraper import run_live_odds_scrape
 
     return _start_task(background_tasks, "Live Odds", run_live_odds_scrape)
 
@@ -191,14 +191,14 @@ def trigger_historical_odds_scrape(
     background_tasks: BackgroundTasks,
     since: int = Query(default=2022),
 ):
-    from app.services.odds_scraper import run_odds_scrape
+    from app.services.ufc.odds_scraper import run_odds_scrape
 
     return _start_task(background_tasks, f"Historical Odds (since {since})", run_odds_scrape, since)
 
 
 @router.post("/scrape-bovada", dependencies=[Depends(require_admin_key)])
 def trigger_bovada_scrape(background_tasks: BackgroundTasks):
-    from app.services.bovada_scraper import scrape_bovada_method_odds
+    from app.services.ufc.bovada_scraper import scrape_bovada_method_odds
 
     return _start_task(background_tasks, "Bovada Odds", scrape_bovada_method_odds)
 
@@ -208,7 +208,7 @@ def trigger_profile_scrape(
     background_tasks: BackgroundTasks,
     images: bool = Query(default=True),
 ):
-    from app.services.ufc_profile_scraper import run as run_profiles
+    from app.services.ufc.ufc_profile_scraper import run as run_profiles
 
     return _start_task(background_tasks, "Fighter Profiles", run_profiles, images=images)
 
@@ -219,35 +219,35 @@ def trigger_profile_scrape(
 
 @router.post("/train-model", dependencies=[Depends(require_admin_key)])
 def trigger_model_training(background_tasks: BackgroundTasks):
-    from app.services.model import run as run_training
+    from app.services.ufc.model import run as run_training
 
     return _start_task(background_tasks, "Train Winner Model", run_training)
 
 
 @router.post("/train-method-model", dependencies=[Depends(require_admin_key)])
 def trigger_method_model_training(background_tasks: BackgroundTasks):
-    from app.services.method_model import run as run_method_training
+    from app.services.ufc.method_model import run as run_method_training
 
     return _start_task(background_tasks, "Train Method Model", run_method_training)
 
 
 @router.post("/generate-predictions", dependencies=[Depends(require_admin_key)])
 def trigger_predictions(background_tasks: BackgroundTasks):
-    from app.services.model import generate_predictions
+    from app.services.ufc.model import generate_predictions
 
     return _start_task(background_tasks, "Generate Predictions", generate_predictions)
 
 
 @router.post("/generate-method-predictions", dependencies=[Depends(require_admin_key)])
 def trigger_method_predictions(background_tasks: BackgroundTasks):
-    from app.services.method_model import generate_method_predictions
+    from app.services.ufc.method_model import generate_method_predictions
 
     return _start_task(background_tasks, "Method Predictions", generate_method_predictions)
 
 
 @router.post("/generate-glicko", dependencies=[Depends(require_admin_key)])
 def trigger_glicko(background_tasks: BackgroundTasks):
-    from app.services.glicko_service import compute_and_save_snapshots
+    from app.services.ufc.glicko_service import compute_and_save_snapshots
     from app.database import SessionLocal
 
     def _run():
@@ -262,8 +262,8 @@ def trigger_glicko(background_tasks: BackgroundTasks):
 
 @router.post("/generate-rankings", dependencies=[Depends(require_admin_key)])
 def trigger_rankings(background_tasks: BackgroundTasks):
-    from app.services.ranking_service import generate_rankings
-    from app.services.points_ranking_service import generate_rankings as generate_points_rankings
+    from app.services.ufc.ranking_service import generate_rankings
+    from app.services.ufc.points_ranking_service import generate_rankings as generate_points_rankings
 
     def _run_all():
         generate_rankings()
@@ -282,7 +282,7 @@ def trigger_preview_generation(
     force: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
-    from app.services.preview_service import generate_preview
+    from app.services.ufc.preview_service import generate_preview
 
     preview = generate_preview(fight_id, db, force=force)
     if not preview:
@@ -295,7 +295,7 @@ def trigger_all_previews(
     background_tasks: BackgroundTasks,
     force: bool = Query(default=False),
 ):
-    from app.services.preview_service import generate_all_upcoming_previews
+    from app.services.ufc.preview_service import generate_all_upcoming_previews
 
     return _start_task(background_tasks, "Generate All Previews", generate_all_upcoming_previews, force=force)
 

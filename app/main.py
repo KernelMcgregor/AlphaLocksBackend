@@ -108,7 +108,7 @@ def scheduled_scrape():
     log = logging.getLogger("scheduled_scrape")
     from app.routers.admin import record_run
 
-    from app.services.scraper import run_recent_update
+    from app.services.ufc.scraper import run_recent_update
     try:
         run_recent_update()
         record_run("Recent Update", "done")
@@ -117,7 +117,7 @@ def scheduled_scrape():
         record_run("Recent Update", "error", str(e))
 
     try:
-        from app.services.model import generate_predictions
+        from app.services.ufc.model import generate_predictions
         generate_predictions()
         log.info("Winner predictions regenerated")
         record_run("Generate Predictions", "done")
@@ -126,7 +126,7 @@ def scheduled_scrape():
         record_run("Generate Predictions", "error", str(e))
 
     try:
-        from app.services.method_model import generate_method_predictions
+        from app.services.ufc.method_model import generate_method_predictions
         generate_method_predictions()
         log.info("Method predictions regenerated")
         record_run("Method Predictions", "done")
@@ -135,14 +135,14 @@ def scheduled_scrape():
         record_run("Method Predictions", "error", str(e))
 
     try:
-        from app.services.ranking_service import generate_rankings
+        from app.services.ufc.ranking_service import generate_rankings
         generate_rankings()
         log.info("Glicko ratings computed (for prediction features + dimension profiles)")
     except Exception as e:
         log.error(f"Glicko rating computation failed: {e}")
 
     try:
-        from app.services.points_ranking_service import generate_rankings as generate_points_rankings
+        from app.services.ufc.points_ranking_service import generate_rankings as generate_points_rankings
         generate_points_rankings()
         log.info("Points + Elo fighter rankings generated")
         record_run("Generate Rankings", "done")
@@ -151,7 +151,7 @@ def scheduled_scrape():
         record_run("Generate Rankings", "error", str(e))
 
     try:
-        from app.services.preview_service import generate_all_upcoming_previews
+        from app.services.ufc.preview_service import generate_all_upcoming_previews
         generate_all_upcoming_previews()
         log.info("Fight previews generated")
         record_run("Generate All Previews", "done")
@@ -167,7 +167,7 @@ def scheduled_bovada_scrape():
     log = logging.getLogger("scheduled_bovada")
     from app.routers.admin import record_run
     try:
-        from app.services.bovada_scraper import scrape_bovada_method_odds
+        from app.services.ufc.bovada_scraper import scrape_bovada_method_odds
         scrape_bovada_method_odds()
         log.info("Bovada method odds scraped")
         record_run("Bovada Odds", "done")
