@@ -13,6 +13,5 @@ numpy>=1.26.0
 pandas>=2.1.0
 scikit-learn==1.8.0
 shap>=0.43.0
-torch>=2.1.0
 optuna>=4.0.0
 venn-abers>=1.5.0
