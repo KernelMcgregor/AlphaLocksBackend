@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     ODDS_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
     ANTHROPIC_MODEL: str = "claude-haiku-4-5-20251001"
+    DEEPSEEK_API_KEY: str = ""
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
+    PREVIEW_MODEL: str = "deepseek-chat"
     ADMIN_API_KEY: str = ""
 
     @field_validator("CORS_ORIGINS", mode="before")

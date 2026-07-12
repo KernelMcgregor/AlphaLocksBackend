@@ -1,14 +1,14 @@
 """
-AI-powered fight preview generation using Claude API.
+AI-powered fight preview generation using DeepSeek API (OpenAI-compatible).
 
-Gathers fighter data, predictions, SHAP values, and odds to generate
-rich markdown previews for upcoming UFC fights.
+Gathers fighter data, Glicko component ratings, predictions, SHAP values,
+and odds to generate rich markdown previews for upcoming UFC fights.
 """
 
 import logging
 import time
 
-import anthropic
+from openai import OpenAI
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -17,7 +17,8 @@ from app.database import SessionLocal
 from app.models.ufc import (
     UFCEvent, UFCFight, UFCFighter, UFCFightOdds,
     UFCFightPrediction, UFCFightPreview, UFCFightShapValue,
-    UFCFightStats, UFCMethodPrediction,
+    UFCFightStats, UFCGlickoSnapshot, UFCFighterRanking,
+    UFCMethodPrediction,
 )
 
 log = logging.getLogger(__name__)
@@ -162,6 +163,77 @@ def _scheduled_rounds(fight) -> int | None:
     return None
 
 
+GLICKO_DIMS = ["pts", "ko", "kod", "sub", "subd", "td", "tdd", "ctrl",
+                "str_vol", "str_acc", "str_def", "dist", "clinch", "gnd", "durability"]
+
+GLICKO_LABELS = {
+    "pts": "Round Winning", "ko": "KO Power", "kod": "KO Defense",
+    "sub": "Submission Offense", "subd": "Submission Defense",
+    "td": "Takedown Offense", "tdd": "Takedown Defense",
+    "ctrl": "Control Time", "str_vol": "Strike Volume",
+    "str_acc": "Strike Accuracy", "str_def": "Strike Defense",
+    "dist": "Distance Striking", "clinch": "Clinch Striking",
+    "gnd": "Ground Striking", "durability": "Durability",
+}
+
+
+def _percentile_tier(pct: float) -> str:
+    if pct >= 90:
+        return "Elite"
+    if pct >= 70:
+        return "Strong"
+    if pct >= 40:
+        return "Average"
+    if pct >= 20:
+        return "Below Avg"
+    return "Weak"
+
+
+def _get_glicko_data(db: Session, fight_id: int, fighter_id: int, weight_class: str | None) -> dict | None:
+    """Get Glicko snapshot and ranking data for a fighter."""
+    snapshot = (
+        db.query(UFCGlickoSnapshot)
+        .filter(UFCGlickoSnapshot.fight_id == fight_id, UFCGlickoSnapshot.fighter_id == fighter_id)
+        .first()
+    )
+    if not snapshot:
+        return None
+
+    ranking = (
+        db.query(UFCFighterRanking)
+        .filter(UFCFighterRanking.fighter_id == fighter_id)
+        .first()
+    ) if weight_class else None
+
+    # Parse percentile profile from ranking
+    import json
+    percentiles = {}
+    if ranking and ranking.feature_profile:
+        try:
+            profile = json.loads(ranking.feature_profile)
+            percentiles = {k: v.get("percentile", 50) for k, v in profile.items() if isinstance(v, dict) and "percentile" in v}
+        except (json.JSONDecodeError, AttributeError):
+            pass
+
+    ratings = {}
+    for dim in GLICKO_DIMS:
+        val = getattr(snapshot, dim, None)
+        pct = percentiles.get(dim)
+        ratings[dim] = {
+            "label": GLICKO_LABELS[dim],
+            "rating": round(val, 1) if val is not None else None,
+            "percentile": round(pct, 1) if pct is not None else None,
+            "tier": _percentile_tier(pct) if pct is not None else None,
+        }
+
+    result = {"dimensions": ratings}
+    if ranking:
+        result["division_rank"] = ranking.rank
+        result["expected_win_rate"] = round(ranking.score * 100, 1)
+
+    return result
+
+
 def gather_fight_context(fight_id: int, db: Session) -> dict | None:
     """Collect all data needed for a fight preview."""
     fight = db.query(UFCFight).filter(UFCFight.id == fight_id).first()
@@ -251,17 +323,79 @@ def gather_fight_context(fight_id: int, db: Session) -> dict | None:
             }
             for o in odds_rows
         ],
+        "red_glicko": _get_glicko_data(db, fight_id, red.id, fight.weight_class),
+        "blue_glicko": _get_glicko_data(db, fight_id, blue.id, fight.weight_class),
     }
 
 
+def _glicko_block(label: str, glicko: dict | None) -> str:
+    """Format Glicko data for the prompt."""
+    if not glicko:
+        return f"**{label} GLICKO RATINGS:** Not available"
+
+    lines = [f"**{label} GLICKO COMPONENT RATINGS:**"]
+
+    if "division_rank" in glicko:
+        lines.append(f"- Division Rank: #{glicko['division_rank']}, Expected Win Rate: {glicko['expected_win_rate']}%")
+
+    dims = glicko["dimensions"]
+    groups = {
+        "Striking": ["str_vol", "str_acc", "str_def", "dist", "clinch"],
+        "Power & Durability": ["ko", "kod", "durability"],
+        "Grappling": ["td", "tdd", "ctrl", "sub", "subd", "gnd"],
+        "Overall": ["pts"],
+    }
+    for group_name, keys in groups.items():
+        parts = []
+        for k in keys:
+            d = dims.get(k)
+            if d and d["percentile"] is not None:
+                parts.append(f"{d['label']}: {d['tier']} ({d['percentile']:.0f}th pct, rating {d['rating']})")
+        if parts:
+            lines.append(f"- {group_name}: {'; '.join(parts)}")
+
+    return "\n".join(lines)
+
+
+def _glicko_matchup_edges(red_glicko: dict | None, blue_glicko: dict | None) -> str:
+    """Compute biggest Glicko differentials between fighters."""
+    if not red_glicko or not blue_glicko:
+        return ""
+
+    edges = []
+    for dim in GLICKO_DIMS:
+        rd = red_glicko["dimensions"].get(dim, {})
+        bd = blue_glicko["dimensions"].get(dim, {})
+        if rd.get("rating") is not None and bd.get("rating") is not None:
+            diff = rd["rating"] - bd["rating"]
+            r_pct = rd.get("percentile", "?")
+            b_pct = bd.get("percentile", "?")
+            edges.append((abs(diff), dim, diff, r_pct, b_pct))
+
+    edges.sort(reverse=True)
+    if not edges:
+        return ""
+
+    lines = ["**KEY MATCHUP EDGES (biggest Glicko differentials):**"]
+    for _, dim, diff, r_pct, b_pct in edges[:6]:
+        label = GLICKO_LABELS[dim]
+        if diff > 0:
+            lines.append(f"- Red {label} advantage: +{diff:.0f} rating pts ({r_pct:.0f}th vs {b_pct:.0f}th percentile)")
+        else:
+            lines.append(f"- Blue {label} advantage: +{abs(diff):.0f} rating pts ({b_pct:.0f}th vs {r_pct:.0f}th percentile)")
+
+    return "\n".join(lines)
+
+
 def build_preview_prompt(context: dict) -> tuple[str, str]:
-    """Build system and user prompts for Claude API."""
+    """Build system and user prompts for the preview LLM."""
     system = """You are an expert MMA analyst writing a pre-fight preview for a sports analytics platform.
 
 Write an analytical preview in markdown. Be specific with data. Reference actual stats, records, and numbers from the data provided. Do not use generic filler.
 
 Rules:
-- Use the model feature data to inform your analysis, but never say "SHAP", "SHAP value", "feature importance", or reference model internals. Present insights as your own fight analysis grounded in the stats (e.g. instead of "the age difference SHAP value of -0.3016 suggests..." say "At 38, Pereira's age could be a factor as he moves up to heavyweight").
+- Use the Glicko component ratings to identify each fighter's strengths and weaknesses across 15 skill dimensions. Reference percentile rankings and tiers (Elite, Strong, Average, Below Avg, Weak) to quantify skill edges. Always back up a Glicko insight with concrete fight stats from the recent fights data. For example: "Fighter A's Elite striking defense (94th percentile) is reflected in his 68% significant strike defense across his last 5 fights."
+- Use the model feature data to inform your analysis, but never say "SHAP", "SHAP value", "feature importance", "Glicko", "rating system", "component rating", or reference model internals. Present insights as your own fight analysis grounded in the stats. Translate Glicko tiers into natural analyst language (e.g. "elite-level takedown defense", "one of the division's best chins", "above-average submission threat").
 - Use bold sparingly, only for section headers. Do not bold phrases or words within paragraphs, except for the final prediction sentence in the last section.
 - Never use em dashes (the long dash). Use commas, periods, or semicolons instead.
 - When referring to time since last fight, convert days into natural units: use "X months" for 30+ days, "X weeks" for 7-29 days, "X days" only for less than a week.
@@ -279,13 +413,13 @@ The one-liner MUST be original and specific to this fight. Reference a concrete 
 A markdown table comparing key attributes: record, age, height, reach, stance.
 
 ## [Red Fighter Name]
-Analysis of recent form using their last few fights. You can include a table of recent results if it supports your point.
+Analysis of recent form using their last few fights. Reference their skill profile from the rating data, backed by concrete stats from recent fights. You can include a table of recent results if it supports your point.
 
 ## [Blue Fighter Name]
 Same format as above.
 
 ## Key Factors
-Write this as flowing prose, not a bulleted list. Weave 3-5 factors together into a cohesive paragraph or two that tells the story of how this fight will be decided. Ground these in the data: striking rates, takedown numbers, finish rates, age, reach advantages, quality of opposition. Use the model's top features as a guide but describe them as fight dynamics, not model outputs. The factors should build a narrative that supports the predicted winner. You can acknowledge the opponent's strengths but frame them as insufficient to overcome the pick.
+Write this as flowing prose, not a bulleted list. Weave 3-5 factors together into a cohesive paragraph or two that tells the story of how this fight will be decided. Use the matchup edges data to identify the biggest skill differentials, and ground each one in concrete stats: striking rates, takedown numbers, finish rates, knockdowns, submission attempts, control time, age, reach advantages, quality of opposition. The factors should build a narrative that supports the predicted winner. You can acknowledge the opponent's strengths but frame them as insufficient to overcome the pick.
 
 ## How This Fight Plays Out
 A short narrative (3-4 sentences) describing how you see the fight unfolding. Your analysis MUST build the case for the predicted winner and predicted method throughout. Do not hedge, present the other fighter as equally likely, or undermine the prediction. You are making a confident pick. Include how it compares to the betting odds and note any value gaps between the model and the market.
@@ -340,15 +474,21 @@ Keep the total length to about 600-800 words."""
 {json.dumps(context['shap_values'], indent=2) if context['shap_values'] else 'No SHAP values available'}
 
 **ODDS:**
-{json.dumps(context['odds'], indent=2) if context['odds'] else 'No odds available'}"""
+{json.dumps(context['odds'], indent=2) if context['odds'] else 'No odds available'}
+
+{_glicko_block('RED', context.get('red_glicko'))}
+
+{_glicko_block('BLUE', context.get('blue_glicko'))}
+
+{_glicko_matchup_edges(context.get('red_glicko'), context.get('blue_glicko'))}"""
 
     return system, user
 
 
 def generate_preview(fight_id: int, db: Session, force: bool = False) -> UFCFightPreview | None:
     """Generate an AI preview for a single fight."""
-    if not settings.ANTHROPIC_API_KEY:
-        log.warning("ANTHROPIC_API_KEY not set, skipping preview generation")
+    if not settings.DEEPSEEK_API_KEY:
+        log.warning("DEEPSEEK_API_KEY not set, skipping preview generation")
         return None
 
     # Check existing
@@ -364,28 +504,33 @@ def generate_preview(fight_id: int, db: Session, force: bool = False) -> UFCFigh
     system_prompt, user_message = build_preview_prompt(context)
 
     try:
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        response = client.messages.create(
-            model=settings.ANTHROPIC_MODEL,
+        client = OpenAI(
+            api_key=settings.DEEPSEEK_API_KEY,
+            base_url=settings.DEEPSEEK_BASE_URL,
+        )
+        response = client.chat.completions.create(
+            model=settings.PREVIEW_MODEL,
             max_tokens=4096,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_message}],
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
         )
 
-        content = response.content[0].text
-        prompt_tokens = response.usage.input_tokens
-        completion_tokens = response.usage.output_tokens
+        content = response.choices[0].message.content
+        prompt_tokens = response.usage.prompt_tokens
+        completion_tokens = response.usage.completion_tokens
 
         if existing:
             existing.content = content
-            existing.model_used = settings.ANTHROPIC_MODEL
+            existing.model_used = settings.PREVIEW_MODEL
             existing.prompt_tokens = prompt_tokens
             existing.completion_tokens = completion_tokens
         else:
             existing = UFCFightPreview(
                 fight_id=fight_id,
                 content=content,
-                model_used=settings.ANTHROPIC_MODEL,
+                model_used=settings.PREVIEW_MODEL,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
             )

@@ -51,23 +51,23 @@ jobs:
 
       - name: Run post-event scrape (results + upcoming)
         if: steps.check.outputs.event_happened == 'true'
-        run: python -m app.services.scraper --recent
+        run: python -m app.services.ufc.scraper --recent
 
       - name: Generate winner predictions
         if: steps.check.outputs.event_happened == 'true'
-        run: python -m app.services.model --predict
+        run: python -m app.services.ufc.model --predict
 
       - name: Generate method predictions
         if: steps.check.outputs.event_happened == 'true'
-        run: python -m app.services.method_model --predict
+        run: python -m app.services.ufc.method_model --predict
 
       - name: Generate fighter rankings
         if: steps.check.outputs.event_happened == 'true'
-        run: python -m app.services.ranking_service
+        run: python -m app.services.ufc.ranking_service
 
       - name: Scrape live odds
         if: steps.check.outputs.event_happened == 'true'
-        run: python -m app.services.odds_scraper --live
+        run: python -m app.services.ufc.odds_scraper --live
 
       - name: Summary
         if: steps.check.outputs.event_happened == 'true'
@@ -107,4 +107,4 @@ jobs:
 
       - name: Refresh odds
         if: steps.odds_check.outputs.refresh == 'true'
-        run: python -m app.services.odds_scraper --live
+        run: python -m app.services.ufc.odds_scraper --live
