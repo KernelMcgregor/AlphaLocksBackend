@@ -1,5 +1,6 @@
 import logging
 import re
+import threading
 import uuid
 from datetime import datetime
 
@@ -22,6 +23,12 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 _tasks: dict[str, dict] = {}
 _last_runs: dict[str, dict] = {}
+
+# Labels with a task currently queued or running, guarded by _running_lock.
+# Several actions (e.g. Generate Predictions) clear a table before rebuilding it,
+# so two concurrent runs of the same label will corrupt or truncate the result.
+_running_labels: set[str] = set()
+_running_lock = threading.Lock()
 
 
 def record_run(label: str, status: str, error: str | None = None):
@@ -47,11 +54,27 @@ def _tracked_task(task_id: str, label: str, fn, *args, **kwargs):
         _tasks[task_id]["error"] = str(e)
         _tasks[task_id]["finished"] = datetime.utcnow().isoformat()
         record_run(label, "error", str(e))
+    finally:
+        with _running_lock:
+            _running_labels.discard(label)
 
 
 def _start_task(background_tasks: BackgroundTasks, label: str, fn, *args, **kwargs) -> dict:
+    # Claim the label here rather than in _tracked_task: background tasks only run
+    # after the response is sent, so two near-simultaneous requests would both get
+    # past a check made inside the worker.
+    with _running_lock:
+        if label in _running_labels:
+            raise HTTPException(409, f"{label} is already running")
+        _running_labels.add(label)
+
     task_id = uuid.uuid4().hex[:12]
-    background_tasks.add_task(_tracked_task, task_id, label, fn, *args, **kwargs)
+    try:
+        background_tasks.add_task(_tracked_task, task_id, label, fn, *args, **kwargs)
+    except Exception:
+        with _running_lock:
+            _running_labels.discard(label)
+        raise
     return {"message": f"{label} started in background", "task_id": task_id}
 
 
