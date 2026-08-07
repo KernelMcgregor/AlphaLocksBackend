@@ -1245,15 +1245,13 @@ def generate_method_predictions():
 
     model_path = METHOD_MODEL_DIR / "method_hierarchical_v1.pkl"
     if not model_path.exists():
-        log.error("No ensemble method model found. Run --hierarchical first.")
-        return
+        raise FileNotFoundError(f"No ensemble method model at {model_path}. Run --hierarchical first.")
 
     with open(model_path, "rb") as f:
         ens = pickle.load(f)
 
     if ens.get("type") != "ensemble":
-        log.error(f"Expected ensemble model, got type={ens.get('type')}. Re-run --hierarchical.")
-        return
+        raise ValueError(f"Expected ensemble model, got type={ens.get('type')}. Re-run --hierarchical.")
 
     # Build features
     df, round_data = load_fight_data()

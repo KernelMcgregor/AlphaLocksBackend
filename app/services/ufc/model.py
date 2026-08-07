@@ -1501,8 +1501,7 @@ def generate_predictions():
     # Load calibrated model
     cal_path = MODEL_DIR / "calibrated_model.pkl"
     if not cal_path.exists():
-        log.error("No calibrated model found. Run training first.")
-        return
+        raise FileNotFoundError(f"No calibrated model at {cal_path}. Run training first.")
 
     with open(cal_path, "rb") as f:
         cal = pickle.load(f)
