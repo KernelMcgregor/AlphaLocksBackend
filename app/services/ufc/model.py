@@ -17,10 +17,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import pickle
 import re
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import numpy as np
@@ -41,6 +42,10 @@ from sklearn.metrics import (
 from sklearn.preprocessing import StandardScaler
 
 from app.database import SessionLocal
+from app.services.ufc.market_anchor import MarketAnchor, devig
+from app.services.ufc.simulator import (
+    HazardRateModel, attach_fit_targets, build_simulator_frame, simulate,
+)
 from app.models.ufc import UFCEvent, UFCFight, UFCFighter, UFCFightStats
 
 MODEL_DIR = Path(__file__).parent.parent.parent.parent / "models" / "ufc" / "h2h"
@@ -51,7 +56,10 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(MODEL_DIR / "training.log", mode="w"),
+        # Append, don't truncate. mode="w" meant a later --predict run silently
+        # destroyed the training log that produced the published metrics, leaving
+        # every headline number unreproducible.
+        logging.FileHandler(MODEL_DIR / "training.log", mode="a"),
     ],
 )
 log = logging.getLogger("model")
@@ -60,6 +68,55 @@ log = logging.getLogger("model")
 # ===========================================================================
 # DATA LOADING
 # ===========================================================================
+
+ID_COLUMNS = (
+    "fight_id", "red_fighter_id", "blue_fighter_id", "winner_id", "stats_fighter_id",
+)
+
+
+def _coerce_id_columns(df: pd.DataFrame, rows: list[dict]) -> pd.DataFrame:
+    """Force ID columns to exact Python ints (object dtype), rebuilt from source rows.
+
+    These IDs are ~19-digit snowflakes, far beyond float64's 2**53 exact range. Any
+    column containing NULLs — `winner_id` does, for draws and no-contests — is inferred
+    by pandas as float64, which silently rounds every ID.
+
+    That rounding is invisible to vectorized comparisons (`df.a == df.b` casts int64 to
+    float64, so both sides round identically and appear equal) but fatal inside
+    `iterrows()`/`itertuples()`, which yield Python scalars, and Python compares
+    int to float EXACTLY:
+
+        1180969949270474753 == float(1180969949270474753)   -> False   (Python)
+        np.int64(...)       == np.float64(...)              -> True    (NumPy)
+
+    Every per-fight loop in this module uses itertuples/iterrows, so the winner check
+    never fired: Elo stayed 1500.0 for every fighter, elo_expected 0.5, resume_score
+    0.0 — all dead constants feeding the model as if they were signal.
+
+    Rebuilding from `rows` rather than casting the DataFrame column matters: by the
+    time the column exists as float64 the precision is already gone, and int() would
+    lock in the rounded value.
+    """
+    for col in ID_COLUMNS:
+        if col not in df.columns:
+            continue
+        df[col] = pd.Series(
+            [(None if r.get(col) is None else int(r[col])) for r in rows],
+            index=df.index, dtype=object,
+        )
+    return df
+
+
+def _assert_ids_exact(df: pd.DataFrame) -> None:
+    """Guard against a silent regression to float64 IDs."""
+    for col in ID_COLUMNS:
+        if col in df.columns and df[col].dtype != object:
+            raise TypeError(
+                f"{col} has dtype {df[col].dtype}, expected object. Large IDs stored as "
+                "float lose precision and make every winner comparison fail silently. "
+                "See _coerce_id_columns()."
+            )
+
 
 def load_fight_data() -> pd.DataFrame:
     log.info("Loading data from database...")
@@ -71,6 +128,7 @@ def load_fight_data() -> pd.DataFrame:
             "name": f"{f.first_name} {f.last_name}",
             "height": f.height, "weight": f.weight,
             "reach": f.reach, "stance": f.stance, "dob": f.dob,
+            "lifetime_wins": f.wins or 0, "lifetime_losses": f.losses or 0,
         }
         for f in fighters_q
     }
@@ -99,6 +157,9 @@ def load_fight_data() -> pd.DataFrame:
             "blue_fighter_id": fight.blue_fighter_id,
             "winner_id": fight.winner_id,
             "method": fight.method, "weight_class": fight.weight_class,
+            # time_format is the only source of the 3-vs-5-round flag; it was previously
+            # read by glicko_service but never reached the winner model.
+            "time_format": fight.time_format,
             "fight_time_seconds": fight.fight_time_seconds or 0,
             "max_fight_time_seconds": fight.max_fight_time_seconds or 0,
             "stats_fighter_id": stats.fighter_id, "corner": stats.corner,
@@ -116,10 +177,13 @@ def load_fight_data() -> pd.DataFrame:
             "fighter_height": f.get("height"), "fighter_weight": f.get("weight"),
             "fighter_reach": f.get("reach"), "fighter_stance": f.get("stance"),
             "fighter_dob": f.get("dob"),
+            "lifetime_wins": f.get("lifetime_wins", 0),
+            "lifetime_losses": f.get("lifetime_losses", 0),
         })
 
     db.close()
     df = pd.DataFrame(rows)
+    df = _coerce_id_columns(df, rows)
     log.info(f"  Loaded {len(df)} fight-stat rows ({df['fight_id'].nunique()} unique fights)")
 
     # --- Load per-round stats for round profiles ---
@@ -144,6 +208,8 @@ def load_fight_data() -> pd.DataFrame:
         })
     db.close()
     round_data = pd.DataFrame(round_rows) if round_rows else pd.DataFrame()
+    if round_rows:
+        round_data = _coerce_id_columns(round_data, round_rows)
     log.info(f"  Loaded {len(round_rows)} per-round stat rows")
     return df, round_data
 
@@ -174,32 +240,97 @@ def _safe_divide(a, b):
     return np.where(b > 0, a / b, 0.0)
 
 def _classify_weight_class(wc: str | None) -> str:
-    """Map verbose weight class strings to canonical divisions."""
+    """Map verbose weight class strings to canonical divisions.
+
+    Splits men's from women's: previously "Women's Flyweight" and "Flyweight" mapped to
+    the same bucket, merging two divisions with very different base rates and physical
+    profiles.
+
+    Intentionally differs from glicko_service._classify_weight_class(), which pools
+    women's featherweight into w_bantamweight and maps catchweight to "unknown". Those
+    are sensible for rating-pool sample size; here we want the true division, and
+    catchweight must stay distinct because it feeds the weight-class movement features.
+    """
     if not isinstance(wc, str):
         return "unknown"
     wc = wc.lower()
-    if "strawweight" in wc: return "strawweight"
-    if "flyweight" in wc: return "flyweight"
-    if "bantamweight" in wc: return "bantamweight"
-    if "featherweight" in wc: return "featherweight"
-    if "lightweight" in wc: return "lightweight"
-    if "welterweight" in wc: return "welterweight"
-    if "middleweight" in wc: return "middleweight"
-    if "light heavyweight" in wc or "light_heavyweight" in wc: return "light_heavyweight"
-    if "heavyweight" in wc: return "heavyweight"
+    w = "w_" if "women" in wc else ""
+    # Order matters: check catchweight first (a catchweight bout often still names a
+    # division), and "light heavyweight" before "heavyweight".
     if "catch" in wc or "open" in wc: return "catchweight"
+    if "strawweight" in wc: return f"{w}strawweight"
+    if "flyweight" in wc: return f"{w}flyweight"
+    if "bantamweight" in wc: return f"{w}bantamweight"
+    if "featherweight" in wc: return f"{w}featherweight"
+    if "light heavyweight" in wc or "light_heavyweight" in wc: return "light_heavyweight"
+    if "lightweight" in wc: return f"{w}lightweight"
+    if "welterweight" in wc: return f"{w}welterweight"
+    if "middleweight" in wc: return "middleweight"
+    if "heavyweight" in wc: return "heavyweight"
     return "unknown"
+
+
+def _is_title_bout(wc: str | None) -> bool:
+    """Title fights are 5 rounds, higher stakes, and better-scouted matchups.
+    Derived the same way glicko_service does, but never reached the model before."""
+    return isinstance(wc, str) and "title" in wc.lower()
+
+
+def _round_lengths(time_format: str | None) -> list[int]:
+    """Per-round minutes from `time_format`.
+
+    The stored value is the ROUND-LENGTH string, not a round count: '5-5-5' is a
+    three-round fight of five minutes each, '5-5-5-5-5' is five rounds. So the number
+    of dash-separated segments is the round count. scraper._compute_fight_time() parses
+    it the same way, which is what makes fight_time_seconds correct.
+
+    Legacy formats exist and are not parseable this way ('No Time Limit', bare '20').
+    """
+    if not isinstance(time_format, str):
+        return []
+    parts = [p.strip() for p in time_format.split("-")]
+    if not parts or not all(p.isdigit() for p in parts):
+        return []
+    return [int(p) for p in parts]
+
+
+def _scheduled_rounds(time_format: str | None) -> float:
+    lengths = _round_lengths(time_format)
+    return float(len(lengths)) if lengths else float("nan")
+
+
+def _scheduled_minutes(time_format: str | None) -> float:
+    """Total scheduled length — separates a 3x5 from a legacy single 20-minute round,
+    which the round count alone cannot."""
+    lengths = _round_lengths(time_format)
+    return float(sum(lengths)) if lengths else float("nan")
+
+
+def _is_five_round(time_format: str | None) -> bool:
+    r = _scheduled_rounds(time_format)
+    return bool(r >= 5) if r == r else False  # r != r detects NaN
 
 
 # ===========================================================================
 # FIGHTER STYLE CLUSTERING
 # ===========================================================================
 
-def compute_fighter_styles(df: pd.DataFrame, n_clusters: int = 6) -> tuple[dict, KMeans]:
+def compute_fighter_styles(
+    df: pd.DataFrame, n_clusters: int = 6, cutoff_date=None
+) -> tuple[np.ndarray, tuple]:
     """
-    Cluster fighters into style archetypes based on career stat profiles.
-    Uses only fights before the test split to avoid leakage.
-    Returns: {fighter_id: cluster_id}, fitted KMeans model
+    Assign each fighter-fight a style archetype from that fighter's PRE-FIGHT profile.
+
+    Clusters the expanding-mean `avg_*` columns, which are already `.shift(1)`-ed, so a
+    row's style reflects only the fighter's prior fights. Career means over the raw
+    per-fight columns would fold in the outcome of the very fight being predicted, and
+    would also backdate a fighter's late-career identity onto their early fights.
+
+    `cutoff_date` restricts the scaler/KMeans fit to rows strictly before that date, so
+    no post-cutoff distribution reaches the fit. None fits on everything (unsupervised,
+    but callers doing strict walk-forward should pass the fold boundary).
+
+    Returns: per-row cluster labels, (scaler, kmeans, medians) for reuse at serve time.
     """
     log.info(f"  Computing fighter style clusters (k={n_clusters})...")
 
@@ -209,17 +340,39 @@ def compute_fighter_styles(df: pd.DataFrame, n_clusters: int = 6) -> tuple[dict,
         "head_target_pct", "body_target_pct", "leg_target_pct",
         "distance_landed_per5", "clinch_landed_per5", "ground_landed_per5",
     ]
+    avg_cols = [f"avg_{c}" for c in style_features]
 
-    # Compute career averages per fighter
-    fighter_profiles = df.groupby("stats_fighter_id")[style_features].mean().fillna(0)
+    missing = [c for c in avg_cols if c not in df.columns]
+    if missing:
+        raise KeyError(
+            f"compute_fighter_styles needs pre-fight rolling columns; missing: {missing}. "
+            "It must be called after the rolling-average block in build_features()."
+        )
 
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(fighter_profiles.values)
+    X = df[avg_cols].astype(float)
+
+    if cutoff_date is None:
+        fit_mask = np.ones(len(df), dtype=bool)
+    else:
+        fit_mask = (pd.to_datetime(df["date"]) < pd.Timestamp(cutoff_date)).values
+        if fit_mask.sum() < n_clusters * 10:
+            log.warning(
+                f"    Only {fit_mask.sum()} rows before {cutoff_date}; fitting styles on all rows"
+            )
+            fit_mask = np.ones(len(df), dtype=bool)
+
+    # Debut fights have no prior history — impute from the fit slice only
+    medians = X[fit_mask].median()
+    X = X.fillna(medians).fillna(0.0)
+
+    scaler = StandardScaler().fit(X[fit_mask].values)
+    X_scaled = scaler.transform(X.values)
 
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=20)
-    labels = kmeans.fit_predict(X_scaled)
+    kmeans.fit(X_scaled[fit_mask])
+    labels = kmeans.predict(X_scaled)
 
-    style_map = dict(zip(fighter_profiles.index, labels))
+    log.info(f"    Fit on {int(fit_mask.sum())} rows, assigned {len(labels)} fighter-fights")
 
     # Log cluster descriptions
     centers = pd.DataFrame(
@@ -228,50 +381,85 @@ def compute_fighter_styles(df: pd.DataFrame, n_clusters: int = 6) -> tuple[dict,
     )
     for i in range(n_clusters):
         c = centers.iloc[i]
-        n_fighters = (labels == i).sum()
-        # Determine archetype name
+        n_rows = (labels == i).sum()
         top_trait = c.idxmax()
         log.info(
-            f"    Style {i} ({n_fighters} fighters): "
+            f"    Style {i} ({n_rows} fighter-fights): "
             f"SigStr/5={c['sig_str_landed_per5']:.1f} TD/5={c['td_landed_per5']:.1f} "
             f"Sub/5={c['sub_att_per5']:.1f} Ctrl/5={c['ctrl_per5']:.1f} "
             f"GndStr/5={c['ground_landed_per5']:.1f} top={top_trait}"
         )
 
-    return style_map, kmeans
+    return labels, (scaler, kmeans, medians)
 
 
-def compute_style_matchup_matrix(df: pd.DataFrame, style_map: dict, n_clusters: int) -> np.ndarray:
+def compute_style_matchup_features(
+    df: pd.DataFrame, style_at_fight: dict, n_clusters: int, prior_weight: float = 5.0
+) -> dict:
     """
-    Build NxN matrix: style_matchup[A][B] = historical win rate of style A vs style B.
+    Style-vs-style win rate, accumulated expanding-in-time.
+
+    For each fight we record the style matchup rate as it stood *before* that fight,
+    then fold the result in — the same read-then-update ordering the Elo loop uses.
+    Building the matrix over the full dataset and then letting each fight read its own
+    cell puts the predicted outcome inside its own feature, which is label leakage.
+
+    Rates are smoothed toward 0.5 by `prior_weight` pseudo-fights so that sparse early
+    cells don't emit hard 0.0/1.0 values off a single observation.
+
+    Returns: {(fight_id, fighter_id): win_rate_of_my_style_vs_theirs}
     """
     wins = np.zeros((n_clusters, n_clusters))
     total = np.zeros((n_clusters, n_clusters))
+    adv_at_fight = {}
 
-    fights_deduped = df.drop_duplicates("fight_id")
-    for _, fight in fights_deduped.iterrows():
-        red_style = style_map.get(fight["red_fighter_id"])
-        blue_style = style_map.get(fight["blue_fighter_id"])
+    def _rate(w, t):
+        return (w + 0.5 * prior_weight) / (t + prior_weight)
+
+    fights_chrono = (
+        df[["fight_id", "date", "red_fighter_id", "blue_fighter_id", "winner_id"]]
+        .drop_duplicates("fight_id").sort_values("date")
+    )
+
+    for fight in fights_chrono.itertuples(index=False):
+        red_style = style_at_fight.get((fight.fight_id, fight.red_fighter_id))
+        blue_style = style_at_fight.get((fight.fight_id, fight.blue_fighter_id))
         if red_style is None or blue_style is None:
             continue
+
+        # Snapshot pre-fight rates
+        adv_at_fight[(fight.fight_id, fight.red_fighter_id)] = _rate(
+            wins[red_style][blue_style], total[red_style][blue_style]
+        )
+        adv_at_fight[(fight.fight_id, fight.blue_fighter_id)] = _rate(
+            wins[blue_style][red_style], total[blue_style][red_style]
+        )
+
+        # Then fold in this fight's result
         total[red_style][blue_style] += 1
         total[blue_style][red_style] += 1
-        if fight["winner_id"] == fight["red_fighter_id"]:
+        if fight.winner_id == fight.red_fighter_id:
             wins[red_style][blue_style] += 1
-        elif fight["winner_id"] == fight["blue_fighter_id"]:
+        elif fight.winner_id == fight.blue_fighter_id:
             wins[blue_style][red_style] += 1
 
-    matchup_matrix = _safe_divide(wins, total)
-    log.info(f"  Style matchup matrix computed ({n_clusters}x{n_clusters})")
-    return matchup_matrix
+    log.info(
+        f"  Style matchup features computed expanding-in-time "
+        f"({n_clusters}x{n_clusters}, {len(adv_at_fight)} fighter-fights)"
+    )
+    return adv_at_fight
 
 
 # ===========================================================================
 # FEATURE ENGINEERING
 # ===========================================================================
 
-def build_features(df: pd.DataFrame, round_data: pd.DataFrame = None) -> pd.DataFrame:
+def build_features(
+    df: pd.DataFrame, round_data: pd.DataFrame = None, style_cutoff_date=None,
+    glicko_snapshots: dict | None = None,
+) -> pd.DataFrame:
     log.info("Building features...")
+    _assert_ids_exact(df)
 
     # --- Physical ---
     df["height_inches"] = df["fighter_height"].apply(_parse_height_inches)
@@ -290,6 +478,12 @@ def build_features(df: pd.DataFrame, round_data: pd.DataFrame = None) -> pd.Data
     df["division"] = df["weight_class"].apply(_classify_weight_class)
     division_dummies = pd.get_dummies(df["division"], prefix="div").astype(float)
     df = pd.concat([df, division_dummies], axis=1)
+    # Fight-level context, previously computed only inside glicko_service and never
+    # exposed to the model. Both are known before the fight.
+    df["is_title_fight"] = df["weight_class"].apply(_is_title_bout).astype(float)
+    df["is_five_round"] = df["time_format"].apply(_is_five_round).astype(float)
+    df["scheduled_rounds"] = df["time_format"].apply(_scheduled_rounds)
+    df["scheduled_minutes"] = df["time_format"].apply(_scheduled_minutes)
 
     # --- Per-5-minute rates ---
     ft = df["fight_time_seconds"].clip(lower=1).values
@@ -343,6 +537,19 @@ def build_features(df: pd.DataFrame, round_data: pd.DataFrame = None) -> pd.Data
 
     df = df.sort_values(["stats_fighter_id", "date"]).reset_index(drop=True)
 
+    # The sort above invalidated `opp_map`/`opp_idx`, which were built against the
+    # pre-sort index. Rebuild them here so every opponent lookup below points at the
+    # actual opponent rather than an arbitrary row.
+    opp_map = {}
+    for _, group in df.groupby("fight_id"):
+        if len(group) != 2:
+            continue
+        rows = group.index.tolist()
+        opp_map[rows[0]] = rows[1]
+        opp_map[rows[1]] = rows[0]
+
+    opp_idx = [opp_map.get(i, i) for i in df.index]
+
     # --- Elo (K-factor scaled by method) ---
     log.info("  Computing Elo ratings...")
     elo = {}
@@ -379,8 +586,6 @@ def build_features(df: pd.DataFrame, round_data: pd.DataFrame = None) -> pd.Data
     log.info("  Computing resume scores...")
     resume = {}  # fighter_id -> score
     resume_at_fight = {}
-    DECAY = 0.85  # recent fights weighted more
-    ITERATIONS = 5  # convergence iterations
 
     # Initialize resume = Elo-based
     for fid in elo:
@@ -392,35 +597,17 @@ def build_features(df: pd.DataFrame, round_data: pd.DataFrame = None) -> pd.Data
     )
     fight_list = list(fights_chrono.itertuples(index=False))
 
-    for iteration in range(ITERATIONS):
-        new_resume = {fid: 0.0 for fid in resume}
-        fight_count = {fid: 0 for fid in resume}
-
-        for fight in fight_list:
-            r_id, b_id = fight.red_fighter_id, fight.blue_fighter_id
-            r_score = resume.get(r_id, 0.0)
-            b_score = resume.get(b_id, 0.0)
-
-            method = str(fight.method or "")
-            finish_bonus = 1.3 if ("KO" in method or "Sub" in method) else 1.0
-
-            if fight.winner_id == r_id:
-                # Red won: credit = opponent's resume * finish_bonus
-                new_resume[r_id] = new_resume.get(r_id, 0) + b_score * finish_bonus
-                new_resume[b_id] = new_resume.get(b_id, 0) - r_score * 0.5
-            elif fight.winner_id == b_id:
-                new_resume[b_id] = new_resume.get(b_id, 0) + r_score * finish_bonus
-                new_resume[r_id] = new_resume.get(r_id, 0) - b_score * 0.5
-
-            fight_count[r_id] = fight_count.get(r_id, 0) + 1
-            fight_count[b_id] = fight_count.get(b_id, 0) + 1
-
-        # Normalize by fight count and blend with previous
-        for fid in new_resume:
-            n = max(fight_count.get(fid, 1), 1)
-            new_resume[fid] = DECAY * (new_resume[fid] / n) + (1 - DECAY) * resume.get(fid, 0)
-
-        resume = new_resume
+    # NOTE: a 5-iteration PageRank-style refinement of `resume` used to run here. Its
+    # output was written to a local that nothing ever read — `resume_running` below
+    # starts empty and never consults it — so it was ~55k wasted fight iterations per
+    # build with no effect on any feature. Removed.
+    #
+    # KNOWN DEFECT (not fixed here — it is a rating-design change, not a bug fix):
+    # `resume_running` is a homogeneous linear recursion seeded at 0.0, so every
+    # update is a combination of zeros and `resume_score`/`opp_resume` are identically
+    # 0.0 for every fighter-fight. They are inert inputs, not signal. Giving the
+    # recursion a non-zero source term (e.g. crediting wins by the opponent's Elo
+    # rather than their resume) would make it meaningful.
 
     # Now compute resume at each fight (pre-fight, chronologically)
     resume_running = {}
@@ -454,23 +641,30 @@ def build_features(df: pd.DataFrame, round_data: pd.DataFrame = None) -> pd.Data
     )
     df["opp_resume"] = df.loc[opp_idx, "resume_score"].values if len(opp_idx) == len(df) else 0.0
 
-    # --- Glicko multi-dimensional ratings (from DB snapshots) ---
-    log.info("  Loading Glicko rating snapshots from DB...")
+    # --- Glicko multi-dimensional ratings ---
     try:
         from app.services.ufc.glicko_service import DIMENSIONS as GLICKO_DIMS
-        from app.models.ufc import UFCGlickoSnapshot
-        from app.database import SessionLocal as GlickoSession
-        glicko_db = GlickoSession()
-        snapshots = glicko_db.query(UFCGlickoSnapshot).all()
-        glicko_db.close()
 
-        # Build lookup: {(fight_id, fighter_id): {dim: value}}
-        glicko_snapshots = {}
-        for s in snapshots:
-            glicko_snapshots[(s.fight_id, s.fighter_id)] = {
-                d: getattr(s, d, 0.0) or 0.0 for d in GLICKO_DIMS
-            }
-        log.info(f"  Loaded {len(glicko_snapshots)} Glicko snapshots")
+        if glicko_snapshots is not None:
+            # Caller supplied freshly computed snapshots (e.g. run_glicko_inmemory()
+            # after the newcomer-seed fix). Lets evaluation use corrected ratings
+            # without overwriting the stored UFCGlickoSnapshot table.
+            log.info(f"  Using {len(glicko_snapshots)} caller-supplied Glicko snapshots")
+        else:
+            log.info("  Loading Glicko rating snapshots from DB...")
+            from app.models.ufc import UFCGlickoSnapshot
+            from app.database import SessionLocal as GlickoSession
+            glicko_db = GlickoSession()
+            snapshots = glicko_db.query(UFCGlickoSnapshot).all()
+            glicko_db.close()
+
+            # Build lookup: {(fight_id, fighter_id): {dim: value}}
+            glicko_snapshots = {}
+            for s in snapshots:
+                glicko_snapshots[(s.fight_id, s.fighter_id)] = {
+                    d: getattr(s, d, 0.0) or 0.0 for d in GLICKO_DIMS
+                }
+            log.info(f"  Loaded {len(glicko_snapshots)} Glicko snapshots")
 
         for dim in GLICKO_DIMS:
             df[f"glicko_{dim}"] = df.apply(
@@ -680,21 +874,216 @@ def build_features(df: pd.DataFrame, round_data: pd.DataFrame = None) -> pd.Data
             .reset_index(level=0, drop=True)
         )
 
-    # --- Fighter style clustering ---
+    # --- Pre-UFC record (honest debut prior) ---
+    # A UFC debutant has no UFC history, which is the hole the leaked Glicko newcomer
+    # seed was illegitimately filling with the fighter's future results. The legitimate
+    # signal is their record BEFORE the UFC: lifetime minus every UFC fight in the
+    # dataset. That quantity is fixed at debut and never moves, so it is safe at any
+    # point in a career — unlike the raw lifetime record, which is a running total.
+    #
+    # This is a weak proxy. It is a bare W/L with no opponent quality, so it cannot
+    # distinguish 15-0 against regional cans from 15-0 against future contenders.
+    # Real strength here needs multi-promotion results; see docs/models/winner.md.
+    # --- Age shape ---
+    # `age` was previously a difference only, so a 22-vs-26 fight and a 38-vs-42 fight
+    # were identical to the model. Absolute age now reaches it via WINNER_RAW_COLS;
+    # these terms give it the shape of a career arc rather than a straight line.
+    log.info("  Computing age curve features...")
+    PEAK_LO, PEAK_HI = 28.0, 31.0
+    age = df["age"].astype(float)
+    df["age_sq"] = age ** 2
+    df["years_past_peak"] = (age - PEAK_HI).clip(lower=0)
+    df["years_to_peak"] = (PEAK_LO - age).clip(lower=0)
+
+    # --- Layoff shape ---
+    # Raw days is a poor scale: 30 vs 120 days matters enormously, 700 vs 800 barely at
+    # all. Absolute layoff also now reaches the model via WINNER_RAW_COLS.
+    dsl = df["days_since_last"].astype(float)
+    df["log_days_since_last"] = np.log1p(dsl.clip(lower=0))
+    df["is_long_layoff"] = (dsl > 548).astype(float)        # 18 months
+    df["is_short_turnaround"] = (dsl < 60).astype(float)
+    # The one direction the literature is consistent about is that quick turnarounds
+    # hurt older fighters more; the physiological evidence is stronger than the
+    # win-rate samples behind the "ring rust" narrative.
+    df["age_x_log_layoff"] = age * df["log_days_since_last"]
+
+    # --- Damage accumulation ---
+    # Every existing durability signal is a RATE, so 25 wars and 5 quiet fights look
+    # identical. These are cumulative and strictly pre-fight (expanding().sum().shift(1),
+    # the same pattern as career_wins).
+    log.info("  Computing damage accumulation...")
+    df["head_absorbed"] = df.loc[opp_idx, "head_landed"].values
+    df["kd_absorbed"] = df.loc[opp_idx, "kd"].values
+    df["fight_minutes"] = df["fight_time_seconds"].astype(float) / 60.0
+    df["ko_loss"] = ((df["lost"] == 1) & df["method"].str.contains("KO", na=False)).astype(int)
+
+    for src, dest in [
+        ("head_absorbed", "career_head_strikes_absorbed"),
+        ("kd_absorbed", "career_knockdowns_absorbed"),
+        ("fight_minutes", "career_fight_minutes"),
+        ("ko_loss", "career_ko_losses"),
+    ]:
+        df[dest] = (
+            df.groupby("stats_fighter_id")[src]
+            .apply(lambda x: x.expanding().sum().shift(1).fillna(0))
+            .reset_index(level=0, drop=True)
+        )
+
+    # Recency of the last knockout loss. `avg_was_finished` averages over a career and
+    # cannot express "was knocked out last time out" — which is the form the literature's
+    # OR=1.13 consecutive-KO finding actually takes.
+    def _fights_since_ko_loss(flags: np.ndarray) -> list[float]:
+        out, since = [], np.nan
+        for f in flags:
+            out.append(since)
+            since = 0.0 if f == 1 else (since + 1 if since == since else np.nan)
+        return out
+
+    df["fights_since_ko_loss"] = (
+        df.groupby("stats_fighter_id")["ko_loss"]
+        .transform(lambda x: pd.Series(_fights_since_ko_loss(x.values), index=x.index))
+    )
+    df["damage_per_minute"] = _safe_divide(
+        df["career_head_strikes_absorbed"].values,
+        df["career_fight_minutes"].clip(lower=1).values,
+    )
+
+    # --- Weight-class movement ---
+    # Tested directly against the market on this dataset: fighters changing division
+    # were priced at 49.1% and won 49.8% (n=792) — no detectable edge, consistent with
+    # the literature, where the often-cited win-rate drop is about what regression to
+    # the mean predicts on its own. Built at explicit request; expectations low.
+    log.info("  Computing weight-class movement...")
+    DIVISION_ORDER = {
+        "w_strawweight": 0, "w_flyweight": 1, "w_bantamweight": 2, "w_featherweight": 3,
+        "flyweight": 10, "bantamweight": 11, "featherweight": 12, "lightweight": 13,
+        "welterweight": 14, "middleweight": 15, "light_heavyweight": 16, "heavyweight": 17,
+    }
+    df["division_rank"] = df["division"].map(DIVISION_ORDER).astype(float)
+    prev_div = df.groupby("stats_fighter_id")["division"].shift(1)
+    prev_rank = df.groupby("stats_fighter_id")["division_rank"].shift(1)
+    rank_delta = df["division_rank"] - prev_rank
+
+    df["moved_up"] = (rank_delta > 0).astype(float)
+    df["moved_down"] = (rank_delta < 0).astype(float)
+    df["division_rank_delta"] = rank_delta.fillna(0.0)
+    df["is_catchweight"] = (df["division"] == "catchweight").astype(float)
+    df["changed_division"] = ((prev_div.notna()) & (df["division"] != prev_div)).astype(float)
+    # Consecutive fights already made in this division — a proxy for being settled in it
+    same = (df["division"] == prev_div)
+    grp = (~same).cumsum()
+    df["fights_in_current_division"] = df.groupby(["stats_fighter_id", grp]).cumcount().astype(float)
+    def _cum_distinct(vals) -> list[float]:
+        """Distinct divisions fought BEFORE each fight (appends before adding)."""
+        out, seen = [], set()
+        for v in vals:
+            out.append(float(len(seen)))
+            seen.add(v)
+        return out
+
+    df["divisions_fought_count"] = df.groupby("stats_fighter_id")["division"].transform(
+        lambda s: pd.Series(_cum_distinct(s.values), index=s.index)
+    )
+
+    log.info("  Computing pre-UFC records...")
+    ufc_w, ufc_l = {}, {}
+    for fight in df[["fight_id", "red_fighter_id", "blue_fighter_id", "winner_id"]] \
+            .drop_duplicates("fight_id").itertuples(index=False):
+        if not fight.winner_id or pd.isna(fight.winner_id):
+            continue
+        for fid in (fight.red_fighter_id, fight.blue_fighter_id):
+            if fid == fight.winner_id:
+                ufc_w[fid] = ufc_w.get(fid, 0) + 1
+            else:
+                ufc_l[fid] = ufc_l.get(fid, 0) + 1
+
+    ids = df["stats_fighter_id"]
+    df["pre_ufc_wins"] = (
+        df["lifetime_wins"].fillna(0) - ids.map(lambda i: ufc_w.get(i, 0))
+    ).clip(lower=0)
+    df["pre_ufc_losses"] = (
+        df["lifetime_losses"].fillna(0) - ids.map(lambda i: ufc_l.get(i, 0))
+    ).clip(lower=0)
+    df["pre_ufc_fights"] = df["pre_ufc_wins"] + df["pre_ufc_losses"]
+    df["pre_ufc_win_pct"] = _safe_divide(
+        df["pre_ufc_wins"].values, df["pre_ufc_fights"].clip(lower=1).values
+    )
+    # Experience-weighted quality: 12-0 should outrank 2-0. Mirrors the Glicko seed
+    # shape so the two agree rather than fight each other.
+    df["pre_ufc_quality"] = (
+        (df["pre_ufc_win_pct"] - 0.5) * 2 * (df["pre_ufc_fights"] / 20).clip(upper=1.0)
+    )
+    # How much of what we know about this fighter is UFC evidence vs pre-UFC hearsay.
+    df["ufc_experience_share"] = _safe_divide(
+        df["career_fights"].values,
+        (df["career_fights"] + df["pre_ufc_fights"]).clip(lower=1).values,
+    )
+
+    # --- Skill decay: performance relative to age-expected ---
+    # Built on PERFORMANCE, not win rate. Win rates conflate ability with matchmaking —
+    # a declining champion's record is protected by opponent selection, so an aging
+    # curve fitted to outcomes measures the UFC's booking policy as much as decline.
+    #
+    # For each fight we compare the fighter's recent output to the league-wide average
+    # at that age, where the league average is accumulated expanding-in-time (only
+    # fights strictly before this one). Same read-then-update ordering as Elo and the
+    # style-matchup matrix.
+    log.info("  Computing age-relative performance residuals...")
+    # Each needs a `recent_*` rolling form, which restricts this to columns that went
+    # through the rolling-average loop above.
+    DECAY_METRICS = [
+        ("sig_str_landed_per5", "output"),      # can they still produce
+        ("sig_str_def", "defense"),             # can they still avoid damage
+        ("opp_sig_str_landed_per5", "absorbed"),  # how much they now take
+    ]
+    fights_chrono_idx = df.sort_values("date").index
+
+    for src, label in DECAY_METRICS:
+        recent_col = f"recent_{src}"
+        if recent_col not in df.columns or src not in df.columns:
+            continue
+        bucket_sum: dict[int, float] = {}
+        bucket_n: dict[int, int] = {}
+        residuals = np.full(len(df), np.nan)
+
+        ages = df["age"].to_numpy(dtype=float)
+        recents = df[recent_col].to_numpy(dtype=float)
+        actuals = df[src].to_numpy(dtype=float)
+        pos = {ix: i for i, ix in enumerate(df.index)}
+
+        for ix in fights_chrono_idx:
+            i = pos[ix]
+            a = ages[i]
+            if a != a:
+                continue
+            b = int(a)
+            n = bucket_n.get(b, 0)
+            if n >= 20 and recents[i] == recents[i]:
+                residuals[i] = recents[i] - (bucket_sum[b] / n)
+            # Fold this fight's realised performance in AFTER reading
+            if actuals[i] == actuals[i]:
+                bucket_sum[b] = bucket_sum.get(b, 0.0) + actuals[i]
+                bucket_n[b] = n + 1
+
+        df[f"age_resid_{label}"] = residuals
+
+    # --- Fighter style clustering (per-fight, from pre-fight rolling profiles) ---
     N_STYLES = 6
-    style_map, kmeans = compute_fighter_styles(df, n_clusters=N_STYLES)
-    df["fighter_style"] = df["stats_fighter_id"].map(style_map).fillna(0).astype(int)
+    style_labels, style_artifacts = compute_fighter_styles(
+        df, n_clusters=N_STYLES, cutoff_date=style_cutoff_date
+    )
+    df["fighter_style"] = style_labels.astype(int)
 
-    # Style matchup matrix (trained on full data — these are historical facts, not predictions)
-    matchup_matrix = compute_style_matchup_matrix(df, style_map, N_STYLES)
+    style_at_fight = {
+        (fid, pid): int(s)
+        for fid, pid, s in zip(df["fight_id"], df["stats_fighter_id"], df["fighter_style"])
+    }
 
-    # For each fight, look up style matchup win rate
-    def _style_matchup_advantage(row):
-        opp_idx_val = opp_map.get(row.name, row.name)
-        opp_style = df.loc[opp_idx_val, "fighter_style"] if opp_idx_val in df.index else 0
-        return matchup_matrix[row["fighter_style"]][opp_style]
-
-    df["style_matchup_adv"] = df.apply(_style_matchup_advantage, axis=1)
+    # Style matchup rate as it stood before each fight (never includes that fight's result)
+    style_adv_at_fight = compute_style_matchup_features(df, style_at_fight, N_STYLES)
+    df["style_matchup_adv"] = df.apply(
+        lambda r: style_adv_at_fight.get((r["fight_id"], r["stats_fighter_id"]), 0.5), axis=1
+    )
 
     # One-hot encode style
     for i in range(N_STYLES):
@@ -704,32 +1093,85 @@ def build_features(df: pd.DataFrame, round_data: pd.DataFrame = None) -> pd.Data
     return df
 
 
-def build_matchup_df(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
-    log.info("Building matchup feature matrix...")
+# Per-fighter columns that become BOTH diff_ and red_/blue_ features. Anything left out
+# here is visible to the model only as a difference, which silently erases any quantity
+# that is shared by both corners or whose absolute level matters:
+#   - `age` as diff-only made a 22-vs-26 fight identical to a 38-vs-42 fight
+#   - `div_*` are fight-level, so red minus blue is ALWAYS 0 and division was invisible
+WINNER_RAW_COLS = (
+    "elo", "elo_expected", "resume_score", "career_fights", "career_win_pct",
+    "streak", "finish_rate", "style_matchup_adv",
+    "age", "days_since_last",
+)
 
-    # Collect feature columns (exclude raw per-fight stats, only use rolling/computed)
-    feature_cols = [c for c in df.columns if c.startswith(("avg_", "recent_", "last3_"))]
-    feature_cols += [
+# Columns that describe the FIGHT, not a fighter — both corners carry the same value.
+# They must be emitted once as `fight_*`; a diff is identically zero and a red_/blue_
+# pair is two copies of the same number.
+FIGHT_LEVEL_PREFIXES = ("div_",)
+FIGHT_LEVEL_COLS = ("is_title_fight", "is_five_round", "scheduled_rounds", "scheduled_minutes")
+
+
+def _is_fight_level(col: str) -> bool:
+    return col.startswith(FIGHT_LEVEL_PREFIXES) or col in FIGHT_LEVEL_COLS
+
+
+def winner_feature_columns(df: pd.DataFrame) -> list[str]:
+    """The single source of truth for winner-model per-fighter feature columns.
+
+    build_matchup_df() and generate_predictions() previously each built their own copy
+    of this list, and they drifted: the serve-time list omitted all six pre_ufc_*
+    features, so every live prediction filled them from train means instead of their
+    real values. Duplicated lists are why that class of bug recurs — there is now one.
+    """
+    cols = [c for c in df.columns if c.startswith(("avg_", "recent_", "last3_"))]
+    cols += [
         "elo", "elo_expected", "resume_score",
         "height_inches", "weight_lbs", "reach_inches", "age",
         "stance_orthodox", "stance_southpaw", "stance_switch",
         "career_win_pct", "career_fights", "finish_rate", "been_finished_rate",
         "streak", "days_since_last", "style_matchup_adv",
+        "pre_ufc_wins", "pre_ufc_losses", "pre_ufc_fights", "pre_ufc_win_pct",
+        "pre_ufc_quality", "ufc_experience_share",
+        # Age curve
+        "age_sq", "years_past_peak", "years_to_peak",
+        "age_resid_output", "age_resid_defense", "age_resid_absorbed",
+        # Layoff shape
+        "log_days_since_last", "is_long_layoff", "is_short_turnaround",
+        "age_x_log_layoff",
+        # Damage accumulation
+        "career_head_strikes_absorbed", "career_knockdowns_absorbed",
+        "career_fight_minutes", "career_ko_losses", "fights_since_ko_loss",
+        "damage_per_minute",
+        # Weight-class movement
+        "division_rank", "division_rank_delta", "moved_up", "moved_down",
+        "is_catchweight", "changed_division", "fights_in_current_division",
+        "divisions_fought_count",
     ]
-    # Add composite features
-    feature_cols += [c for c in df.columns if "composite" in c and c.startswith(("avg_", "recent_", "last3_"))]
-    # Add round profile features
-    feature_cols += [c for c in df.columns if c.startswith(("avg_r1_", "avg_late_", "avg_output_", "avg_ctrl_trend",
-                                                             "recent_r1_", "recent_late_", "recent_output_", "recent_ctrl_trend"))]
-    feature_cols += [c for c in df.columns if c.startswith("style_") and c not in feature_cols]
-    feature_cols += [c for c in df.columns if c.startswith("div_") and c not in feature_cols]
-    # Add Glicko multi-dimensional ratings
-    feature_cols += [c for c in df.columns if c.startswith("glicko_") and c not in feature_cols]
-    # Deduplicate while preserving order
-    feature_cols = list(dict.fromkeys(feature_cols))
+    # Composite features
+    cols += [c for c in df.columns if "composite" in c and c.startswith(("avg_", "recent_", "last3_"))]
+    # Round profile features
+    cols += [c for c in df.columns if c.startswith(("avg_r1_", "avg_late_", "avg_output_", "avg_ctrl_trend",
+                                                    "recent_r1_", "recent_late_", "recent_output_", "recent_ctrl_trend"))]
+    cols += [c for c in df.columns if c.startswith("style_") and c not in cols]
+    # Fight-level context
+    cols += [c for c in df.columns if c.startswith("div_") and c not in cols]
+    cols += [c for c in FIGHT_LEVEL_COLS if c not in cols]
+    # Glicko multi-dimensional ratings
+    cols += [c for c in df.columns if c.startswith("glicko_") and c not in cols]
+    # Only keep what actually exists on this frame, deduplicated, order preserved
+    present = set(df.columns)
+    return [c for c in dict.fromkeys(cols) if c in present]
 
-    for col in feature_cols:
-        df[col] = df[col].fillna(df[col].mean())
+
+def build_matchup_df(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    log.info("Building matchup feature matrix...")
+
+    feature_cols = winner_feature_columns(df)
+
+    # NOTE: no imputation here. Filling from full-frame means would leak test-period
+    # statistics into training and would also make serve-time constants differ from
+    # train-time ones. NaNs are carried through and imputed per-fold from train means
+    # by _fillna_from_train(); HistGradientBoosting also handles NaN natively.
 
     red = df[df["corner"] == "red"].set_index("fight_id")
     blue = df[df["corner"] == "blue"].set_index("fight_id")
@@ -741,14 +1183,32 @@ def build_matchup_df(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     matchup["date"] = red["date"].values
     matchup["red_wins"] = (red["stats_fighter_id"].values == red["winner_id"].values).astype(int)
 
+    # Realised outcomes, carried for the simulator's hazard fitting. Prefixed
+    # `outcome_` so they can never be mistaken for features — note that a name starting
+    # with `fight_` WOULD be picked up by the feature filter, and fight duration is a
+    # post-fight quantity.
+    method_str = red["method"].astype(str).str.upper()
+    is_ko = method_str.str.contains("KO", na=False).to_numpy()
+    is_sub = method_str.str.contains("SUB", na=False).to_numpy()
+    matchup["outcome_method_class"] = np.where(is_ko, 0, np.where(is_sub, 1, 2)).astype(int)
+    matchup["outcome_fight_minutes"] = (
+        red["fight_time_seconds"].astype(float).values / 60.0
+    )
+
+    # Fight-level columns emitted once; per-fighter columns differenced.
+    fight_cols = [c for c in feature_cols if _is_fight_level(c)]
+    fighter_cols = [c for c in feature_cols if not _is_fight_level(c)]
+
+    for col in fight_cols:
+        matchup[f"fight_{col}"] = red[col].values
+
     # Difference features
-    for col in feature_cols:
+    for col in fighter_cols:
         matchup[f"diff_{col}"] = red[col].values - blue[col].values
 
     # Raw values for key features (both sides)
-    raw_cols = ["elo", "elo_expected", "resume_score", "career_fights", "career_win_pct",
-                "streak", "finish_rate", "style_matchup_adv"]
-    raw_cols += [c for c in feature_cols if c.startswith("glicko_")]
+    raw_cols = [c for c in WINNER_RAW_COLS if c in fighter_cols]
+    raw_cols += [c for c in fighter_cols if c.startswith("glicko_")]
     for col in raw_cols:
         matchup[f"red_{col}"] = red[col].values
         matchup[f"blue_{col}"] = blue[col].values
@@ -782,10 +1242,19 @@ def build_matchup_df(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
 
     # Odds-derived features
     matchup["odds_diff"] = matchup["odds_red_prob"] - matchup["odds_blue_prob"]
-    matchup["odds_fav_is_red"] = (matchup["odds_red_prob"] > 0.5).astype(float)
+    # Keep NaN where odds are missing — `> 0.5` on NaN would silently become 0.0
+    # ("blue is favorite") rather than "unknown".
+    matchup["odds_fav_is_red"] = np.where(
+        matchup["odds_red_prob"].isna(), np.nan,
+        (matchup["odds_red_prob"] > 0.5).astype(float),
+    )
     matchup["elo_vs_odds"] = matchup["diff_elo_expected"] - matchup["odds_diff"]
 
-    matchup = matchup.dropna(subset=["red_wins"]).fillna(0)
+    # Only 25% of fights have odds. Filling the gap with 0.0 hands the model a clean
+    # "this fight has odds" indicator, and odds coverage tracks card prominence — so
+    # that sentinel is a real signal leak. NaN is the honest missing marker and
+    # HistGradientBoosting splits on it natively.
+    matchup = matchup.dropna(subset=["red_wins"])
 
     # --- Filter to modern era (2015+) ---
     # Pre-2015 data has extreme red corner bias (95%+ win rate) that doesn't exist
@@ -799,72 +1268,241 @@ def build_matchup_df(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     log.info(f"  Filtered to modern era (2015+): {len(matchup)} fights (dropped {pre_modern} pre-2015)")
     log.info(f"  Red win rate (modern): {matchup['red_wins'].mean():.3f}")
 
-    # --- Corner-swap augmentation ---
-    # For every fight, create a mirror: swap red/blue, flip all diff features and the label.
-    # This doubles training data and eliminates corner bias.
-    log.info("  Applying corner-swap augmentation...")
-    mirror = matchup.copy()
-    mirror["red_wins"] = 1 - mirror["red_wins"]
-    for col in mirror.columns:
-        if col.startswith("diff_"):
-            mirror[col] = -mirror[col]
-        elif col.startswith("red_"):
-            base = col.replace("red_", "")
-            blue_col = f"blue_{base}"
-            if blue_col in mirror.columns:
-                mirror[col], mirror[blue_col] = matchup[blue_col].values.copy(), matchup[col].values.copy()
-    # Swap odds on mirrored rows (red becomes blue and vice versa)
-    for col_a, col_b in [("odds_red_prob", "odds_blue_prob"),
-                          ("odds_red_american", "odds_blue_american")]:
-        if col_a in mirror.columns:
-            mirror[col_a], mirror[col_b] = matchup[col_b].values.copy(), matchup[col_a].values.copy()
-    if "odds_diff" in mirror.columns:
-        mirror["odds_diff"] = -matchup["odds_diff"].values
-    if "odds_fav_is_red" in mirror.columns:
-        mirror["odds_fav_is_red"] = 1 - matchup["odds_fav_is_red"].values
-    if "elo_vs_odds" in mirror.columns:
-        mirror["elo_vs_odds"] = -matchup["elo_vs_odds"].values
+    # Corner-swap augmentation used to happen here, before the split. Because every
+    # fight then had an exact mirror twin, sklearn's shuffled `validation_fraction`
+    # early-stopping split was populated with mirrors of rows being fit — so the
+    # dominant regularization knob was tuned against leaked data. Augmentation now
+    # happens on the training slice only, in _corner_swap_augment().
 
-    # Tag originals vs augmented for splitting later
-    matchup["_augmented"] = False
-    mirror["_augmented"] = True
-    # Preserve fight_id index: mirror gets suffixed index to distinguish from originals
-    mirror.index = mirror.index.astype(str) + "_mirror"
-    matchup = pd.concat([matchup, mirror])
     matchup = matchup.sort_values("date")
-    log.info(f"  After augmentation: {len(matchup)} rows ({len(matchup)//2} original + {len(matchup)//2} mirrored)")
 
-    feature_names = [c for c in matchup.columns if (c.startswith(("diff_", "red_", "blue_")) or "odds" in c or c == "elo_vs_odds") and c not in ("red_wins", "_augmented")]
+    feature_names = [
+        c for c in matchup.columns
+        if (c.startswith(("diff_", "red_", "blue_", "fight_")) or "odds" in c or c == "elo_vs_odds")
+        and c not in ("red_wins",)
+    ]
 
-    # --- Feature selection via mutual information ---
-    log.info("  Running feature selection (mutual information)...")
-    X_all = matchup[feature_names].values
-    y_all = matchup["red_wins"].values
-    mi_scores = mutual_info_classif(X_all, y_all, random_state=42)
-    mi_ranked = sorted(zip(feature_names, mi_scores), key=lambda x: x[1], reverse=True)
+    # Feature selection used to run mutual information over the full frame, choosing
+    # the top 39 with test-set labels visible. It is now fold-scoped in
+    # select_winner_features(), which sees training rows only.
 
-    log.info("  Top 30 features by mutual information:")
-    for name, score in mi_ranked[:30]:
-        log.info(f"    {name:50s} {score:.4f}")
-
-    # Keep top N features + force-include odds features (sparse but powerful)
-    TOP_N = 39
-    selected = [name for name, _ in mi_ranked[:TOP_N]]
-    odds_features = [c for c in feature_names if "odds" in c]
-    for of in odds_features:
-        if of not in selected:
-            selected.append(of)
-    log.info(f"  Selected {len(selected)} features ({TOP_N} MI + {len(odds_features)} odds, from {len(feature_names)})")
-
-    log.info(f"  Matchup matrix: {matchup.shape[0]} fights")
+    log.info(f"  Matchup matrix: {matchup.shape[0]} fights, {len(feature_names)} candidate features")
     log.info(f"  Red win rate: {matchup['red_wins'].mean():.3f}")
     log.info(f"  Date range: {matchup['date'].min()} to {matchup['date'].max()}")
-    return matchup, selected
+    return matchup, feature_names
 
 
 # ===========================================================================
 # PHASE 1: Gradient Boosting
 # ===========================================================================
+
+# ===========================================================================
+# FOLD-SCOPED PREPARATION
+# Everything here is fit on training rows only. Keeping these out of
+# build_matchup_df() is what makes walk-forward evaluation honest.
+# ===========================================================================
+
+# Features that encode the market price. Held separately so the evaluation harness
+# can run a no-odds arm — the only arm that answers "do I beat the closing line".
+ODDS_FEATURE_MARKERS = ("odds", "elo_vs_odds")
+
+
+def is_odds_feature(name: str) -> bool:
+    return ("odds" in name) or (name == "elo_vs_odds")
+
+
+def is_glicko_feature(name: str) -> bool:
+    """Glicko features are the top-ranked ones by MI, and until the newcomer-seed fix
+    in glicko_service._pre_ufc_records they were contaminated by each fighter's
+    LIFETIME record (which includes their future UFC results). Dropping them gives a
+    conservative floor that holds regardless of whether snapshots have been recomputed.
+    """
+    return "glicko" in name
+
+
+def _fillna_from_train(
+    matchup: pd.DataFrame, feature_names: list[str], train_mask: np.ndarray,
+    skip_odds: bool = True,
+) -> tuple[pd.DataFrame, pd.Series]:
+    """Fill NaNs in feature columns from TRAINING-row means only.
+
+    Odds columns are left as NaN by default. Only ~25% of fights are priced, so
+    mean-filling would hand three quarters of the data a fabricated market
+    probability near 0.5 — which is both wrong and a de-facto "has odds" indicator.
+    HistGradientBoosting learns a split direction for NaN natively.
+
+    Returns the filled frame and the fitted means, which callers should persist so
+    serve-time imputation uses identical constants.
+    """
+    out = matchup.copy()
+    target = [f for f in feature_names if not (skip_odds and is_odds_feature(f))]
+    train_means = out.loc[train_mask, target].mean()
+    out[target] = out[target].fillna(train_means).fillna(0.0)
+    return out, train_means
+
+
+def select_winner_features(
+    matchup: pd.DataFrame,
+    feature_names: list[str],
+    train_mask: np.ndarray,
+    top_n: int = 39,
+    include_odds: bool = True,
+    verbose: bool = True,
+) -> list[str]:
+    """Rank features by mutual information on TRAINING rows only.
+
+    Odds features are ranked separately and force-included when `include_odds`, so the
+    top_n budget is spent entirely on non-market signal (matching tuner.py's approach).
+    """
+    non_odds = [f for f in feature_names if not is_odds_feature(f)]
+    odds_features = [f for f in feature_names if is_odds_feature(f)]
+
+    train = matchup.loc[train_mask]
+    X_train = train[non_odds].values
+    y_train = train["red_wins"].values
+
+    if verbose:
+        log.info(f"  Feature selection: MI on {len(train)} training rows only")
+
+    mi_scores = mutual_info_classif(X_train, y_train, random_state=42)
+    mi_ranked = sorted(zip(non_odds, mi_scores), key=lambda x: x[1], reverse=True)
+
+    if verbose:
+        log.info("  Top 30 features by mutual information:")
+        for name, score in mi_ranked[:30]:
+            log.info(f"    {name:50s} {score:.4f}")
+
+    selected = [name for name, _ in mi_ranked[:top_n]]
+    if include_odds:
+        selected += [f for f in odds_features if f not in selected]
+
+    if verbose:
+        log.info(
+            f"  Selected {len(selected)} features "
+            f"({min(top_n, len(mi_ranked))} MI + "
+            f"{len(odds_features) if include_odds else 0} odds, from {len(feature_names)})"
+        )
+    return list(dict.fromkeys(selected))
+
+
+def _corner_swap_augment(
+    X: np.ndarray, y: np.ndarray, feature_names: list[str]
+) -> tuple[np.ndarray, np.ndarray]:
+    """Double the TRAINING set by mirroring red/blue corners.
+
+    Applied after the split, never to the full frame — mirrors of test fights must not
+    reach the training set, and mirrors of training rows must not reach any validation
+    split. Label flips; diff_* negate; red_*/blue_* swap; odds mirror.
+    """
+    X_swap = X.copy()
+    name_to_idx = {n: i for i, n in enumerate(feature_names)}
+
+    for i, name in enumerate(feature_names):
+        if name.startswith("diff_"):
+            X_swap[:, i] = -X[:, i]
+        elif name.startswith("red_"):
+            blue_name = "blue_" + name[4:]
+            j = name_to_idx.get(blue_name)
+            if j is not None:
+                X_swap[:, i] = X[:, j]
+                X_swap[:, j] = X[:, i]
+        elif name == "odds_red_prob":
+            j = name_to_idx.get("odds_blue_prob")
+            if j is not None:
+                X_swap[:, i], X_swap[:, j] = X[:, j], X[:, i]
+        elif name == "odds_red_american":
+            j = name_to_idx.get("odds_blue_american")
+            if j is not None:
+                X_swap[:, i], X_swap[:, j] = X[:, j], X[:, i]
+        elif name == "odds_diff":
+            X_swap[:, i] = -X[:, i]
+        elif name == "odds_fav_is_red":
+            X_swap[:, i] = 1 - X[:, i]
+        elif name == "elo_vs_odds":
+            X_swap[:, i] = -X[:, i]
+
+    return np.vstack([X, X_swap]), np.concatenate([y, 1 - y])
+
+
+# Optuna-tuned (trial #58). NOTE: that search maximized AUC on the same chronological
+# 20% slice it then reported, so these values carry selection optimism. The walk-forward
+# harness records this explicitly rather than pretending otherwise.
+GBT_PARAMS = dict(
+    max_depth=3,
+    learning_rate=0.037,
+    max_features=0.65,
+    min_samples_leaf=32,
+    l2_regularization=4.4,
+    max_bins=128,
+)
+GBT_MAX_ITER = 1000
+
+
+def fit_gbt(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    feature_names: list[str],
+    params: dict | None = None,
+    val_fraction: float = 0.15,
+    augment: bool = True,
+    seed: int = 42,
+) -> tuple[HistGradientBoostingClassifier, int]:
+    """Fit the GBT with chronological early stopping and train-only augmentation.
+
+    sklearn's built-in `validation_fraction` carves its validation set with a SHUFFLED
+    split. With corner-swap mirrors in the training frame that validation set fills up
+    with mirrors of rows being fit, so early stopping — the dominant regularization knob
+    at max_iter=1000 — is chosen against leaked data and the model ends up badly
+    under-regularized.
+
+    Instead: hold out the most recent `val_fraction` of training rows chronologically,
+    augment the fit and validation halves independently, pick the iteration count by
+    validation log loss, then refit on the whole training slice at that count.
+
+    Rows must already be in chronological order.
+    """
+    params = {**GBT_PARAMS, **(params or {})}
+    n = len(X_train)
+    n_val = int(n * val_fraction)
+
+    def _make(max_iter):
+        return HistGradientBoostingClassifier(
+            max_iter=max_iter, early_stopping=False, random_state=seed, **params
+        )
+
+    best_iter = GBT_MAX_ITER
+    if n_val >= 200:
+        X_fit, y_fit = X_train[:-n_val], y_train[:-n_val]
+        X_val, y_val = X_train[-n_val:], y_train[-n_val:]
+
+        if augment:
+            X_fit, y_fit = _corner_swap_augment(X_fit, y_fit, feature_names)
+            X_val, y_val = _corner_swap_augment(X_val, y_val, feature_names)
+
+        probe = _make(GBT_MAX_ITER).fit(X_fit, y_fit)
+
+        best_loss, best_iter, since_best = np.inf, 1, 0
+        for i, proba in enumerate(probe.staged_predict_proba(X_val), start=1):
+            loss = log_loss(y_val, proba[:, 1], labels=[0, 1])
+            if loss < best_loss - 1e-6:
+                best_loss, best_iter, since_best = loss, i, 0
+            else:
+                since_best += 1
+                if since_best >= 75:
+                    break
+        log.info(
+            f"  Early stopping (chronological val, n={n_val}): "
+            f"best_iter={best_iter} val_logloss={best_loss:.4f}"
+        )
+    else:
+        log.warning(f"  Only {n_val} validation rows — skipping early stopping")
+
+    X_full, y_full = (
+        _corner_swap_augment(X_train, y_train, feature_names) if augment else (X_train, y_train)
+    )
+    model = _make(best_iter).fit(X_full, y_full)
+    return model, best_iter
+
 
 def train_gbt(matchup: pd.DataFrame, feature_names: list[str], odds_only: bool = False) -> dict:
     log.info("=" * 60)
@@ -874,42 +1512,37 @@ def train_gbt(matchup: pd.DataFrame, feature_names: list[str], odds_only: bool =
     matchup = matchup.sort_values("date").reset_index(drop=True)
 
     if odds_only:
-        # Only use fights where we have odds data
-        has_odds = matchup["odds_red_prob"] > 0
+        # Row filter — fights that have a market price. This is NOT a no-odds ablation;
+        # see walk_forward_eval() for the arm that drops the odds features themselves.
+        has_odds = matchup["odds_red_prob"].notna()
         matchup_filtered = matchup[has_odds].reset_index(drop=True)
         log.info(f"  Filtered to {len(matchup_filtered)} fights with odds (from {len(matchup)})")
     else:
         matchup_filtered = matchup
 
-    # Split: train on first 80%, test on last 20% — but only evaluate on non-augmented rows
-    has_aug = "_augmented" in matchup_filtered.columns
+    # Chronological 80/20. Mirrors are no longer present in the frame, so a fight can
+    # only ever land on one side of this boundary.
     split_idx = int(len(matchup_filtered) * 0.8)
-    train = matchup_filtered.iloc[:split_idx]
-    test_all = matchup_filtered.iloc[split_idx:]
-    # Evaluate only on original (non-mirrored) data for honest metrics
-    test = test_all[~test_all["_augmented"]] if has_aug else test_all
+    train_mask = np.zeros(len(matchup_filtered), dtype=bool)
+    train_mask[:split_idx] = True
 
-    X_train, y_train = train[feature_names].values, train["red_wins"].values
-    X_test, y_test = test[feature_names].values, test["red_wins"].values
+    matchup_filtered, train_means = _fillna_from_train(
+        matchup_filtered, feature_names, train_mask
+    )
+    selected = select_winner_features(matchup_filtered, feature_names, train_mask)
+
+    train = matchup_filtered.iloc[:split_idx]
+    test = matchup_filtered.iloc[split_idx:]
+
+    X_train, y_train = train[selected].values, train["red_wins"].values
+    X_test, y_test = test[selected].values, test["red_wins"].values
 
     log.info(f"  Train: {len(train)} ({train['date'].min()} to {train['date'].max()})")
-    log.info(f"  Test:  {len(test)} original ({test['date'].min()} to {test['date'].max()})")
+    log.info(f"  Test:  {len(test)} ({test['date'].min()} to {test['date'].max()})")
     log.info(f"  Train red win rate: {y_train.mean():.3f} | Test: {y_test.mean():.3f}")
 
-    model = HistGradientBoostingClassifier(
-        max_iter=1000,
-        max_depth=3,
-        learning_rate=0.037,
-        max_features=0.65,
-        min_samples_leaf=32,
-        l2_regularization=4.4,
-        max_bins=128,
-        early_stopping=True,
-        n_iter_no_change=75,
-        validation_fraction=0.15,
-        random_state=42,
-    )
-    model.fit(X_train, y_train)
+    feature_names = selected
+    model, best_iter = fit_gbt(X_train, y_train, selected)
 
     y_proba = model.predict_proba(X_test)[:, 1]
     y_pred = (y_proba >= 0.5).astype(int)
@@ -935,11 +1568,20 @@ def train_gbt(matchup: pd.DataFrame, feature_names: list[str], odds_only: bool =
         log.info(f"    {name:50s} {imp:.4f}")
 
     with open(MODEL_DIR / "gbt_v3.pkl", "wb") as f:
-        pickle.dump({"model": model, "features": feature_names, "version": 3}, f)
+        pickle.dump({
+            "model": model,
+            "features": feature_names,
+            # Persist the train-fitted imputation constants so serving fills NaNs with
+            # exactly what training used, instead of recomputing its own means.
+            "train_means": train_means,
+            "best_iter": best_iter,
+            "version": 4,
+        }, f)
     log.info(f"  Saved to {MODEL_DIR / 'gbt_v3.pkl'}")
 
     return {"model": model, "test_proba": y_proba, "test_y": y_test,
-            "accuracy": acc, "auc": auc, "log_loss": ll}
+            "accuracy": acc, "auc": auc, "log_loss": ll,
+            "features": feature_names, "train_means": train_means}
 
 
 # ===========================================================================
@@ -947,7 +1589,7 @@ def train_gbt(matchup: pd.DataFrame, feature_names: list[str], odds_only: bool =
 # ===========================================================================
 
 def calibrate_model(matchup: pd.DataFrame, feature_names: list[str],
-                    gbt_model=None) -> dict:
+                    gbt_model=None, train_means: pd.Series | None = None) -> dict:
     """Calibrate the Phase 1 GBT model using Platt, isotonic, and Venn-Abers.
 
     Reuses the already-trained GBT model (80% train). Splits the 20% test set
@@ -955,6 +1597,10 @@ def calibrate_model(matchup: pd.DataFrame, feature_names: list[str],
 
     Venn-Abers uses k-fold CV on the training set to generate ~5,000 out-of-fold
     calibration samples, then applies leave-one-out isotonic per prediction.
+
+    CAVEAT: the winning calibrator is chosen by Brier on the same eval slice whose
+    metrics are then reported, so those metrics carry selection optimism. Treat
+    walk_forward_eval() as the source of truth for headline numbers.
     """
     log.info("=" * 60)
     log.info("PROBABILITY CALIBRATION")
@@ -968,13 +1614,20 @@ def calibrate_model(matchup: pd.DataFrame, feature_names: list[str],
         log.info("  Loaded Phase 1 GBT from disk")
 
     matchup = matchup.sort_values("date").reset_index(drop=True)
-    has_aug = "_augmented" in matchup.columns
 
-    # Same 80/20 split as Phase 1
+    # Same 80/20 split as Phase 1. Mirrors no longer live in the frame, so the test
+    # slice is already all-original — no _augmented filtering needed.
     split_idx = int(len(matchup) * 0.8)
+    train_mask = np.zeros(len(matchup), dtype=bool)
+    train_mask[:split_idx] = True
+
+    if train_means is not None:
+        matchup[feature_names] = matchup[feature_names].fillna(train_means).fillna(0.0)
+    else:
+        matchup, train_means = _fillna_from_train(matchup, feature_names, train_mask)
+
     train_all = matchup.iloc[:split_idx]
-    test_all = matchup.iloc[split_idx:]
-    test = test_all[~test_all["_augmented"]] if has_aug else test_all
+    test = matchup.iloc[split_idx:]
 
     # Split the test set: first half for Platt/isotonic calibration, second half for evaluation
     cal_split = int(len(test) * 0.5)
@@ -1007,8 +1660,7 @@ def calibrate_model(matchup: pd.DataFrame, feature_names: list[str],
 
     # --- Venn-Abers with k-fold CV calibration data ---
     log.info(f"\n  Generating Venn-Abers calibration data via 5-fold CV on training set...")
-    # Use only non-augmented rows for k-fold to avoid data leakage from mirrored fights
-    train_orig = train_all[~train_all["_augmented"]] if has_aug else train_all
+    train_orig = train_all
     X_train_orig = train_orig[feature_names].values
     y_train_orig = train_orig["red_wins"].values
 
@@ -1016,13 +1668,11 @@ def calibrate_model(matchup: pd.DataFrame, feature_names: list[str],
     oof_proba = np.full(len(train_orig), np.nan)
 
     for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X_train_orig, y_train_orig)):
-        fold_model = HistGradientBoostingClassifier(
-            max_iter=1000, max_depth=3, learning_rate=0.037,
-            max_features=0.65, min_samples_leaf=32, l2_regularization=4.4,
-            max_bins=128, early_stopping=True, n_iter_no_change=75,
-            validation_fraction=0.15, random_state=42,
+        # fit_gbt augments inside the fold's own training rows only, so no mirror of a
+        # held-out row can reach the fit or the early-stopping validation set.
+        fold_model, _ = fit_gbt(
+            X_train_orig[train_idx], y_train_orig[train_idx], feature_names
         )
-        fold_model.fit(X_train_orig[train_idx], y_train_orig[train_idx])
         oof_proba[val_idx] = fold_model.predict_proba(X_train_orig[val_idx])[:, 1]
         log.info(f"    Fold {fold_idx + 1}: train={len(train_idx)}, val={len(val_idx)}")
 
@@ -1095,6 +1745,9 @@ def calibrate_model(matchup: pd.DataFrame, feature_names: list[str],
         "venn_abers": va,
         "features": feature_names,
         "best_method": best_method,
+        # Serving must impute with the same constants training fit — see
+        # generate_predictions().
+        "train_means": train_means,
     }
     with open(MODEL_DIR / "calibrated_model.pkl", "wb") as f:
         pickle.dump(calibrated, f)
@@ -1463,28 +2116,583 @@ def betting_simulation(cal_results: dict) -> None:
 
 
 # ===========================================================================
+# WALK-FORWARD EVALUATION
+#
+# The source of truth for headline numbers. Every fit — imputation, feature
+# selection, corner-swap augmentation, early stopping, calibration — happens
+# strictly inside a fold's training window. Betting thresholds are frozen below
+# rather than swept and cherry-picked after seeing results.
+# ===========================================================================
+
+# Frozen BEFORE scoring. Report every rung; never quote the best cell as the headline.
+FROZEN_EDGE_THRESHOLDS = (0.03, 0.05, 0.08, 0.10, 0.15)
+# Weakest feature set first, so the floor is read before the headline.
+ARM_ORDER = ("no_odds_no_glicko", "no_odds", "simulator", "with_odds", "market_anchored")
+# The anchored arm corrects this arm's predictions toward/away from the line. It must
+# be a NO-ODDS arm: anchoring a model that already contains the market price would
+# double-count the line.
+ANCHOR_BASE_ARM = "no_odds"
+FLAT_STAKE = 100.0
+
+
+def _bootstrap_ci(values: np.ndarray, stat=np.mean, n_boot: int = 2000,
+                  alpha: float = 0.05, seed: int = 42) -> tuple[float, float]:
+    """Percentile bootstrap CI. A point estimate with no interval is what made the
+    original 72.9% look solid at n=510."""
+    if len(values) == 0:
+        return (float("nan"), float("nan"))
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, len(values), size=(n_boot, len(values)))
+    boots = stat(values[idx], axis=1)
+    return (float(np.percentile(boots, 100 * alpha / 2)),
+            float(np.percentile(boots, 100 * (1 - alpha / 2))))
+
+
+def _betting_ladder(model_prob: np.ndarray, y: np.ndarray,
+                    red_dec: np.ndarray, blue_dec: np.ndarray,
+                    market_red_fair: np.ndarray, market_blue_fair: np.ndarray) -> list[dict]:
+    """Flat-stake value betting at the frozen thresholds, vig removed."""
+    rungs = []
+    blue_prob = 1 - model_prob
+
+    for min_edge in FROZEN_EDGE_THRESHOLDS:
+        pnls = []
+        for i in range(len(y)):
+            edge_red = model_prob[i] - market_red_fair[i]
+            edge_blue = blue_prob[i] - market_blue_fair[i]
+            ev_red = model_prob[i] * red_dec[i]
+            ev_blue = blue_prob[i] * blue_dec[i]
+
+            if edge_red > min_edge and ev_red > 1.0:
+                pnls.append((red_dec[i] - 1) * FLAT_STAKE if y[i] == 1 else -FLAT_STAKE)
+            elif edge_blue > min_edge and ev_blue > 1.0:
+                pnls.append((blue_dec[i] - 1) * FLAT_STAKE if y[i] == 0 else -FLAT_STAKE)
+
+        pnls = np.array(pnls, dtype=float)
+        n = len(pnls)
+        roi = float(pnls.sum() / (n * FLAT_STAKE) * 100) if n else float("nan")
+        roi_lo, roi_hi = (
+            _bootstrap_ci(pnls / FLAT_STAKE * 100) if n >= 20 else (float("nan"), float("nan"))
+        )
+        rungs.append({
+            "min_edge": min_edge,
+            "bets": n,
+            "bet_rate": float(n / len(y)) if len(y) else float("nan"),
+            "win_rate": float((pnls > 0).mean()) if n else float("nan"),
+            "profit": float(pnls.sum()),
+            "roi_pct": roi,
+            "roi_ci95": [roi_lo, roi_hi],
+        })
+    return rungs
+
+
+def walk_forward_eval(
+    matchup: pd.DataFrame,
+    feature_names: list[str],
+    n_folds: int = 8,
+    eval_frac: float = 0.4,
+    top_n: int = 39,
+    sim_n: int = 5000,
+) -> dict:
+    """Expanding-window walk-forward evaluation, run once per arm.
+
+    Arms:
+      with_odds  — production feature set (includes the market price)
+      no_odds    — market features removed; the ONLY arm that answers
+                   "does my handicapping beat the closing line"
+
+    Both are scored against a market-only reference on the identical fight set.
+    """
+    log.info("=" * 60)
+    log.info("WALK-FORWARD EVALUATION")
+    log.info("=" * 60)
+
+    # reset_index() (not drop=True) keeps fight_id as a column so per-fight
+    # predictions can be joined back and audited.
+    matchup = matchup.sort_values("date").reset_index()
+    n = len(matchup)
+    eval_start = int(n * (1 - eval_frac))
+    bounds = np.linspace(eval_start, n, n_folds + 1).astype(int)
+
+    log.info(f"  {n} fights | {n_folds} folds over the last {eval_frac:.0%} "
+             f"({n - eval_start} eval fights)")
+    log.info(f"  Hyperparameters are FIXED (not tuned per fold): {GBT_PARAMS}")
+    log.info("  Those values came from an Optuna search that scored on a chronological")
+    log.info("  20% slice overlapping this eval window, so a residual selection optimism")
+    log.info("  remains. It is bounded and disclosed rather than hidden.")
+
+    arms = {
+        # Production feature set. Contains the market price, so its accuracy is NOT
+        # independent evidence of beating the market.
+        "with_odds": list(feature_names),
+        # Market features removed — the arm that answers "does my handicapping beat
+        # the closing line".
+        "no_odds": [f for f in feature_names if not is_odds_feature(f)],
+        # Conservative floor: also drops Glicko, which carried the newcomer-seed leak
+        # until snapshots are recomputed with the fixed pre-UFC seeding.
+        "no_odds_no_glicko": [
+            f for f in feature_names
+            if not is_odds_feature(f) and not is_glicko_feature(f)
+        ],
+    }
+
+    results = {}
+    anchor_folds, all_anchored, all_anchor_mkt = [], [], []
+
+    for arm_name, arm_features in arms.items():
+        log.info("\n" + "-" * 60)
+        log.info(f"ARM: {arm_name}  ({len(arm_features)} candidate features)")
+        log.info("-" * 60)
+
+        fold_rows, all_proba, all_cal_proba, all_y, all_idx = [], [], [], [], []
+
+        for k in range(n_folds):
+            lo, hi = bounds[k], bounds[k + 1]
+            if hi <= lo:
+                continue
+
+            train_mask = np.zeros(n, dtype=bool)
+            train_mask[:lo] = True
+
+            fold_df, _ = _fillna_from_train(matchup, arm_features, train_mask)
+            selected = select_winner_features(
+                fold_df, arm_features, train_mask, top_n=top_n,
+                include_odds=(arm_name == "with_odds"), verbose=False,
+            )
+
+            train_df = fold_df.iloc[:lo]
+            test_df = fold_df.iloc[lo:hi]
+
+            # Hold out the tail of training for calibration; the model never sees it.
+            cal_cut = int(len(train_df) * 0.85)
+            fit_df, cal_df = train_df.iloc[:cal_cut], train_df.iloc[cal_cut:]
+
+            X_fit = fit_df[selected].values
+            y_fit = fit_df["red_wins"].values
+            X_test = test_df[selected].values
+            y_test = test_df["red_wins"].values
+
+            model, best_iter = fit_gbt(X_fit, y_fit, selected)
+            proba = model.predict_proba(X_test)[:, 1]
+
+            # Isotonic calibration fit on the held-out tail of train only
+            from sklearn.isotonic import IsotonicRegression
+            iso = IsotonicRegression(y_min=0.01, y_max=0.99, out_of_bounds="clip")
+            iso.fit(model.predict_proba(cal_df[selected].values)[:, 1],
+                    cal_df["red_wins"].values)
+            cal_proba = iso.predict(proba)
+
+            # --- Market-anchored variant, derived from the no-odds base model ---
+            # The anchor is fit on cal_df: rows the base model was NOT trained on, so
+            # `b` reflects out-of-sample disagreement rather than training sharpness.
+            if arm_name == ANCHOR_BASE_ARM:
+                cal_mkt = devig(cal_df["odds_red_prob"].values,
+                                cal_df["odds_blue_prob"].values)
+                cal_mkt = np.where(cal_df["odds_red_prob"].notna().values, cal_mkt, np.nan)
+                test_mkt = devig(test_df["odds_red_prob"].values,
+                                 test_df["odds_blue_prob"].values)
+                test_mkt = np.where(test_df["odds_red_prob"].notna().values, test_mkt, np.nan)
+
+                anchor = MarketAnchor().fit(
+                    iso.predict(model.predict_proba(cal_df[selected].values)[:, 1]),
+                    cal_mkt,
+                    cal_df["red_wins"].values,
+                )
+                anchored_proba = anchor.predict_proba(cal_proba, test_mkt)
+                anchor_folds.append({"fold": k + 1, "b": anchor.b_, "c": anchor.c_,
+                                     "n_fit": anchor.n_fit_})
+                all_anchored.append(anchored_proba)
+                all_anchor_mkt.append(test_mkt)
+
+            acc = accuracy_score(y_test, (proba >= 0.5).astype(int))
+            auc = roc_auc_score(y_test, proba) if len(np.unique(y_test)) > 1 else float("nan")
+            fold_rows.append({
+                "fold": k + 1,
+                "train_n": int(lo),
+                "test_n": int(hi - lo),
+                "test_start": str(test_df["date"].min()),
+                "test_end": str(test_df["date"].max()),
+                "best_iter": int(best_iter),
+                "n_features": len(selected),
+                "accuracy": float(acc),
+                "auc": float(auc),
+                "log_loss": float(log_loss(y_test, proba, labels=[0, 1])),
+                "brier": float(brier_score_loss(y_test, proba)),
+                "brier_calibrated": float(brier_score_loss(y_test, cal_proba)),
+            })
+            log.info(
+                f"  Fold {k+1}/{n_folds}  train={lo:>5}  test={hi-lo:>4}  "
+                f"({test_df['date'].min()} → {test_df['date'].max()})  "
+                f"acc={acc:.4f}  auc={auc:.4f}  iter={best_iter}"
+            )
+
+            all_proba.append(proba)
+            all_cal_proba.append(cal_proba)
+            all_y.append(y_test)
+            all_idx.append(test_df.index.values)
+
+        proba = np.concatenate(all_proba)
+        cal_proba = np.concatenate(all_cal_proba)
+        y = np.concatenate(all_y)
+        idx = np.concatenate(all_idx)
+
+        correct = (proba >= 0.5).astype(int) == y
+        acc_lo, acc_hi = _bootstrap_ci(correct.astype(float))
+
+        results[arm_name] = {
+            "folds": fold_rows,
+            "n_eval": int(len(y)),
+            "accuracy": float(correct.mean()),
+            "accuracy_ci95": [acc_lo, acc_hi],
+            "auc": float(roc_auc_score(y, proba)),
+            "log_loss": float(log_loss(y, proba, labels=[0, 1])),
+            "brier": float(brier_score_loss(y, proba)),
+            "brier_calibrated": float(brier_score_loss(y, cal_proba)),
+            "_proba": proba, "_cal_proba": cal_proba, "_y": y, "_idx": idx,
+        }
+
+        log.info(
+            f"  POOLED  n={len(y)}  acc={correct.mean():.4f} "
+            f"[{acc_lo:.4f}, {acc_hi:.4f}]  auc={results[arm_name]['auc']:.4f}  "
+            f"brier={results[arm_name]['brier']:.4f} "
+            f"(calibrated {results[arm_name]['brier_calibrated']:.4f})"
+        )
+
+    # --- Simulator arm: competing-risks Monte Carlo over the Glicko ratings ---
+    # Fitted per fold on training rows only, exactly like every other arm. Produces
+    # winner AND method from one simulation, so the two cannot contradict each other.
+    log.info("\n" + "-" * 60)
+    log.info("ARM: simulator (competing risks over Glicko)")
+    log.info("-" * 60)
+
+    sim_all = attach_fit_targets(build_simulator_frame(matchup.set_index("fight_id")),
+                                 matchup.set_index("fight_id")).reset_index(drop=True)
+    sim_proba, sim_method, sim_idx = [], [], []
+
+    for k in range(n_folds):
+        lo, hi = bounds[k], bounds[k + 1]
+        if hi <= lo:
+            continue
+        hazard = HazardRateModel().fit(sim_all.iloc[:lo])
+        out = simulate(sim_all.iloc[lo:hi], hazard, n_sims=sim_n)
+        sim_proba.append(out["red_prob"].to_numpy(float))
+        sim_method.append(np.column_stack([out["p_ko"], out["p_sub"], out["p_dec"]]))
+        sim_idx.append(np.arange(lo, hi))
+        log.info(f"  Fold {k+1}/{n_folds}  train={lo:>5}  test={hi-lo:>4}  "
+                 f"sims={sim_n}  b_dec={hazard.decision_coef_[0]:+.3f}")
+
+    if sim_proba:
+        sp = np.concatenate(sim_proba)
+        sy = results[ANCHOR_BASE_ARM]["_y"]
+        correct = (sp >= 0.5).astype(int) == sy
+        s_lo, s_hi = _bootstrap_ci(correct.astype(float))
+        results["simulator"] = {
+            "n_eval": int(len(sy)),
+            "accuracy": float(correct.mean()),
+            "accuracy_ci95": [s_lo, s_hi],
+            "auc": float(roc_auc_score(sy, sp)),
+            "log_loss": float(log_loss(sy, np.clip(sp, 1e-6, 1 - 1e-6), labels=[0, 1])),
+            "brier": float(brier_score_loss(sy, sp)),
+            "brier_calibrated": float(brier_score_loss(sy, sp)),
+            "_proba": sp, "_cal_proba": sp,
+            "_y": sy, "_idx": results[ANCHOR_BASE_ARM]["_idx"],
+        }
+
+        # --- Method output: scored on REALIZED outcomes only ---
+        # There is no method market in this database (55 rows, one snapshot), so the
+        # benchmark is the realised class and a training base-rate prior.
+        P = np.clip(np.vstack(sim_method), 1e-6, 1.0)
+        P /= P.sum(axis=1, keepdims=True)
+        true_method = sim_all["method_class"].to_numpy(int)[np.concatenate(sim_idx)]
+        train_end = bounds[0]
+        base = np.bincount(
+            sim_all["method_class"].to_numpy(int)[:train_end], minlength=3
+        ) / max(train_end, 1)
+        base_mat = np.tile(base, (len(true_method), 1))
+
+        method_block = {
+            "n": int(len(true_method)),
+            "log_loss": float(log_loss(true_method, P, labels=[0, 1, 2])),
+            "log_loss_base_rate": float(log_loss(true_method, base_mat, labels=[0, 1, 2])),
+            "accuracy": float(accuracy_score(true_method, P.argmax(axis=1))),
+            "per_class_brier": {
+                name: {
+                    "model": float(brier_score_loss((true_method == i).astype(int), P[:, i])),
+                    "base_rate": float(brier_score_loss(
+                        (true_method == i).astype(int), np.full(len(true_method), base[i]))),
+                }
+                for i, name in enumerate(("KO", "SUB", "DEC"))
+            },
+            "predicted_mix": P.mean(axis=0).tolist(),
+            "actual_mix": (np.bincount(true_method, minlength=3) / len(true_method)).tolist(),
+        }
+        results["simulator"]["method"] = method_block
+
+        log.info(f"\n  METHOD (scored on realised outcomes — no market exists for this)")
+        log.info(f"    log loss   {method_block['log_loss']:.4f}  "
+                 f"vs base rate {method_block['log_loss_base_rate']:.4f}")
+        log.info(f"    accuracy   {method_block['accuracy']:.4f}")
+        log.info(f"    {'class':<6}{'Brier':>9}{'base':>9}")
+        for name, d in method_block["per_class_brier"].items():
+            log.info(f"    {name:<6}{d['model']:>9.4f}{d['base_rate']:>9.4f}")
+        log.info(f"    predicted mix {np.round(method_block['predicted_mix'], 3)}  "
+                 f"actual {np.round(method_block['actual_mix'], 3)}")
+
+    # --- Market-anchored arm, assembled from the per-fold anchors above ---
+    if all_anchored:
+        base = results[ANCHOR_BASE_ARM]
+        anchored = np.concatenate(all_anchored)
+        y = base["_y"]
+        correct = (anchored >= 0.5).astype(int) == y
+        a_lo, a_hi = _bootstrap_ci(correct.astype(float))
+        results["market_anchored"] = {
+            "base_arm": ANCHOR_BASE_ARM,
+            "folds": anchor_folds,
+            "mean_b": float(np.mean([f["b"] for f in anchor_folds])),
+            "n_eval": int(len(y)),
+            "accuracy": float(correct.mean()),
+            "accuracy_ci95": [a_lo, a_hi],
+            "auc": float(roc_auc_score(y, anchored)),
+            "log_loss": float(log_loss(y, anchored, labels=[0, 1])),
+            "brier": float(brier_score_loss(y, anchored)),
+            "brier_calibrated": float(brier_score_loss(y, anchored)),
+            "_proba": anchored, "_cal_proba": anchored,
+            "_y": y, "_idx": base["_idx"],
+        }
+        log.info("\n" + "-" * 60)
+        log.info(f"MARKET-ANCHORED ARM  (base = {ANCHOR_BASE_ARM})")
+        log.info("-" * 60)
+        log.info("  b = fraction of the model's disagreement with the line that is trusted")
+        log.info(f"  {'Fold':>5} {'b':>8} {'c':>8} {'n_fit':>7}")
+        log.info(f"  {'-'*32}")
+        for f in anchor_folds:
+            log.info(f"  {f['fold']:>5} {f['b']:>8.3f} {f['c']:>+8.3f} {f['n_fit']:>7}")
+        log.info(f"  mean b = {results['market_anchored']['mean_b']:.3f}")
+
+    # --- Market comparison on the odds subset (identical fights for every arm) ---
+    log.info("\n" + "-" * 60)
+    log.info("MARKET COMPARISON (fights with odds)")
+    log.info("-" * 60)
+
+    ref = results["with_odds"]
+    sub = matchup.loc[ref["_idx"]]
+    has_odds = sub["odds_red_prob"].notna().values & sub["odds_blue_prob"].notna().values
+
+    market_block = {"n_with_odds": int(has_odds.sum())}
+    if has_odds.sum() < 50:
+        log.warning(f"  Only {has_odds.sum()} eval fights have odds — skipping")
+        results["market"] = market_block
+    else:
+        odds_df = sub[has_odds]
+        y_odds = ref["_y"][has_odds]
+
+        mr = odds_df["odds_red_prob"].values.astype(float)
+        mb = odds_df["odds_blue_prob"].values.astype(float)
+        fair = np.array([_implied_prob_no_vig(a, b) for a, b in zip(mr, mb)])
+        market_red_fair, market_blue_fair = fair[:, 0], fair[:, 1]
+
+        red_dec = np.array([_american_to_decimal(o) for o in odds_df["odds_red_american"].values])
+        blue_dec = np.array([_american_to_decimal(o) for o in odds_df["odds_blue_american"].values])
+
+        market_correct = (market_red_fair >= 0.5).astype(int) == y_odds
+        m_lo, m_hi = _bootstrap_ci(market_correct.astype(float))
+        market_block.update({
+            "accuracy": float(market_correct.mean()),
+            "accuracy_ci95": [m_lo, m_hi],
+            "log_loss": float(log_loss(y_odds, market_red_fair, labels=[0, 1])),
+            "brier": float(brier_score_loss(y_odds, market_red_fair)),
+            "avg_vig": float((mr + mb).mean() - 1),
+            "date_start": str(odds_df["date"].min()),
+            "date_end": str(odds_df["date"].max()),
+        })
+        results["market"] = market_block
+
+        log.info(f"  Eval fights with odds: {has_odds.sum()} "
+                 f"({odds_df['date'].min()} → {odds_df['date'].max()})")
+        log.info(f"  Average vig: {market_block['avg_vig']:.3f}")
+        log.info(f"\n  {'Arm':<20s} {'Acc':>8s} {'95% CI':>18s} {'AUC':>8s} {'Brier':>8s}")
+        log.info(f"  {'-'*66}")
+        log.info(f"  {'market only':<20s} {market_block['accuracy']:>8.4f} "
+                 f"{f'[{m_lo:.3f}, {m_hi:.3f}]':>18s} {'—':>8s} "
+                 f"{market_block['brier']:>8.4f}")
+
+        for arm_name in [a for a in ARM_ORDER if a in results]:
+            arm = results[arm_name]
+            p = arm["_proba"][has_odds]
+            pc = arm["_cal_proba"][has_odds]
+            c = (p >= 0.5).astype(int) == y_odds
+            lo_, hi_ = _bootstrap_ci(c.astype(float))
+
+            # Paired bootstrap on the accuracy DIFFERENCE vs the market, same fights.
+            diff = c.astype(float) - market_correct.astype(float)
+            d_lo, d_hi = _bootstrap_ci(diff)
+
+            arm["odds_subset"] = {
+                "n": int(has_odds.sum()),
+                "accuracy": float(c.mean()),
+                "accuracy_ci95": [lo_, hi_],
+                "auc": float(roc_auc_score(y_odds, p)),
+                "brier": float(brier_score_loss(y_odds, p)),
+                "brier_calibrated": float(brier_score_loss(y_odds, pc)),
+                "acc_minus_market": float(diff.mean()),
+                "acc_minus_market_ci95": [d_lo, d_hi],
+                "beats_market_significantly": bool(d_lo > 0),
+                "betting_ladder": _betting_ladder(
+                    pc, y_odds, red_dec, blue_dec, market_red_fair, market_blue_fair
+                ),
+            }
+            log.info(f"  {arm_name:<20s} {c.mean():>8.4f} "
+                     f"{f'[{lo_:.3f}, {hi_:.3f}]':>18s} "
+                     f"{arm['odds_subset']['auc']:>8.4f} {arm['odds_subset']['brier']:>8.4f}")
+
+        log.info(f"\n  {'Arm':<20s} {'Acc − market':>14s} {'95% CI of diff':>22s} {'Beats mkt?':>12s}")
+        log.info(f"  {'-'*72}")
+        for arm_name in [a for a in ARM_ORDER if a in results]:
+            o = results[arm_name]["odds_subset"]
+            lo_, hi_ = o["acc_minus_market_ci95"]
+            log.info(
+                f"  {arm_name:<20s} {o['acc_minus_market']:>+14.4f} "
+                f"{f'[{lo_:+.4f}, {hi_:+.4f}]':>22s} "
+                f"{'YES' if o['beats_market_significantly'] else 'no':>12s}"
+            )
+
+        for arm_name in [a for a in ARM_ORDER if a in results]:
+            log.info(f"\n  Betting ladder — {arm_name} (calibrated, frozen thresholds):")
+            log.info(f"  {'Edge':>6s} {'Bets':>6s} {'Bet%':>7s} {'Win%':>7s} "
+                     f"{'ROI%':>8s} {'ROI 95% CI':>22s}")
+            log.info(f"  {'-'*62}")
+            for r in results[arm_name]["odds_subset"]["betting_ladder"]:
+                lo_, hi_ = r["roi_ci95"]
+                ci = f"[{lo_:+.1f}, {hi_:+.1f}]" if r["bets"] >= 20 else "n/a"
+                log.info(
+                    f"  {r['min_edge']:>6.0%} {r['bets']:>6d} {r['bet_rate']:>7.1%} "
+                    f"{r['win_rate']:>7.1%} {r['roi_pct']:>8.2f} {ci:>22s}"
+                )
+
+    # Per-fight predictions, so every aggregate above can be re-derived independently
+    # instead of taken on faith.
+    preds = pd.DataFrame({
+        "fight_id": matchup.loc[ref["_idx"], "fight_id"].values,
+        "date": matchup.loc[ref["_idx"], "date"].values,
+        "red_wins": ref["_y"],
+        "odds_red_prob": matchup.loc[ref["_idx"], "odds_red_prob"].values,
+        "odds_red_american": matchup.loc[ref["_idx"], "odds_red_american"].values,
+        "odds_blue_american": matchup.loc[ref["_idx"], "odds_blue_american"].values,
+    })
+    for arm_name in [a for a in ARM_ORDER if a in results]:
+        preds[f"{arm_name}_proba"] = results[arm_name]["_proba"]
+        preds[f"{arm_name}_proba_cal"] = results[arm_name]["_cal_proba"]
+    preds_path = MODEL_DIR / "eval_predictions.csv"
+    preds.to_csv(preds_path, index=False)
+    log.info(f"\n  Saved {len(preds)} per-fight eval predictions to {preds_path}")
+
+    return results
+
+
+def save_eval_results(results: dict, path: Path = None) -> Path:
+    """Persist walk-forward metrics so headline numbers stop being oral history."""
+    path = path or (MODEL_DIR / "eval_results.json")
+    clean = {}
+    for k, v in results.items():
+        if isinstance(v, dict):
+            clean[k] = {kk: vv for kk, vv in v.items() if not kk.startswith("_")}
+        else:
+            clean[k] = v
+    clean["_meta"] = {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "gbt_params": GBT_PARAMS,
+        "frozen_edge_thresholds": list(FROZEN_EDGE_THRESHOLDS),
+        "caveats": [
+            "Hyperparameters were Optuna-tuned on a chronological 20% slice that "
+            "overlaps this eval window; residual selection optimism remains.",
+            "with_odds takes the closing line as an input feature, so its accuracy "
+            "cannot be read as independent evidence of beating the market. Use the "
+            "no_odds arm for that comparison.",
+            "Historical odds are a T-2h snapshot with a noon-of-event-day fallback, "
+            "not true closing lines.",
+        ],
+    }
+    with open(path, "w") as f:
+        json.dump(clean, f, indent=2, default=str)
+    log.info(f"\n  Saved evaluation results to {path}")
+    return path
+
+
+# ===========================================================================
 # MAIN
 # ===========================================================================
 
-def run(phases=None):
+def run(phases=None, walk_forward=False, n_folds=8, fresh_glicko=False):
     if phases is None: phases = [1]
     log.info("=" * 60)
-    log.info("UFC Fight Winner Prediction Pipeline v6")
+    log.info(f"UFC Fight Winner Prediction Pipeline v6  ({datetime.now():%Y-%m-%d %H:%M})")
     log.info("=" * 60)
 
     df, round_data = load_fight_data()
-    df = build_features(df, round_data)
+
+    snaps = None
+    if fresh_glicko:
+        # Recompute Glicko in memory with the corrected pre-UFC newcomer seed, without
+        # overwriting the stored UFCGlickoSnapshot table.
+        from app.services.ufc.glicko_service import run_glicko_inmemory
+        log.info("\n  Recomputing Glicko snapshots in memory (fixed newcomer seed)...")
+        snaps = run_glicko_inmemory()
+        log.info(f"  Computed {len(snaps)} snapshots")
+
+    if walk_forward:
+        # Two passes. The first only locates the date where the eval window starts;
+        # the second rebuilds features with the style clusterer restricted to data
+        # before that date, so no eval-period distribution reaches the KMeans fit.
+        probe = build_matchup_df(
+            build_features(df.copy(), round_data.copy(), glicko_snapshots=snaps)
+        )[0]
+        cutoff = probe.sort_values("date")["date"].iloc[int(len(probe) * 0.6)]
+        log.info(f"\n  Style-cluster cutoff set to eval start: {cutoff}")
+
+        df = build_features(df, round_data, style_cutoff_date=cutoff,
+                            glicko_snapshots=snaps)
+        matchup, features = build_matchup_df(df)
+
+        wf = walk_forward_eval(matchup, features, n_folds=n_folds)
+        save_eval_results(wf)
+        log.info("\n" + "=" * 60)
+        log.info("Walk-forward evaluation complete.")
+        log.info("=" * 60)
+        return wf
+
+    if snaps is None:
+        log.warning(
+            "\n  !! Using STORED Glicko snapshots. If ranking_service.generate_rankings()\n"
+            "     has not been re-run since the newcomer-seed fix, these still encode each\n"
+            "     fighter's lifetime record (including future UFC results) and every metric\n"
+            "     below is inflated by roughly 10 accuracy points. Pass --fresh-glicko for\n"
+            "     corrected ratings, and see --walk-forward for out-of-sample numbers."
+        )
+
+    df = build_features(df, round_data, glicko_snapshots=snaps)
     matchup, features = build_matchup_df(df)
+
+    log.warning(
+        "\n  !! This is a single 80/20 split with hyperparameters that were tuned on an\n"
+        "     overlapping window. Treat --walk-forward as the source of truth."
+    )
 
     results = {}
     if 1 in phases:
         results["gbt_full"] = train_gbt(matchup, features, odds_only=False)
-        if "odds_red_prob" in matchup.columns and (matchup["odds_red_prob"] > 0).sum() > 100:
+        if "odds_red_prob" in matchup.columns and matchup["odds_red_prob"].notna().sum() > 100:
             results["gbt_odds"] = train_gbt(matchup, features, odds_only=True)
 
-    # Calibration + Betting Simulation (use Phase 1 GBT model)
-    gbt_model = results["gbt_full"]["model"] if "gbt_full" in results else None
-    cal_results = calibrate_model(matchup, features, gbt_model=gbt_model)
+    # Calibration + Betting Simulation (use Phase 1 GBT model).
+    # Pass the selected feature list and train-fitted imputation constants so
+    # calibration scores the same feature space the model was fit on.
+    gbt = results.get("gbt_full")
+    cal_results = calibrate_model(
+        matchup,
+        gbt["features"] if gbt else features,
+        gbt_model=gbt["model"] if gbt else None,
+        train_means=gbt["train_means"] if gbt else None,
+    )
     betting_simulation(cal_results)
 
     log.info("\n" + "=" * 60)
@@ -1513,27 +2721,13 @@ def generate_predictions():
     df, round_data = load_fight_data()
     df = build_features(df, round_data)
 
-    # Build matchup (without augmentation/filtering for prediction)
-    # We need the raw matchup with fight_id index
-    feature_cols = [c for c in df.columns if c.startswith(("avg_", "recent_", "last3_"))]
-    feature_cols += [
-        "elo", "elo_expected", "resume_score",
-        "height_inches", "weight_lbs", "reach_inches", "age",
-        "stance_orthodox", "stance_southpaw", "stance_switch",
-        "career_win_pct", "career_fights", "finish_rate", "been_finished_rate",
-        "streak", "days_since_last", "style_matchup_adv",
-    ]
-    feature_cols += [c for c in df.columns if "composite" in c and c.startswith(("avg_", "recent_", "last3_"))]
-    feature_cols += [c for c in df.columns if c.startswith(("avg_r1_", "avg_late_", "avg_output_", "avg_ctrl_trend",
-                                                             "recent_r1_", "recent_late_", "recent_output_", "recent_ctrl_trend"))]
-    feature_cols += [c for c in df.columns if c.startswith("style_") and c not in feature_cols]
-    feature_cols += [c for c in df.columns if c.startswith("div_") and c not in feature_cols]
-    # Add Glicko multi-dimensional ratings
-    feature_cols += [c for c in df.columns if c.startswith("glicko_") and c not in feature_cols]
-    feature_cols = list(dict.fromkeys(feature_cols))
+    # Build matchup (without augmentation/filtering for prediction).
+    # Same column list as training — see winner_feature_columns().
+    feature_cols = winner_feature_columns(df)
 
-    for col in feature_cols:
-        df[col] = df[col].fillna(df[col].mean())
+    # Per-fighter columns keep their NaNs here. Imputation happens once, at the matchup
+    # level, from the train-fitted means persisted with the model — recomputing means
+    # over the serving frame would silently use different constants than training did.
 
     # --- Build latest feature snapshot per fighter (for upcoming fights) ---
     # Sort by date descending and take each fighter's most recent row
@@ -1550,12 +2744,18 @@ def generate_predictions():
     matchup.index.name = "fight_id"
     matchup["date"] = red["date"].values
 
-    for col in feature_cols:
+    # Must mirror build_matchup_df() exactly — see the parity test in tests/test_leakage.py
+    fight_cols = [c for c in feature_cols if _is_fight_level(c)]
+    fighter_cols = [c for c in feature_cols if not _is_fight_level(c)]
+
+    for col in fight_cols:
+        matchup[f"fight_{col}"] = red[col].values
+
+    for col in fighter_cols:
         matchup[f"diff_{col}"] = red[col].values - blue[col].values
 
-    raw_cols = ["elo", "elo_expected", "resume_score", "career_fights", "career_win_pct",
-                 "streak", "finish_rate", "style_matchup_adv"]
-    raw_cols += [c for c in feature_cols if c.startswith("glicko_")]
+    raw_cols = [c for c in WINNER_RAW_COLS if c in fighter_cols]
+    raw_cols += [c for c in fighter_cols if c.startswith("glicko_")]
     for col in raw_cols:
         matchup[f"red_{col}"] = red[col].values
         matchup[f"blue_{col}"] = blue[col].values
@@ -1571,6 +2771,56 @@ def generate_predictions():
     )
     upcoming_db.close()
 
+    # Fighter DOB and last-fight date, so age and layoff can be recomputed against the
+    # UPCOMING fight rather than inherited from the fighter's previous bout.
+    dob_db = SessionLocal()
+    fighter_dob = {int(f.id): f.dob for f in dob_db.query(UFCFighter).all()}
+    dob_db.close()
+    last_fight_date = (
+        df.groupby("stats_fighter_id")["date"].max().to_dict()
+    )
+
+    def _time_varying_overrides(fighter_id, fight_date: date | None) -> dict:
+        """`age` and `days_since_last` are the only features whose value depends on WHEN
+        the fight happens. Every other feature is a property of the fighter's history.
+
+        Copying them off the fighter's last historical row — as this function used to —
+        gives the fighter's age at their PREVIOUS bout and the layoff BEFORE it, which
+        for a fighter returning after 18 months is wrong by 18 months in both features.
+        """
+        out = {}
+        if not fight_date:
+            return out
+        dob = fighter_dob.get(int(fighter_id))
+        if isinstance(dob, date):
+            out["age"] = (fight_date - dob).days / 365.25
+        prev = last_fight_date.get(fighter_id)
+        if prev:
+            out["days_since_last"] = (
+                pd.Timestamp(fight_date) - pd.Timestamp(prev)
+            ).days
+        return out
+
+    def _feat(feats: pd.Series, overrides: dict, col: str) -> float:
+        if col in overrides:
+            return float(overrides[col])
+        return float(feats.get(col, 0.0) or 0.0)
+
+    def _upcoming_fight_level(fight, col: str) -> float:
+        """Fight-level features for a bout that has not happened yet."""
+        if col.startswith("div_"):
+            return float(_classify_weight_class(fight.weight_class) == col[len("div_"):])
+        if col == "is_title_fight":
+            return float(_is_title_bout(fight.weight_class))
+        tf = getattr(fight, "time_format", None)
+        if col == "is_five_round":
+            return float(_is_five_round(tf))
+        if col == "scheduled_rounds":
+            return _scheduled_rounds(tf)
+        if col == "scheduled_minutes":
+            return _scheduled_minutes(tf)
+        return 0.0
+
     upcoming_rows = []
     for fight in upcoming_fights:
         r_feats = latest_by_fighter.loc[fight.red_fighter_id] if fight.red_fighter_id in latest_by_fighter.index else None
@@ -1578,12 +2828,19 @@ def generate_predictions():
         if r_feats is None or b_feats is None:
             continue  # skip if either fighter has no history
 
+        r_over = _time_varying_overrides(fight.red_fighter_id, fight.date)
+        b_over = _time_varying_overrides(fight.blue_fighter_id, fight.date)
+
         row = {"fight_id": fight.id, "date": fight.date}
-        for col in feature_cols:
-            row[f"diff_{col}"] = float(r_feats.get(col, 0.0) or 0.0) - float(b_feats.get(col, 0.0) or 0.0)
+        # Fight-level values come from the upcoming fight itself, never from either
+        # fighter's history.
+        for col in fight_cols:
+            row[f"fight_{col}"] = _upcoming_fight_level(fight, col)
+        for col in fighter_cols:
+            row[f"diff_{col}"] = _feat(r_feats, r_over, col) - _feat(b_feats, b_over, col)
         for col in raw_cols:
-            row[f"red_{col}"] = float(r_feats.get(col, 0.0) or 0.0)
-            row[f"blue_{col}"] = float(b_feats.get(col, 0.0) or 0.0)
+            row[f"red_{col}"] = _feat(r_feats, r_over, col)
+            row[f"blue_{col}"] = _feat(b_feats, b_over, col)
         upcoming_rows.append(row)
 
     if upcoming_rows:
@@ -1619,15 +2876,31 @@ def generate_predictions():
 
     # Odds-derived features
     matchup["odds_diff"] = matchup["odds_red_prob"] - matchup["odds_blue_prob"]
-    matchup["odds_fav_is_red"] = (matchup["odds_red_prob"] > 0.5).astype(float)
+    # Keep NaN where odds are missing — `> 0.5` on NaN would silently become 0.0
+    # ("blue is favorite") rather than "unknown".
+    matchup["odds_fav_is_red"] = np.where(
+        matchup["odds_red_prob"].isna(), np.nan,
+        (matchup["odds_red_prob"] > 0.5).astype(float),
+    )
     matchup["elo_vs_odds"] = matchup["diff_elo_expected"] - matchup["odds_diff"]
 
-    matchup = matchup.fillna(0)
-
-    # Ensure all required features exist (fill missing with 0)
+    # Ensure all required features exist before imputing
     for feat in features:
         if feat not in matchup.columns:
-            matchup[feat] = 0.0
+            matchup[feat] = np.nan
+
+    # Impute with the SAME constants training used. `train_means` is persisted by
+    # train_gbt(); older artifacts predate it, so fall back with a loud warning rather
+    # than silently serving on a different imputation basis than the model was fit on.
+    train_means = cal.get("train_means")
+    if train_means is None:
+        log.warning(
+            "  Model artifact has no persisted train_means (pre-v4). Falling back to "
+            "zero-fill; retrain to restore train/serve imputation parity."
+        )
+        matchup[features] = matchup[features].fillna(0.0)
+    else:
+        matchup[features] = matchup[features].fillna(train_means).fillna(0.0)
 
     X = matchup[features].values
     raw_proba = base_model.predict_proba(X)[:, 1]
@@ -1704,8 +2977,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--phase", type=int, choices=[1])
     parser.add_argument("--predict", action="store_true", help="Generate predictions for all fights")
+    parser.add_argument("--walk-forward", action="store_true",
+                        help="Leak-free walk-forward evaluation (with-odds vs no-odds vs market)")
+    parser.add_argument("--folds", type=int, default=8, help="Walk-forward fold count")
+    parser.add_argument("--fresh-glicko", action="store_true",
+                        help="Recompute Glicko in memory with the fixed pre-UFC newcomer "
+                             "seed instead of using stored (leaked) snapshots")
     args = parser.parse_args()
     if args.predict:
         generate_predictions()
+    elif args.walk_forward:
+        run(walk_forward=True, n_folds=args.folds, fresh_glicko=args.fresh_glicko)
     else:
         run(phases=[args.phase] if args.phase else None)

@@ -25,7 +25,7 @@ import optuna
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.feature_selection import mutual_info_classif
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 
 from app.services.ufc.glicko_service import (
     DIMENSIONS,
@@ -83,62 +83,48 @@ def _build_matchup_and_train(df: pd.DataFrame, gbt_params: dict,
 
     This is a slimmed-down version of model.py's pipeline for fast iteration.
     """
-    from app.services.ufc.model import build_matchup_df
+    from app.services.ufc.model import (
+        build_matchup_df, _fillna_from_train, select_winner_features, fit_gbt,
+    )
 
     matchup, features = build_matchup_df(df)
-
-    # Override feature count
     matchup_sorted = matchup.sort_values("date").reset_index(drop=True)
 
-    # Feature selection (mutual information)
-    has_aug = "_augmented" in matchup_sorted.columns
-    train_mask = matchup_sorted.index < int(len(matchup_sorted) * 0.8)
+    # Nested split. The outer 20% test slice is the one reported as out-of-sample, so
+    # tuning must never see it — previously this function scored Optuna trials directly
+    # on that slice, which made the "test" AUC the maximum of a 150-trial search.
+    # Instead: carve an inner validation window off the END of the training 80% and
+    # optimize against that. The outer test slice stays untouched by model selection.
+    n = len(matchup_sorted)
+    outer_split = int(n * 0.8)
+    inner_split = int(outer_split * 0.8)
 
-    # Separate odds features
-    odds_features = [f for f in features if "odds" in f or "elo_vs_odds" in f]
-    non_odds_features = [f for f in features if f not in odds_features]
+    train_mask = np.zeros(n, dtype=bool)
+    train_mask[:inner_split] = True
 
-    # MI on non-odds features
-    X_mi = matchup_sorted.loc[train_mask, non_odds_features].values
-    y_mi = matchup_sorted.loc[train_mask, "red_wins"].values
-    mi_scores = mutual_info_classif(X_mi, y_mi, random_state=42, n_neighbors=5)
-    mi_ranked = sorted(zip(non_odds_features, mi_scores), key=lambda x: x[1], reverse=True)
-    selected = [f for f, _ in mi_ranked[:top_n]]
-    selected += odds_features  # always include odds
-    selected = list(dict.fromkeys(selected))
+    matchup_sorted, _ = _fillna_from_train(matchup_sorted, features, train_mask)
+    selected = select_winner_features(
+        matchup_sorted, features, train_mask, top_n=top_n, verbose=False
+    )
 
-    # Train/test split
-    split_idx = int(len(matchup_sorted) * 0.8)
-    train = matchup_sorted.iloc[:split_idx]
-    test_all = matchup_sorted.iloc[split_idx:]
-    test = test_all[~test_all["_augmented"]] if has_aug else test_all
+    train = matchup_sorted.iloc[:inner_split]
+    val = matchup_sorted.iloc[inner_split:outer_split]
 
     X_train = train[selected].values
     y_train = train["red_wins"].values
-    X_test = test[selected].values
-    y_test = test["red_wins"].values
+    X_val = val[selected].values
+    y_val = val["red_wins"].values
 
-    model = HistGradientBoostingClassifier(
-        max_iter=1000,
-        max_depth=gbt_params["max_depth"],
-        learning_rate=gbt_params["learning_rate"],
-        max_features=gbt_params["max_features"],
-        min_samples_leaf=gbt_params["min_samples_leaf"],
-        l2_regularization=gbt_params["l2_regularization"],
-        max_bins=128,
-        early_stopping=True,
-        n_iter_no_change=75,
-        validation_fraction=0.15,
-        random_state=42,
-    )
-    model.fit(X_train, y_train)
+    model, best_iter = fit_gbt(X_train, y_train, selected, params=gbt_params)
 
-    y_proba = model.predict_proba(X_test)[:, 1]
-    auc = roc_auc_score(y_test, y_proba)
-    acc = np.mean((y_proba >= 0.5).astype(int) == y_test)
+    y_proba = model.predict_proba(X_val)[:, 1]
+    auc = roc_auc_score(y_val, y_proba)
+    acc = np.mean((y_proba >= 0.5).astype(int) == y_val)
+    ll = log_loss(y_val, y_proba, labels=[0, 1])
+    brier = brier_score_loss(y_val, y_proba)
 
-    return {"auc": auc, "accuracy": acc, "n_features": len(selected),
-            "n_test": len(test)}
+    return {"auc": auc, "accuracy": acc, "log_loss": ll, "brier": brier,
+            "n_features": len(selected), "n_test": len(val), "best_iter": best_iter}
 
 
 # ---------------------------------------------------------------------------
@@ -221,10 +207,10 @@ def create_objective(cached: CachedData, tune_glicko: bool = True,
             best_val = trial.study.best_value
             star = " ★" if trial.study.best_trial.number == trial.number else ""
         except ValueError:
-            best_val = result["auc"]
+            best_val = result["log_loss"]
             star = " ★"
         print(f"Trial {trial.number + 1:>4d}/{n_trials_total} | "
-              f"AUC: {result['auc']:.4f} | "
+              f"LogLoss: {result['log_loss']:.4f} | AUC: {result['auc']:.4f} | "
               f"Acc: {result['accuracy']:.4f} | "
               f"Best: {best_val:.4f}{star} | "
               f"{elapsed:.0f}s | "
@@ -235,7 +221,10 @@ def create_objective(cached: CachedData, tune_glicko: bool = True,
         if (trial.number + 1) % 10 == 0:
             print(f"\n{'─' * 80}")
             print(f"  Top 5 after {trial.number + 1} trials:")
-            top_trials = sorted(trial.study.trials, key=lambda t: t.value or 0, reverse=True)[:5]
+            top_trials = sorted(
+                [t for t in trial.study.trials if t.value is not None],
+                key=lambda t: t.value,
+            )[:5]
             for i, t in enumerate(top_trials):
                 p = t.params
                 glicko_str = ""
@@ -250,10 +239,14 @@ def create_objective(cached: CachedData, tune_glicko: bool = True,
                     gbt_str = (f"depth={p.get('gbt_max_depth', 4)} "
                                f"lr={p.get('gbt_lr', 0.02):.3f} "
                                f"feat={p.get('gbt_max_features', 0.7):.2f}")
-                print(f"  #{i+1}  AUC={t.value:.4f}  {glicko_str} {gbt_str}")
+                print(f"  #{i+1}  LogLoss={t.value:.4f}  {glicko_str} {gbt_str}")
             print(f"{'─' * 80}\n", flush=True)
 
-        return result["auc"]
+        # Optimize LOG LOSS, not AUC. AUC only scores the ranking of fights; betting
+        # needs the probability itself to be right, because edge is
+        # `model_prob - market_prob` and a mis-scaled probability manufactures fake
+        # edge. Optuna minimizes here, so `direction` must be "minimize".
+        return result["log_loss"]
 
     return objective
 
@@ -269,7 +262,11 @@ def reevaluate_top_trials(study: optuna.Study, cached: CachedData,
     print(f"RE-EVALUATING TOP {top_k} WITH 4 GLICKO PASSES")
     print(f"{'=' * 80}\n")
 
-    top_trials = sorted(study.trials, key=lambda t: t.value or 0, reverse=True)[:top_k]
+    # Lowest log loss is best. `t.value or 0` also silently promoted failed trials
+    # (value=None -> 0) to the top of a descending sort.
+    top_trials = sorted(
+        [t for t in study.trials if t.value is not None], key=lambda t: t.value
+    )[:top_k]
     results = []
 
     for i, trial in enumerate(top_trials):
@@ -308,14 +305,16 @@ def reevaluate_top_trials(study: optuna.Study, cached: CachedData,
 
         elapsed = time.time() - t0
         print(f"  #{i+1} (trial {trial.number}) | "
-              f"2-pass AUC: {trial.value:.4f} → 4-pass AUC: {result['auc']:.4f} | "
+              f"2-pass LogLoss: {trial.value:.4f} → 4-pass LogLoss: {result['log_loss']:.4f} | "
               f"Acc: {result['accuracy']:.4f} | {elapsed:.0f}s")
 
         results.append({
             "trial_number": trial.number,
             "params": p,
-            "auc_2pass": trial.value,
+            "log_loss_2pass": trial.value,
+            "log_loss_4pass": result["log_loss"],
             "auc_4pass": result["auc"],
+            "brier_4pass": result["brier"],
             "accuracy_4pass": result["accuracy"],
         })
 
@@ -361,7 +360,9 @@ def main():
     # Create Optuna study
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(
-        direction="maximize",
+        # The objective returns log loss, which is a LOSS. Leaving this as "maximize"
+        # would make the tuner select the worst-calibrated model it can find.
+        direction="minimize",
         sampler=optuna.samplers.TPESampler(seed=42),
         study_name=f"glicko_gbt_{mode}",
     )
@@ -383,10 +384,10 @@ def main():
     print(f"{'=' * 80}")
     print(f"  Total time: {total_time / 60:.1f} minutes")
     print(f"  Best trial: #{best.number + 1}")
-    print(f"  Best AUC (2-pass): {best.value:.4f}")
+    print(f"  Best LogLoss (2-pass): {best.value:.4f}")
     if final_results:
-        best_4pass = max(final_results, key=lambda r: r["auc_4pass"])
-        print(f"  Best AUC (4-pass): {best_4pass['auc_4pass']:.4f}")
+        best_4pass = min(final_results, key=lambda r: r["log_loss_4pass"])
+        print(f"  Best LogLoss (4-pass): {best_4pass['log_loss_4pass']:.4f}")
         print(f"  Best Accuracy (4-pass): {best_4pass['accuracy_4pass']:.4f}")
     print(f"\n  Best params:")
     for k, v in best.params.items():
@@ -398,7 +399,7 @@ def main():
         "n_trials": args.n_trials,
         "total_time_minutes": round(total_time / 60, 1),
         "best_trial": best.number,
-        "best_auc_2pass": best.value,
+        "best_log_loss_2pass": best.value,
         "best_params": best.params,
         "final_evaluations": final_results,
         "all_trials": [

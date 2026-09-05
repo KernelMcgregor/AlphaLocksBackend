@@ -159,10 +159,41 @@ def _combat_age_factor(dob, fight_date) -> float:
     return 1.0
 
 
+def _pre_ufc_records(fight_map: dict) -> dict:
+    """Each fighter's UFC-only W/L, so it can be subtracted off their lifetime record.
+
+    `UFCFighter.wins/losses` is scraped from the ufcstats listing page and holds the
+    fighter's CURRENT LIFETIME record — it is refreshed to the latest totals on every
+    scrape. Seeding a debutant's rating from it therefore tells the model how that
+    fighter's UFC career turns out, years before it happens, and the seed persists in
+    every Glicko dimension for their whole career.
+
+    Measured on this dataset: the lifetime-record seed correlates r=+0.40 with a
+    fighter's eventual UFC win percentage, versus r=+0.11 for the pre-UFC-only seed
+    this function restores. 97% of fighters carry a nonzero seed.
+    """
+    ufc_w, ufc_l = {}, {}
+    for f in fight_map.values():
+        winner = f.get("winner_id")
+        if not winner:
+            continue
+        for fid in (f.get("red_id"), f.get("blue_id")):
+            if fid is None:
+                continue
+            if fid == winner:
+                ufc_w[fid] = ufc_w.get(fid, 0) + 1
+            else:
+                ufc_l[fid] = ufc_l.get(fid, 0) + 1
+    return ufc_w, ufc_l
+
+
 def _newcomer_seed(wins: int, losses: int) -> float:
     """
     Seed starting ratings based on pre-UFC record.
     A 15-0 prospect starts higher than a 5-4 journeyman.
+
+    Callers MUST pass a pre-UFC record (lifetime minus UFC), not the raw
+    UFCFighter.wins/losses — see _pre_ufc_records().
     """
     total = wins + losses
     if total == 0:
@@ -477,6 +508,10 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
         "Decision": 0.75,
     }
 
+    # Lifetime records include UFC results; subtract them to recover the pre-UFC
+    # record that the newcomer seed is supposed to represent.
+    ufc_w, ufc_l = _pre_ufc_records(fight_map)
+
     rounds_processed = 0
     for fight_id in sorted_fight_ids:
         fight = fight_map[fight_id]
@@ -508,7 +543,9 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
                 fighter_seeded.add(fid)
                 fi = fighter_info.get(fid)
                 if fi:
-                    seed = _newcomer_seed(fi.wins, fi.losses)
+                    pre_w = max(0, (fi.wins or 0) - ufc_w.get(fid, 0))
+                    pre_l = max(0, (fi.losses or 0) - ufc_l.get(fid, 0))
+                    seed = _newcomer_seed(pre_w, pre_l)
                     if seed != 0:
                         for dim in DIMENSIONS:
                             ratings[fid][dim][0] += seed

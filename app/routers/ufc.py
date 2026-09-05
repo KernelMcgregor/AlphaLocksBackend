@@ -332,21 +332,31 @@ def get_model_metrics(db: Session = Depends(get_db)):
             avg_red_ip = sum(_implied_prob(o.red_odds) for o in odds_rows) / len(odds_rows)
             avg_blue_ip = sum(_implied_prob(o.blue_odds) for o in odds_rows) / len(odds_rows)
 
+            # Remove the vig before comparing to model probabilities. Raw implied
+            # probabilities sum to >1, so edges measured against them are inflated by
+            # roughly the book's margin on every fight.
+            ip_total = avg_red_ip + avg_blue_ip
+            if ip_total > 0:
+                avg_red_ip, avg_blue_ip = avg_red_ip / ip_total, avg_blue_ip / ip_total
+
             model_red = pred.red_prob
             model_blue = 1 - pred.red_prob
             red_edge = model_red - avg_red_ip
             blue_edge = model_blue - avg_blue_ip
 
+            # Price the bet at the SAME book used for the pick P/L. Taking the best
+            # line across every book is a price no one could actually have gotten on a
+            # historical slate, and it made edge P/L look better than pick P/L for
+            # reasons unrelated to the model.
+            o = odds_rows[0]
             if red_edge > blue_edge:
                 edge_side = "red"
                 edge = round(red_edge * 100, 1)
-                best_odds = max(odds_rows, key=lambda o: o.red_odds)
-                edge_odds_val = best_odds.red_odds
+                edge_odds_val = o.red_odds
             else:
                 edge_side = "blue"
                 edge = round(blue_edge * 100, 1)
-                best_odds = max(odds_rows, key=lambda o: o.blue_odds)
-                edge_odds_val = best_odds.blue_odds
+                edge_odds_val = o.blue_odds
 
             edge_won = (edge_side == "red") == red_won
             dec = _american_to_decimal(edge_odds_val)
@@ -397,7 +407,10 @@ def get_model_metrics(db: Session = Depends(get_db)):
             "accuracy_with_odds": round(c_odds / len(with_odds), 4) if with_odds else 0,
             "pl": round(pl, 2),
             "roi": round(pl / (len(with_odds) * 100) * 100, 2) if with_odds else 0,
-            # Edge data for same bucket
+            # Edge data for same bucket. The edge-bet count can differ from the pick
+            # count, so it is exposed separately rather than reusing fights_with_odds
+            # as the ROI denominator.
+            "edge_fights_with_odds": len(edge_with_odds),
             "edge_correct": edge_c,
             "edge_accuracy": round(edge_c / len(edge_with_odds), 4) if edge_with_odds else 0,
             "edge_pl": round(edge_pl, 2),
@@ -443,7 +456,10 @@ def get_model_metrics(db: Session = Depends(get_db)):
 
     total_with_odds = sum(1 for f in fight_data if f["pick_pl"] is not None)
     total_pl = sum(f["pick_pl"] for f in fight_data if f["pick_pl"] is not None)
-    total_edge_pl = sum(f["edge_pl"] for f in fight_data if f["edge_pl"] is not None)
+    # Count edge bets separately. Dividing edge P/L by the PICK count understates the
+    # denominator whenever the two differ, inflating edge ROI.
+    edge_bets = [f["edge_pl"] for f in fight_data if f["edge_pl"] is not None]
+    total_edge_pl = sum(edge_bets)
 
     return {
         "total": total,
@@ -452,10 +468,17 @@ def get_model_metrics(db: Session = Depends(get_db)):
         "total_with_odds": total_with_odds,
         "total_pl": round(total_pl, 2),
         "total_roi": round(total_pl / (total_with_odds * 100) * 100, 2) if total_with_odds else 0,
+        "total_edge_bets": len(edge_bets),
         "total_edge_pl": round(total_edge_pl, 2),
-        "total_edge_roi": round(total_edge_pl / (total_with_odds * 100) * 100, 2) if total_with_odds else 0,
+        "total_edge_roi": round(total_edge_pl / (len(edge_bets) * 100) * 100, 2) if edge_bets else 0,
         "confidence_splits": conf_splits,
         "edge_splits": edge_splits,
+        # These metrics are computed over ALL decided fights since 2015, most of which
+        # the model trained on, so they are substantially IN-SAMPLE and run far
+        # optimistic. The out-of-sample numbers are in models/ufc/h2h/eval_results.json
+        # (see `python -m app.services.ufc.model --walk-forward --fresh-glicko`).
+        "in_sample": True,
+        "out_of_sample_reference": "models/ufc/h2h/eval_results.json",
         "fights": fight_data,
     }
 
