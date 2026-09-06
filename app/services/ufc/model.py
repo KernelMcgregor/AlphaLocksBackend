@@ -2906,48 +2906,22 @@ def train_mlp(fresh_glicko: bool = True, gamma: float = 0.0,
     return {"model": mdl, "features": selected, "path": path}
 
 
-def generate_predictions():
-    """Run the calibrated model on all fights and store predictions in DB."""
-    log.info("=" * 60)
-    log.info("GENERATING PREDICTIONS FOR ALL FIGHTS")
-    log.info("=" * 60)
+def build_serving_matchup(df: pd.DataFrame) -> pd.DataFrame:
+    """Build the matchup frame used at SERVING time, indexed by fight_id.
 
-    # Prefer the MLP if it has been trained. The ablation (5 seeds, identical folds)
-    # found it the only configuration with a positive backtested ROI (+2.5% at the 15%
-    # edge rung vs -7% for the GBT), despite being slightly LESS accurate (66.2% vs
-    # 67.9%). It agrees with the market less (corr 0.76 vs 0.82), and agreeing with the
-    # market is worth exactly zero.
-    mlp_path = MODEL_DIR / "mlp_v1.pkl"
-    cal_path = MODEL_DIR / "calibrated_model.pkl"
+    Differs from `build_matchup_df()` in one essential way: that function is for
+    TRAINING, so it keeps only decided fights from 2015 on. Serving has to cover fights
+    that have not happened yet — which is the entire point of a prediction — so upcoming
+    bouts are added here from each fighter's most recent feature snapshot.
 
-    if mlp_path.exists():
-        base_model, meta = DecorrelatedModel.load(mlp_path)
-        features = meta["features"]
-        train_means = meta["train_means"]
-        model_kind = "mlp"
-        log.info(f"  Loaded MLP from {mlp_path} ({len(features)} features, "
-                 f"gamma={meta['gamma']})")
-    elif cal_path.exists():
-        with open(cal_path, "rb") as f:
-            cal = pickle.load(f)
-        base_model = cal["base_model"]
-        features = cal["features"]
-        train_means = cal.get("train_means")
-        model_kind = "gbt"
-        log.info(f"  Loaded GBT from {cal_path} ({len(features)} features)")
-        log.warning("  No mlp_v1.pkl found — serving the GBT. Run --train-mlp for the "
-                    "model the ablation selected.")
-    else:
-        raise FileNotFoundError(
-            f"No model found. Run `--train-mlp` (preferred) or `--phase 1`."
-        )
+    Extracted so `generate_predictions()` and the picks pipeline share one construction.
+    Two frames built by two similar-looking code paths is exactly how train/serve skew
+    gets in; the parity test in tests/test_leakage.py pins this against
+    `build_matchup_df()`.
 
-    # Build features for all fights
-    df, round_data = load_fight_data()
-    df = build_features(df, round_data)
-
-    # Build matchup (without augmentation/filtering for prediction).
-    # Same column list as training — see winner_feature_columns().
+    Odds columns are attached but no imputation is applied — callers impute with the
+    train-fitted constants persisted alongside whichever model they are serving.
+    """
     feature_cols = winner_feature_columns(df)
 
     # Per-fighter columns keep their NaNs here. Imputation happens once, at the matchup
@@ -3108,6 +3082,49 @@ def generate_predictions():
         (matchup["odds_red_prob"] > 0.5).astype(float),
     )
     matchup["elo_vs_odds"] = matchup["diff_elo_expected"] - matchup["odds_diff"]
+
+    return matchup
+
+
+def generate_predictions():
+    """Run the served model on all fights (historical and upcoming) and store them."""
+    log.info("=" * 60)
+    log.info("GENERATING PREDICTIONS FOR ALL FIGHTS")
+    log.info("=" * 60)
+
+    # Prefer the MLP if it has been trained. The ablation (5 seeds, identical folds)
+    # found it the only configuration with a positive backtested ROI (+2.5% at the 15%
+    # edge rung vs -7% for the GBT), despite being slightly LESS accurate (66.2% vs
+    # 67.9%). It agrees with the market less (corr 0.76 vs 0.82), and agreeing with the
+    # market is worth exactly zero.
+    mlp_path = MODEL_DIR / "mlp_v1.pkl"
+    cal_path = MODEL_DIR / "calibrated_model.pkl"
+
+    if mlp_path.exists():
+        base_model, meta = DecorrelatedModel.load(mlp_path)
+        features = meta["features"]
+        train_means = meta["train_means"]
+        model_kind = "mlp"
+        log.info(f"  Loaded MLP from {mlp_path} ({len(features)} features, "
+                 f"gamma={meta['gamma']})")
+    elif cal_path.exists():
+        with open(cal_path, "rb") as f:
+            cal = pickle.load(f)
+        base_model = cal["base_model"]
+        features = cal["features"]
+        train_means = cal.get("train_means")
+        model_kind = "gbt"
+        log.info(f"  Loaded GBT from {cal_path} ({len(features)} features)")
+        log.warning("  No mlp_v1.pkl found — serving the GBT. Run --train-mlp for the "
+                    "model the ablation selected.")
+    else:
+        raise FileNotFoundError(
+            f"No model found. Run `--train-mlp` (preferred) or `--phase 1`."
+        )
+
+    df, round_data = load_fight_data()
+    df = build_features(df, round_data)
+    matchup = build_serving_matchup(df)
 
     # Ensure all required features exist before imputing
     for feat in features:
