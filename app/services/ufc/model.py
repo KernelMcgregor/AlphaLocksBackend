@@ -675,11 +675,20 @@ def build_features(
             glicko_db.close()
 
             # Build lookup: {(fight_id, fighter_id): {dim: value}}
+            from app.models.ufc import GLICKO_META_COLS
             glicko_snapshots = {}
             for s in snapshots:
-                glicko_snapshots[(s.fight_id, s.fighter_id)] = {
-                    d: getattr(s, d, 0.0) or 0.0 for d in GLICKO_DIMS
-                }
+                rec = {d: getattr(s, d, 0.0) or 0.0 for d in GLICKO_DIMS}
+                # Confidence columns (migration 006). NULL on rows written before it, in
+                # which case the sentinel fallback below applies — but the served model
+                # selects on these, so a silent all-NULL read is a train/serve skew, not
+                # a cosmetic gap. `is not None` rather than truthiness: 0 rounds seen and
+                # -1 days since are both meaningful values.
+                for col in GLICKO_META_COLS:
+                    v = getattr(s, col, None)
+                    if v is not None:
+                        rec["_" + col] = float(v)
+                glicko_snapshots[(s.fight_id, s.fighter_id)] = rec
             log.info(f"  Loaded {len(glicko_snapshots)} Glicko snapshots")
 
         for dim in GLICKO_DIMS:
@@ -693,8 +702,9 @@ def build_features(
         # Rating CONFIDENCE, not just the rating. Without these the model treats a
         # rating built on 40 rounds identically to one built on 2, even though 17.8% of
         # fighter-fight rows are debuts and 53.6% of fighters have <=3 career fights.
-        # Present only when snapshots come from run_glicko_inmemory(); stored DB rows
-        # predate them, so default to a "no information" sentinel.
+        # Carried by run_glicko_inmemory() and, since migration 006, by the stored
+        # snapshots too. The sentinel only applies to rows written before 006 — if it
+        # applies to ALL rows the served model is running on constants, so warn loudly.
         meta_defaults = {"_meta_sigma": 0.0, "_meta_rounds_seen": 0.0,
                          "_meta_fights_seen": 0.0, "_meta_days_since": -1.0}
         any_meta = any("_meta_sigma" in v for v in glicko_snapshots.values())
@@ -705,9 +715,15 @@ def build_features(
                 ).get(k, dflt),
                 axis=1,
             )
-        log.info(f"  Added {len(GLICKO_DIMS)} Glicko features"
-                 + ("  + 4 confidence features" if any_meta
-                    else "  (no confidence metadata in these snapshots)"))
+        if any_meta:
+            log.info(f"  Added {len(GLICKO_DIMS)} Glicko features  + 4 confidence features")
+        else:
+            log.warning(
+                f"  Added {len(GLICKO_DIMS)} Glicko features, but NO confidence metadata "
+                "is present — all 4 glicko_meta_* features are constants. The served "
+                "models select on these, so predictions built from this frame do not "
+                "match training. Re-run the Glicko step to backfill migration 006."
+            )
     except Exception as e:
         log.warning(f"  Could not load Glicko features: {e}")
         from app.services.ufc.glicko_service import DIMENSIONS as GLICKO_DIMS

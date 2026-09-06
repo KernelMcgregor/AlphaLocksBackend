@@ -24,6 +24,7 @@ from datetime import date
 
 from app.database import SessionLocal
 from app.models.ufc import (
+    GLICKO_META_COLS,
     UFCEvent, UFCFight, UFCFighter, UFCFightStats,
     UFCGlickoSnapshot,
 )
@@ -85,7 +86,28 @@ MIN_ROUNDS = 10
 # ---------------------------------------------------------------------------
 @dataclass
 class GlickoParams:
-    """All tunable Glicko parameters. Tuned via Optuna (150 trials, 2026-06-26)."""
+    """All tunable Glicko parameters. Tuned via Optuna (150 trials, 2026-06-26).
+
+    RE-TUNED 2026-09-06 after the dimension-semantics fixes, and the result was
+    MEASURED AND NOT ADOPTED. Best trial (#72, inner-validation log-loss 0.6226):
+
+        k_base 43.64  sigma_init 270.19  sigma_min 84.09  tau 399.91
+        sos_transfer_pct 0.0606  loser_penalty_pct 0.0305
+
+    On the honest 8-fold walk-forward those values improved every Glicko-using arm on
+    all three metrics (with_odds log-loss -0.0028, no_odds -0.0022, decorrelated -0.0256,
+    market_anchored -0.0013) while the no-Glicko control moved the other way (+0.0014) --
+    a consistent direction, but every individual delta sits inside the +/-0.0102 noise
+    floor that same control established. Dimension drift was unchanged (ko +0.350 vs
+    +0.335, corr(str_acc,str_def) 0.181 vs 0.165), so nothing regressed either.
+
+    Not adopted because the gain is sub-noise per arm and switching would change the
+    picks model's inputs, forcing a THIRD pre-registration reset in one day (see
+    PREREGISTRATION.md). The right time is after the outstanding v1.2 picks settle
+    (2026-09-12 and 2026-09-19), so those picks resolve under the model that made them.
+    Adopting means: set these six values, retrain both models, regenerate snapshots and
+    predictions, republish rankings, and open rule v1.3.
+    """
     k_base: float = 20.36
     sigma_init: float = 434.29
     sigma_min: float = 60.0
@@ -104,6 +126,20 @@ class GlickoParams:
     k_mult_td: float = 1.5
     k_mult_gnd: float = 1.2
     k_mult_dur: float = 1.5
+    #: Finish bonus as a multiple of k_base. DISABLED (was 5.0, ~102 rating points per
+    #: finish — roughly 50x the per-round signal).
+    #:
+    #: Making it zero-sum was not enough, because the transfer runs between DIFFERENT
+    #: dimensions: the winner is credited on `ko` and the loser debited on `kod`, so
+    #: Total(ko)+Total(kod) is conserved while `ko` inflates and `kod` deflates. Measured
+    #: correlation with a fighter's fight count, over 21,312 snapshots:
+    #:      finish_bonus_k=5.0 -> ko +0.709  kod -0.591  sub +0.503  subd -0.346
+    #:      finish_bonus_k=0.0 -> ko +0.335  kod +0.163  sub +0.236  subd +0.005
+    #: The antisymmetry is entirely this term. Finishing ability is already carried by
+    #: the per-round kd and sub_att observables, so the bonus was double-counting it at
+    #: ~50x weight and turning `kod`/`subd` into inverted experience counters — the
+    #: reason Oliveira displayed SUB DEF 11 and Gaethje CHIN 29.
+    finish_bonus_k: float = 0.0
     decision_ud: float = 0.91
     decision_split: float = 0.55
     decision_maj: float = 0.60
@@ -134,6 +170,28 @@ def _classify_weight_class(wc: str | None) -> str:
 
 def _elo_expected(rating_a: float, rating_b: float) -> float:
     return 1.0 / (1.0 + 10.0 ** ((rating_b - rating_a) / 400.0))
+
+
+def _centred_expectation(baseline: float, exp: float) -> float:
+    """Expected value of a rate observable, centred so equal fighters expect the mean.
+
+    The baselines are means of the SAME observables they are compared against
+    (`_compute_baselines` averages `min(kd,3)/3`; the ko update scores `min(kd,3)/3`),
+    so E[outcome] == baseline. The old form `adj_exp = baseline * exp` yields
+    `baseline/2` at parity, leaving a residual of `+K*baseline/2` on the offensive
+    dimension EVERY round and its mirror on the defensive one.
+
+    Measured over 21,312 production snapshots, that turned every offence dimension into
+    a proxy for experience and every defence dimension into its inverse:
+        ko +0.735 / kod -0.590,  sub +0.599 / subd -0.451,  td +0.505 / tdd -0.496
+    Charles Oliveira read SUB 100 / SUB DEF 11 and Justin Gaethje KO 100 / CHIN 29,
+    while one-fight newcomers read CHIN 84-90. The ratings were counting fights.
+
+    Doubling restores the centre: at exp=0.5 this returns `baseline` exactly, so
+    E[delta] = 0 and the fixed point becomes mu_offence == opponent's mu_defence. The
+    cap keeps the expectation a valid probability when the baseline is large.
+    """
+    return min(2.0 * baseline * exp, min(1.0, 4.0 * baseline))
 
 
 def _combat_age_factor(dob, fight_date) -> float:
@@ -407,6 +465,15 @@ def _compute_baselines(fight_map, rounds_by_fight):
     wc_ctrl15g_vals = defaultdict(list)
     wc_gnp15g_vals = defaultdict(list)
 
+    #: Every standing round's td15s rate, INCLUDING the zeros. wc_td15s_vals skips
+    #: rounds with no takedown, so it can produce a 90th-percentile cap but not the
+    #: mean of the observable the td update actually scores.
+    wc_td15s_all = defaultdict(list)
+
+    #: League significant-strike accuracy, the observable str_acc now scores directly.
+    wc_acc_landed = defaultdict(float)
+    wc_acc_attempted = defaultdict(float)
+
     for fight_id, round_data in rounds_by_fight.items():
         fight = fight_map.get(fight_id)
         if not fight or fight["weight_class"] == "unknown":
@@ -430,6 +497,11 @@ def _compute_baselines(fight_map, rounds_by_fight):
                     wc_ctrl_total[wc] += 1 if stats["ctrl_seconds"] > 15 else 0
                     wc_gnd_total[wc] += 1 if stats["ground_landed"] > 3 else 0
 
+                    wc_acc_landed[wc] += stats["sig_str_landed"]
+                    wc_acc_attempted[wc] += stats["sig_str_attempted"]
+
+                    if est_standing_min > 0.5:
+                        wc_td15s_all[wc].append(stats["td_landed"] * 15 / est_standing_min)
                     if est_standing_min > 0.5 and stats["td_landed"] > 0:
                         wc_td15s_vals[wc].append(stats["td_landed"] * 15 / est_standing_min)
                     if est_ground_min > 0.5:
@@ -466,6 +538,16 @@ def _compute_baselines(fight_map, rounds_by_fight):
             "ctrl15g_cap": _percentile_90(wc_ctrl15g_vals.get(wc, [])),
             "gnp15g_cap": _percentile_90(wc_gnp15g_vals.get(wc, [])),
         }
+        # Mean of the capped rate the td update actually observes. Must be computed
+        # after the cap, hence the second pass over the stored values.
+        cap = baselines[wc]["td15s_cap"] or 1.0
+        all_rates = wc_td15s_all.get(wc, [])
+        baselines[wc]["td15s_mean"] = (
+            sum(min(v / cap, 1.0) for v in all_rates) / len(all_rates)
+            if all_rates else baselines[wc]["td"]
+        )
+        att = wc_acc_attempted.get(wc, 0.0)
+        baselines[wc]["sig_acc"] = (wc_acc_landed.get(wc, 0.0) / att) if att > 0 else 0.45
         log.info(f"    {WEIGHT_CLASS_LABELS.get(wc, wc)}: {total} rounds, "
                  f"KD={baselines[wc]['kd']:.4f}, SUB={baselines[wc]['sub']:.4f}, "
                  f"TD={baselines[wc]['td']:.4f}, "
@@ -663,7 +745,7 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
             ko_baseline = bl["kd"]
             red_kd_outcome = min(r["kd"], 3) / 3.0
             exp_ko = _elo_expected(r_mu("ko"), b_mu("kod"))
-            adj_exp = ko_baseline * exp_ko
+            adj_exp = _centred_expectation(ko_baseline, exp_ko)
             K_ko_r = K_red * params.k_mult_ko
             K_ko_b = K_blue * params.k_mult_ko
             ko_d_red = K_ko_r * (red_kd_outcome - adj_exp)
@@ -673,29 +755,35 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
 
             blue_kd_outcome = min(b["kd"], 3) / 3.0
             exp_ko_b = _elo_expected(b_mu("ko"), r_mu("kod"))
-            adj_exp_b = ko_baseline * exp_ko_b
+            adj_exp_b = _centred_expectation(ko_baseline, exp_ko_b)
             ko_d_blue = K_ko_b * (blue_kd_outcome - adj_exp_b)
             ko_d_red_def = K_ko_r * ((1 - blue_kd_outcome) - (1 - adj_exp_b))
             _update_rating(ratings, blue_id, "ko", ko_d_blue, blue_age_factor, params)
             _update_rating(ratings, red_id, "kod", ko_d_red_def, red_age_factor, params)
 
-            # KO finish bonus with autocorrelation correction
+            # KO finish bonus with autocorrelation correction.
+            # ZERO-SUM: the loser is debited exactly what the winner is credited. The
+            # winner used to gain `ko_bonus * ac` (~+102) while the loser lost a flat
+            # `ko_bonus * 0.5` (~-51), so every finish in UFC history injected ~50 points
+            # of net `ko` into the population and removed the mirror from `kod`. At ~50x
+            # the per-round centring residual this was the single largest driver of the
+            # offence-inflates / defence-deflates split.
             if is_ko_finish:
-                ko_bonus = params.k_base * 5
+                ko_bonus = params.k_base * params.finish_bonus_k
                 if fight["winner_id"] == red_id:
                     ac = _autocorrelation_factor(red_composite, blue_composite)
                     _update_rating(ratings, red_id, "ko", ko_bonus * ac, red_age_factor, params, update_sigma=False)
-                    _update_rating(ratings, blue_id, "kod", -ko_bonus * 0.5, 1.0, params, update_sigma=False)
+                    _update_rating(ratings, blue_id, "kod", -ko_bonus * ac, 1.0, params, update_sigma=False)
                 else:
                     ac = _autocorrelation_factor(blue_composite, red_composite)
                     _update_rating(ratings, blue_id, "ko", ko_bonus * ac, blue_age_factor, params, update_sigma=False)
-                    _update_rating(ratings, red_id, "kod", -ko_bonus * 0.5, 1.0, params, update_sigma=False)
+                    _update_rating(ratings, red_id, "kod", -ko_bonus * ac, 1.0, params, update_sigma=False)
 
             # --- SUB / SUBd (continuous scoring) ---
             sub_baseline = bl["sub"]
             red_sub_outcome = min(r["sub_att"], 2) / 2.0
             exp_sub = _elo_expected(r_mu("sub"), b_mu("subd"))
-            adj_sub_exp = sub_baseline * exp_sub
+            adj_sub_exp = _centred_expectation(sub_baseline, exp_sub)
             K_sub_r = K_red * params.k_mult_sub
             K_sub_b = K_blue * params.k_mult_sub
             sub_d_red = K_sub_r * (red_sub_outcome - adj_sub_exp)
@@ -705,7 +793,7 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
 
             blue_sub_outcome = min(b["sub_att"], 2) / 2.0
             exp_sub_b = _elo_expected(b_mu("sub"), r_mu("subd"))
-            adj_sub_exp_b = sub_baseline * exp_sub_b
+            adj_sub_exp_b = _centred_expectation(sub_baseline, exp_sub_b)
             sub_d_blue = K_sub_b * (blue_sub_outcome - adj_sub_exp_b)
             sub_d_red_def = K_sub_r * ((1 - blue_sub_outcome) - (1 - adj_sub_exp_b))
             _update_rating(ratings, blue_id, "sub", sub_d_blue, blue_age_factor, params)
@@ -713,15 +801,15 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
 
             # SUB finish bonus with autocorrelation correction
             if is_sub_finish:
-                sub_bonus = params.k_base * 5
+                sub_bonus = params.k_base * params.finish_bonus_k
                 if fight["winner_id"] == red_id:
                     ac = _autocorrelation_factor(red_composite, blue_composite)
                     _update_rating(ratings, red_id, "sub", sub_bonus * ac, red_age_factor, params, update_sigma=False)
-                    _update_rating(ratings, blue_id, "subd", -sub_bonus * 0.5, 1.0, params, update_sigma=False)
+                    _update_rating(ratings, blue_id, "subd", -sub_bonus * ac, 1.0, params, update_sigma=False)
                 else:
                     ac = _autocorrelation_factor(blue_composite, red_composite)
                     _update_rating(ratings, blue_id, "sub", sub_bonus * ac, blue_age_factor, params, update_sigma=False)
-                    _update_rating(ratings, red_id, "subd", -sub_bonus * 0.5, 1.0, params, update_sigma=False)
+                    _update_rating(ratings, red_id, "subd", -sub_bonus * ac, 1.0, params, update_sigma=False)
 
             # --- TD / TDd (rate-based: td15s normalized by standing time) ---
             est_ground_min = (r["ctrl_seconds"] + b["ctrl_seconds"]) / 60.0
@@ -733,28 +821,35 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
             K_td_b = K_blue * params.k_mult_td
 
             if est_standing_min > 0.5:
+                # Rate branch observes td15s/cap, so it must be centred on the mean of
+                # THAT observable. It previously used bl["td"], the mean of
+                # min(td_landed,5)/5 — a different quantity on a different scale, so td
+                # drifted even independently of the centring bug below.
                 td15s_cap = bl["td15s_cap"]
+                rate_baseline = bl["td15s_mean"]
                 red_td = min(r["td_landed"] * 15 / est_standing_min / td15s_cap, 1.0)
                 exp_td = _elo_expected(r_mu("td"), b_mu("tdd"))
-                adj_exp = td_baseline * exp_td
+                adj_exp = _centred_expectation(rate_baseline, exp_td)
                 _update_rating(ratings, red_id, "td", K_td_r * (red_td - adj_exp), red_age_factor, params)
                 _update_rating(ratings, blue_id, "tdd", K_td_b * ((1 - red_td) - (1 - adj_exp)), blue_age_factor, params)
 
                 blue_td = min(b["td_landed"] * 15 / est_standing_min / td15s_cap, 1.0)
                 exp_td_b = _elo_expected(b_mu("td"), r_mu("tdd"))
-                adj_exp_b = td_baseline * exp_td_b
+                adj_exp_b = _centred_expectation(rate_baseline, exp_td_b)
                 _update_rating(ratings, blue_id, "td", K_td_b * (blue_td - adj_exp_b), blue_age_factor, params)
                 _update_rating(ratings, red_id, "tdd", K_td_r * ((1 - blue_td) - (1 - adj_exp_b)), red_age_factor, params)
             else:
                 red_td = min(r["td_landed"], 5) / 5.0
                 exp_td = _elo_expected(r_mu("td"), b_mu("tdd"))
-                _update_rating(ratings, red_id, "td", K_td_r * (red_td - td_baseline * exp_td), red_age_factor, params)
-                _update_rating(ratings, blue_id, "tdd", K_td_b * ((1 - red_td) - (1 - td_baseline * exp_td)), blue_age_factor, params)
+                adj_exp = _centred_expectation(td_baseline, exp_td)
+                _update_rating(ratings, red_id, "td", K_td_r * (red_td - adj_exp), red_age_factor, params)
+                _update_rating(ratings, blue_id, "tdd", K_td_b * ((1 - red_td) - (1 - adj_exp)), blue_age_factor, params)
 
                 blue_td = min(b["td_landed"], 5) / 5.0
                 exp_td_b = _elo_expected(b_mu("td"), r_mu("tdd"))
-                _update_rating(ratings, blue_id, "td", K_td_b * (blue_td - td_baseline * exp_td_b), blue_age_factor, params)
-                _update_rating(ratings, red_id, "tdd", K_td_r * ((1 - blue_td) - (1 - td_baseline * exp_td_b)), red_age_factor, params)
+                adj_exp_b = _centred_expectation(td_baseline, exp_td_b)
+                _update_rating(ratings, blue_id, "td", K_td_b * (blue_td - adj_exp_b), blue_age_factor, params)
+                _update_rating(ratings, red_id, "tdd", K_td_r * ((1 - blue_td) - (1 - adj_exp_b)), red_age_factor, params)
 
             # --- CTRL (rate-based: ctrl15g normalized by ground time) ---
             if est_ground_min > 0.5:
@@ -791,31 +886,36 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
             # Fix: use the pair-relative SHARE, exactly as STR_VOL/DIST/CLINCH/GND already
             # do. A share is 0.5 when the two fighters are equal, so it centres on the
             # expectation and the paired updates are zero-sum.
+            # `red_acc_share` and `red_def_share` were two monotone functions of the SAME
+            # pair (red_acc, blue_acc): red_acc_share > 0.5 IFF red_def_share > 0.5,
+            # always. Measured correlation on production snapshots was +0.93 — two of the
+            # fifteen dimensions were one dimension shown twice, so an accurate striker
+            # was automatically credited with elite defence. They were also each scored
+            # against THEMSELVES on the opponent, the only pair in the file not
+            # cross-paired, even though str_def's observable is literally
+            # `1 - opponent_accuracy`.
+            #
+            # Now they are genuinely different quantities, cross-paired like ko/sub/td:
+            # what YOU land drives your str_acc against the opponent's str_def, and what
+            # THEY land drives their str_acc against your str_def.
             if r["sig_str_attempted"] > 0 and b["sig_str_attempted"] > 0:
+                acc_baseline = bl["sig_acc"]
                 red_acc = r["sig_str_landed"] / r["sig_str_attempted"]
                 blue_acc = b["sig_str_landed"] / b["sig_str_attempted"]
 
-                denom = red_acc + blue_acc
-                if denom > 0:
-                    red_acc_share = red_acc / denom
-                    exp_acc = _elo_expected(r_mu("str_acc"), b_mu("str_acc"))
-                    _update_rating(ratings, red_id, "str_acc",
-                                   K_red * (red_acc_share - exp_acc), red_age_factor, params)
-                    _update_rating(ratings, blue_id, "str_acc",
-                                   K_blue * ((1 - red_acc_share) - (1 - exp_acc)),
-                                   blue_age_factor, params)
+                exp_acc_r = _elo_expected(r_mu("str_acc"), b_mu("str_def"))
+                adj_r = _centred_expectation(acc_baseline, exp_acc_r)
+                _update_rating(ratings, red_id, "str_acc",
+                               K_red * (red_acc - adj_r), red_age_factor, params)
+                _update_rating(ratings, blue_id, "str_def",
+                               K_blue * (adj_r - red_acc), blue_age_factor, params)
 
-                # Defence is the complement of the opponent's accuracy.
-                red_def, blue_def = 1.0 - blue_acc, 1.0 - red_acc
-                denom = red_def + blue_def
-                if denom > 0:
-                    red_def_share = red_def / denom
-                    exp_def = _elo_expected(r_mu("str_def"), b_mu("str_def"))
-                    _update_rating(ratings, red_id, "str_def",
-                                   K_red * (red_def_share - exp_def), red_age_factor, params)
-                    _update_rating(ratings, blue_id, "str_def",
-                                   K_blue * ((1 - red_def_share) - (1 - exp_def)),
-                                   blue_age_factor, params)
+                exp_acc_b = _elo_expected(b_mu("str_acc"), r_mu("str_def"))
+                adj_b = _centred_expectation(acc_baseline, exp_acc_b)
+                _update_rating(ratings, blue_id, "str_acc",
+                               K_blue * (blue_acc - adj_b), blue_age_factor, params)
+                _update_rating(ratings, red_id, "str_def",
+                               K_red * (adj_b - blue_acc), red_age_factor, params)
 
             # --- DIST ---
             total_dist = r["distance_landed"] + b["distance_landed"]
@@ -914,6 +1014,12 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
             five_rd_mult = params.five_rd_mult if fight["is_5rd"] else 1.0
 
             # --- SKILL-AWARE OPPONENT POINT TRANSFER (SOS) ---
+            # A TRANSFER, so it must conserve: whatever the winner gains on a dimension
+            # the loser gives up on that same dimension. Previously the winner was
+            # credited here and the loser was only debited by the separate percentage
+            # penalty below, which touches solely dimensions where mu > 0. The result
+            # was net creation of rating on every decided fight — the source of the
+            # +0.504 correlation between `pts` and a fighter's fight count.
             combined_mult = streak_bonus_w * title_mult * five_rd_mult
             loser_positive_total = sum(
                 max(_get_mu(ratings, loser_id, d), 0) for d in DIMENSIONS
@@ -924,6 +1030,7 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
                     dim_share = loser_dim / loser_positive_total
                     bonus = loser_positive_total * params.sos_transfer_pct * dim_share * combined_mult
                     _update_rating(ratings, winner_id, d, bonus, w_age, params, update_sigma=False)
+                    _update_rating(ratings, loser_id, d, -bonus, 1.0, params, update_sigma=False)
 
             # --- LOSER PENALTY ---
             loser_pen = params.loser_penalty_pct * streak_penalty_l
@@ -1023,6 +1130,9 @@ def compute_and_save_snapshots(db, params: GlickoParams | None = None):
             fight_id=int(fight_id),
             fighter_id=int(fighter_id),
             **{d: round(dims.get(d, 0.0), 4) for d in DIMENSIONS},
+            # The model selects on these. Omitting them here is what made the DB serving
+            # path feed constants that never appeared in training.
+            **{c: round(float(dims["_" + c]), 4) for c in GLICKO_META_COLS if "_" + c in dims},
         )
         snapshot_rows.append(row)
     db.bulk_save_objects(snapshot_rows)

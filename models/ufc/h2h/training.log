@@ -3880,3 +3880,1074 @@ weighted avg       0.76      0.76      0.76       557
 2026-09-06 06:25:21,149 INFO [method_model]   Ensemble blend weights: KO=0.0, Sub=0.9, Dec=0.9
 2026-09-06 06:25:21,149 INFO [method_model]   Generated predictions for 11064 fights
 2026-09-06 06:25:21,992 INFO [method_model]   Stored 11064 method predictions
+2026-09-06 17:22:00,488 INFO [model] ============================================================
+2026-09-06 17:22:00,488 INFO [model] UFC Fight Winner Prediction Pipeline v6  (2026-09-06 17:22)
+2026-09-06 17:22:00,488 INFO [model] ============================================================
+2026-09-06 17:22:00,488 INFO [model] Loading data from database...
+2026-09-06 17:22:02,667 INFO [model]   Loaded 4616 fighters
+2026-09-06 17:22:06,700 INFO [model]   Loaded 22225 fight-stat rows (11161 unique fights)
+2026-09-06 17:22:06,700 INFO [model]   Loading per-round stats...
+2026-09-06 17:22:10,877 INFO [model]   Loaded 59640 per-round stat rows
+2026-09-06 17:22:10,987 INFO [model] 
+  Recomputing Glicko snapshots in memory (fixed newcomer seed)...
+2026-09-06 17:22:10,987 INFO [glicko_service]   Loading fight data...
+2026-09-06 17:22:11,830 INFO [glicko_service]   Loaded 11564 fights
+2026-09-06 17:22:11,830 INFO [glicko_service]   Loading per-round stats...
+2026-09-06 17:22:15,954 INFO [glicko_service]   Loaded rounds for 11232 fights
+2026-09-06 17:22:15,954 INFO [glicko_service]   Loading per-fight derived totals...
+2026-09-06 17:22:18,891 INFO [glicko_service]   Loaded 22464 derived totals rows
+2026-09-06 17:22:19,088 INFO [glicko_service]   Loaded 4616 fighters
+2026-09-06 17:22:19,369 INFO [glicko_service]   Computing weight class baseline rates...
+2026-09-06 17:22:19,445 INFO [glicko_service]     P4P: 1 rounds, KD=0.0000, SUB=0.0000, TD=0.0000, td15s_cap=10.0, ctrl15g_cap=10.0, gnp15g_cap=10.0
+2026-09-06 17:22:19,445 INFO [glicko_service]     Flyweight: 1650 rounds, KD=0.0224, SUB=0.0692, TD=0.0841, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=79.1
+2026-09-06 17:22:19,446 INFO [glicko_service]     Bantamweight: 2847 rounds, KD=0.0266, SUB=0.0654, TD=0.0808, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=84.0
+2026-09-06 17:22:19,447 INFO [glicko_service]     Featherweight: 3282 rounds, KD=0.0258, SUB=0.0677, TD=0.0810, td15s_cap=26.9, ctrl15g_cap=15.0, gnp15g_cap=85.1
+2026-09-06 17:22:19,448 INFO [glicko_service]     Lightweight: 4754 rounds, KD=0.0259, SUB=0.0862, TD=0.0880, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=77.1
+2026-09-06 17:22:19,449 INFO [glicko_service]     Welterweight: 4313 rounds, KD=0.0304, SUB=0.0738, TD=0.0837, td15s_cap=28.1, ctrl15g_cap=15.0, gnp15g_cap=77.6
+2026-09-06 17:22:19,450 INFO [glicko_service]     Middleweight: 3888 rounds, KD=0.0305, SUB=0.0772, TD=0.0760, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=94.7
+2026-09-06 17:22:19,451 INFO [glicko_service]     Light Heavyweight: 2382 rounds, KD=0.0341, SUB=0.0530, TD=0.0697, td15s_cap=26.3, ctrl15g_cap=15.0, gnp15g_cap=106.6
+2026-09-06 17:22:19,452 INFO [glicko_service]     Heavyweight: 2555 rounds, KD=0.0335, SUB=0.0598, TD=0.0610, td15s_cap=23.1, ctrl15g_cap=15.0, gnp15g_cap=103.8
+2026-09-06 17:22:19,452 INFO [glicko_service]     P4P: 1 rounds, KD=0.0000, SUB=0.0000, TD=0.0000, td15s_cap=10.0, ctrl15g_cap=10.0, gnp15g_cap=10.0
+2026-09-06 17:22:19,452 INFO [glicko_service]     Strawweight: 1337 rounds, KD=0.0092, SUB=0.0509, TD=0.0717, td15s_cap=23.4, ctrl15g_cap=15.0, gnp15g_cap=64.7
+2026-09-06 17:22:19,452 INFO [glicko_service]     Flyweight: 977 rounds, KD=0.0082, SUB=0.0499, TD=0.0667, td15s_cap=22.2, ctrl15g_cap=15.0, gnp15g_cap=77.1
+2026-09-06 17:22:19,452 INFO [glicko_service]     Bantamweight: 943 rounds, KD=0.0104, SUB=0.0520, TD=0.0659, td15s_cap=27.3, ctrl15g_cap=15.0, gnp15g_cap=78.8
+2026-09-06 17:22:20,685 INFO [glicko_service]   Processed 27341 rounds
+2026-09-06 17:22:20,708 INFO [model]   Computed 21312 snapshots
+2026-09-06 17:22:20,718 INFO [model] Building features...
+2026-09-06 17:22:20,986 INFO [model]   Computing defensive stats...
+2026-09-06 17:22:22,430 INFO [model]   Computing Elo ratings...
+2026-09-06 17:22:22,939 INFO [model]   Computing resume scores...
+2026-09-06 17:22:23,097 INFO [model]   Using 21312 caller-supplied Glicko snapshots
+2026-09-06 17:22:25,805 INFO [model]   Added 15 Glicko features  + 4 confidence features
+2026-09-06 17:22:25,805 INFO [model]   Computing Elo-adjusted stats...
+2026-09-06 17:22:25,807 INFO [model]   Computing rolling career averages...
+2026-09-06 17:22:50,840 INFO [model]   Computing streaks and career stats...
+2026-09-06 17:22:52,118 INFO [model]   Computing composite features...
+2026-09-06 17:22:52,122 INFO [model]   Computing round-by-round profiles...
+2026-09-06 17:23:00,410 INFO [model]   Computing age curve features...
+2026-09-06 17:23:00,413 INFO [model]   Computing damage accumulation...
+2026-09-06 17:23:01,820 INFO [model]   Computing weight-class movement...
+2026-09-06 17:23:02,077 INFO [model]   Computing pre-UFC records...
+2026-09-06 17:23:02,102 INFO [model]   Computing age-relative performance residuals...
+2026-09-06 17:23:02,197 INFO [model]   Computing fighter style clusters (k=6)...
+2026-09-06 17:23:02,585 INFO [model]     Fit on 22225 rows, assigned 22225 fighter-fights
+2026-09-06 17:23:02,586 INFO [model]     Style 0 (3330 fighter-fights): SigStr/5=16.7 TD/5=0.5 Sub/5=0.5 Ctrl/5=49.4 GndStr/5=2.7 top=ctrl_per5
+2026-09-06 17:23:02,586 INFO [model]     Style 1 (3900 fighter-fights): SigStr/5=17.1 TD/5=1.5 Sub/5=0.5 Ctrl/5=117.8 GndStr/5=7.6 top=ctrl_per5
+2026-09-06 17:23:02,586 INFO [model]     Style 2 (10804 fighter-fights): SigStr/5=16.4 TD/5=0.5 Sub/5=0.3 Ctrl/5=44.5 GndStr/5=3.0 top=ctrl_per5
+2026-09-06 17:23:02,586 INFO [model]     Style 3 (3504 fighter-fights): SigStr/5=32.5 TD/5=0.3 Sub/5=0.2 Ctrl/5=36.0 GndStr/5=5.4 top=ctrl_per5
+2026-09-06 17:23:02,586 INFO [model]     Style 4 (312 fighter-fights): SigStr/5=72.2 TD/5=0.7 Sub/5=0.3 Ctrl/5=58.9 GndStr/5=35.5 top=sig_str_landed_per5
+2026-09-06 17:23:02,586 INFO [model]     Style 5 (375 fighter-fights): SigStr/5=12.3 TD/5=2.2 Sub/5=4.3 Ctrl/5=61.5 GndStr/5=4.2 top=ctrl_per5
+2026-09-06 17:23:02,653 INFO [model]   Style matchup features computed expanding-in-time (6x6, 22128 fighter-fights)
+2026-09-06 17:23:02,914 INFO [model]   Feature matrix shape: (22225, 334)
+2026-09-06 17:23:02,930 INFO [model] Building matchup feature matrix...
+2026-09-06 17:23:03,041 INFO [model]   Loading odds from database...
+2026-09-06 17:23:04,694 INFO [model]   Odds matched: 2837/11064 fights (25.6%)
+2026-09-06 17:23:04,715 INFO [model]   Filtered to modern era (2015+): 6375 fights (dropped 4689 pre-2015)
+2026-09-06 17:23:04,715 INFO [model]   Red win rate (modern): 0.556
+2026-09-06 17:23:04,726 INFO [model]   Matchup matrix: 6375 fights, 292 candidate features
+2026-09-06 17:23:04,726 INFO [model]   Red win rate: 0.556
+2026-09-06 17:23:04,727 INFO [model]   Date range: 2015-01-03 to 2026-09-05
+2026-09-06 17:23:04,749 INFO [model] 
+  Style-cluster cutoff set to eval start: 2022-06-09
+2026-09-06 17:23:04,749 INFO [model] Building features...
+2026-09-06 17:23:05,005 INFO [model]   Computing defensive stats...
+2026-09-06 17:23:06,444 INFO [model]   Computing Elo ratings...
+2026-09-06 17:23:06,917 INFO [model]   Computing resume scores...
+2026-09-06 17:23:07,062 INFO [model]   Using 21312 caller-supplied Glicko snapshots
+2026-09-06 17:23:09,563 INFO [model]   Added 15 Glicko features  + 4 confidence features
+2026-09-06 17:23:09,563 INFO [model]   Computing Elo-adjusted stats...
+2026-09-06 17:23:09,565 INFO [model]   Computing rolling career averages...
+2026-09-06 17:23:34,143 INFO [model]   Computing streaks and career stats...
+2026-09-06 17:23:35,535 INFO [model]   Computing composite features...
+2026-09-06 17:23:35,540 INFO [model]   Computing round-by-round profiles...
+2026-09-06 17:23:44,650 INFO [model]   Computing age curve features...
+2026-09-06 17:23:44,653 INFO [model]   Computing damage accumulation...
+2026-09-06 17:23:45,945 INFO [model]   Computing weight-class movement...
+2026-09-06 17:23:46,144 INFO [model]   Computing pre-UFC records...
+2026-09-06 17:23:46,169 INFO [model]   Computing age-relative performance residuals...
+2026-09-06 17:23:46,263 INFO [model]   Computing fighter style clusters (k=6)...
+2026-09-06 17:23:46,558 INFO [model]     Fit on 17109 rows, assigned 22225 fighter-fights
+2026-09-06 17:23:46,559 INFO [model]     Style 0 (10325 fighter-fights): SigStr/5=15.2 TD/5=0.5 Sub/5=0.3 Ctrl/5=43.5 GndStr/5=3.1 top=ctrl_per5
+2026-09-06 17:23:46,559 INFO [model]     Style 1 (3340 fighter-fights): SigStr/5=15.4 TD/5=0.6 Sub/5=0.5 Ctrl/5=50.6 GndStr/5=3.1 top=ctrl_per5
+2026-09-06 17:23:46,559 INFO [model]     Style 2 (319 fighter-fights): SigStr/5=71.7 TD/5=0.8 Sub/5=0.3 Ctrl/5=55.5 GndStr/5=35.4 top=sig_str_landed_per5
+2026-09-06 17:23:46,559 INFO [model]     Style 3 (314 fighter-fights): SigStr/5=11.4 TD/5=2.3 Sub/5=4.7 Ctrl/5=54.7 GndStr/5=4.0 top=ctrl_per5
+2026-09-06 17:23:46,559 INFO [model]     Style 4 (3728 fighter-fights): SigStr/5=16.7 TD/5=1.5 Sub/5=0.6 Ctrl/5=114.0 GndStr/5=8.1 top=ctrl_per5
+2026-09-06 17:23:46,559 INFO [model]     Style 5 (4199 fighter-fights): SigStr/5=30.5 TD/5=0.3 Sub/5=0.2 Ctrl/5=33.6 GndStr/5=5.7 top=ctrl_per5
+2026-09-06 17:23:46,614 INFO [model]   Style matchup features computed expanding-in-time (6x6, 22128 fighter-fights)
+2026-09-06 17:23:46,865 INFO [model]   Feature matrix shape: (22225, 334)
+2026-09-06 17:23:46,885 INFO [model] Building matchup feature matrix...
+2026-09-06 17:23:47,032 INFO [model]   Loading odds from database...
+2026-09-06 17:23:48,707 INFO [model]   Odds matched: 2837/11064 fights (25.6%)
+2026-09-06 17:23:48,727 INFO [model]   Filtered to modern era (2015+): 6375 fights (dropped 4689 pre-2015)
+2026-09-06 17:23:48,727 INFO [model]   Red win rate (modern): 0.556
+2026-09-06 17:23:48,738 INFO [model]   Matchup matrix: 6375 fights, 292 candidate features
+2026-09-06 17:23:48,738 INFO [model]   Red win rate: 0.556
+2026-09-06 17:23:48,739 INFO [model]   Date range: 2015-01-03 to 2026-09-05
+2026-09-06 17:23:48,745 INFO [model] ============================================================
+2026-09-06 17:23:48,745 INFO [model] WALK-FORWARD EVALUATION
+2026-09-06 17:23:48,745 INFO [model] ============================================================
+2026-09-06 17:23:48,755 INFO [model]   6375 fights | 8 folds over the last 40% (2550 eval fights)
+2026-09-06 17:23:48,755 INFO [model]   Hyperparameters are FIXED (not tuned per fold): {'max_depth': 3, 'learning_rate': 0.037, 'max_features': 0.65, 'min_samples_leaf': 32, 'l2_regularization': 4.4, 'max_bins': 128}
+2026-09-06 17:23:48,755 INFO [model]   Those values came from an Optuna search that scored on a chronological
+2026-09-06 17:23:48,755 INFO [model]   20% slice overlapping this eval window, so a residual selection optimism
+2026-09-06 17:23:48,755 INFO [model]   remains. It is bounded and disclosed rather than hidden.
+2026-09-06 17:23:48,755 INFO [model] 
+------------------------------------------------------------
+2026-09-06 17:23:48,755 INFO [model] ARM: with_odds  (292 candidate features)
+2026-09-06 17:23:48,755 INFO [model] ------------------------------------------------------------
+2026-09-06 17:23:53,278 INFO [model]   Early stopping (chronological val, n=487): best_iter=329 val_logloss=0.6657
+2026-09-06 17:23:54,125 INFO [model]   Fold 1/8  train= 3825  test= 318  (2022-06-09 → 2022-11-19)  acc=0.6006  auc=0.6838  iter=329
+2026-09-06 17:23:59,128 INFO [model]   Early stopping (chronological val, n=528): best_iter=129 val_logloss=0.6640
+2026-09-06 17:23:59,791 INFO [model]   Fold 2/8  train= 4143  test= 319  (2022-11-19 → 2023-07-01)  acc=0.5987  auc=0.6838  iter=129
+2026-09-06 17:24:05,223 INFO [model]   Early stopping (chronological val, n=568): best_iter=295 val_logloss=0.6557
+2026-09-06 17:24:05,998 INFO [model]   Fold 3/8  train= 4462  test= 319  (2023-07-01 → 2023-12-16)  acc=0.6207  auc=0.6665  iter=295
+2026-09-06 17:24:10,732 INFO [model]   Early stopping (chronological val, n=609): best_iter=146 val_logloss=0.6463
+2026-09-06 17:24:11,148 INFO [model]   Fold 4/8  train= 4781  test= 319  (2024-01-13 → 2024-07-27)  acc=0.6332  auc=0.6862  iter=146
+2026-09-06 17:24:16,779 INFO [model]   Early stopping (chronological val, n=650): best_iter=464 val_logloss=0.6164
+2026-09-06 17:24:17,963 INFO [model]   Fold 5/8  train= 5100  test= 318  (2024-07-27 → 2025-02-08)  acc=0.7075  auc=0.7371  iter=464
+2026-09-06 17:24:23,710 INFO [model]   Early stopping (chronological val, n=690): best_iter=246 val_logloss=0.6202
+2026-09-06 17:24:24,444 INFO [model]   Fold 6/8  train= 5418  test= 319  (2025-02-08 → 2025-08-16)  acc=0.6803  auc=0.7442  iter=246
+2026-09-06 17:24:30,562 INFO [model]   Early stopping (chronological val, n=731): best_iter=125 val_logloss=0.6258
+2026-09-06 17:24:30,950 INFO [model]   Fold 7/8  train= 5737  test= 319  (2025-08-16 → 2026-03-14)  acc=0.6520  auc=0.7375  iter=125
+2026-09-06 17:24:40,963 INFO [model]   Early stopping (chronological val, n=772): best_iter=213 val_logloss=0.6330
+2026-09-06 17:24:41,718 INFO [model]   Fold 8/8  train= 6056  test= 319  (2026-03-14 → 2026-09-05)  acc=0.6708  auc=0.7088  iter=213
+2026-09-06 17:24:41,768 INFO [model]   POOLED  n=2550  acc=0.6455 [0.6267, 0.6643]  auc=0.7073  brier=0.2162 (calibrated 0.2193)
+2026-09-06 17:24:41,768 INFO [model] 
+------------------------------------------------------------
+2026-09-06 17:24:41,768 INFO [model] ARM: no_odds  (285 candidate features)
+2026-09-06 17:24:41,768 INFO [model] ------------------------------------------------------------
+2026-09-06 17:24:47,184 INFO [model]   Early stopping (chronological val, n=487): best_iter=107 val_logloss=0.6676
+2026-09-06 17:24:47,527 INFO [model]     MarketAnchor: b=0.320 c=+0.047 on 415 priced rows (trusting 32% of disagreement)
+2026-09-06 17:24:47,530 INFO [model]   Fold 1/8  train= 3825  test= 318  (2022-06-09 → 2022-11-19)  acc=0.5912  auc=0.6642  iter=107
+2026-09-06 17:24:52,806 INFO [model]   Early stopping (chronological val, n=528): best_iter=119 val_logloss=0.6715
+2026-09-06 17:24:53,219 INFO [model]     MarketAnchor: b=0.508 c=+0.089 on 487 priced rows (trusting 51% of disagreement)
+2026-09-06 17:24:53,222 INFO [model]   Fold 2/8  train= 4143  test= 319  (2022-11-19 → 2023-07-01)  acc=0.5831  auc=0.6387  iter=119
+2026-09-06 17:24:58,521 INFO [model]   Early stopping (chronological val, n=568): best_iter=186 val_logloss=0.6697
+2026-09-06 17:24:59,001 INFO [model]     MarketAnchor: b=0.430 c=+0.082 on 537 priced rows (trusting 43% of disagreement)
+2026-09-06 17:24:59,004 INFO [model]   Fold 3/8  train= 4462  test= 319  (2023-07-01 → 2023-12-16)  acc=0.5549  auc=0.5971  iter=186
+2026-09-06 17:25:03,869 INFO [model]   Early stopping (chronological val, n=609): best_iter=133 val_logloss=0.6616
+2026-09-06 17:25:04,202 INFO [model]     MarketAnchor: b=0.315 c=+0.075 on 600 priced rows (trusting 31% of disagreement)
+2026-09-06 17:25:04,205 INFO [model]   Fold 4/8  train= 4781  test= 319  (2024-01-13 → 2024-07-27)  acc=0.5956  auc=0.6435  iter=133
+2026-09-06 17:25:09,881 INFO [model]   Early stopping (chronological val, n=650): best_iter=457 val_logloss=0.6441
+2026-09-06 17:25:11,135 INFO [model]     MarketAnchor: b=0.095 c=-0.028 on 634 priced rows (trusting 10% of disagreement)
+2026-09-06 17:25:11,140 INFO [model]   Fold 5/8  train= 5100  test= 318  (2024-07-27 → 2025-02-08)  acc=0.6667  auc=0.6734  iter=457
+2026-09-06 17:25:17,120 INFO [model]   Early stopping (chronological val, n=690): best_iter=163 val_logloss=0.6504
+2026-09-06 17:25:17,663 INFO [model]     MarketAnchor: b=0.135 c=+0.040 on 693 priced rows (trusting 14% of disagreement)
+2026-09-06 17:25:17,668 INFO [model]   Fold 6/8  train= 5418  test= 319  (2025-02-08 → 2025-08-16)  acc=0.6301  auc=0.6716  iter=163
+2026-09-06 17:25:23,074 INFO [model]   Early stopping (chronological val, n=731): best_iter=96 val_logloss=0.6664
+2026-09-06 17:25:23,444 INFO [model]     MarketAnchor: b=0.107 c=+0.076 on 734 priced rows (trusting 11% of disagreement)
+2026-09-06 17:25:23,447 INFO [model]   Fold 7/8  train= 5737  test= 319  (2025-08-16 → 2026-03-14)  acc=0.6332  auc=0.7028  iter=96
+2026-09-06 17:25:29,161 INFO [model]   Early stopping (chronological val, n=772): best_iter=202 val_logloss=0.6577
+2026-09-06 17:25:29,785 INFO [model]     MarketAnchor: b=0.311 c=+0.045 on 772 priced rows (trusting 31% of disagreement)
+2026-09-06 17:25:29,788 INFO [model]   Fold 8/8  train= 6056  test= 319  (2026-03-14 → 2026-09-05)  acc=0.6270  auc=0.6530  iter=202
+2026-09-06 17:25:29,831 INFO [model]   POOLED  n=2550  acc=0.6102 [0.5929, 0.6294]  auc=0.6564  brier=0.2302 (calibrated 0.2313)
+2026-09-06 17:25:29,832 INFO [model] 
+------------------------------------------------------------
+2026-09-06 17:25:29,832 INFO [model] ARM: no_odds_no_glicko  (228 candidate features)
+2026-09-06 17:25:29,832 INFO [model] ------------------------------------------------------------
+2026-09-06 17:25:34,119 INFO [model]   Early stopping (chronological val, n=487): best_iter=54 val_logloss=0.6711
+2026-09-06 17:25:34,305 INFO [model]   Fold 1/8  train= 3825  test= 318  (2022-06-09 → 2022-11-19)  acc=0.6572  auc=0.6700  iter=54
+2026-09-06 17:25:38,743 INFO [model]   Early stopping (chronological val, n=528): best_iter=59 val_logloss=0.6768
+2026-09-06 17:25:38,952 INFO [model]   Fold 2/8  train= 4143  test= 319  (2022-11-19 → 2023-07-01)  acc=0.5831  auc=0.6366  iter=59
+2026-09-06 17:25:43,161 INFO [model]   Early stopping (chronological val, n=568): best_iter=123 val_logloss=0.6732
+2026-09-06 17:25:43,452 INFO [model]   Fold 3/8  train= 4462  test= 319  (2023-07-01 → 2023-12-16)  acc=0.5423  auc=0.5998  iter=123
+2026-09-06 17:25:47,613 INFO [model]   Early stopping (chronological val, n=609): best_iter=117 val_logloss=0.6659
+2026-09-06 17:25:47,921 INFO [model]   Fold 4/8  train= 4781  test= 319  (2024-01-13 → 2024-07-27)  acc=0.6082  auc=0.6245  iter=117
+2026-09-06 17:25:52,908 INFO [model]   Early stopping (chronological val, n=650): best_iter=174 val_logloss=0.6567
+2026-09-06 17:25:53,419 INFO [model]   Fold 5/8  train= 5100  test= 318  (2024-07-27 → 2025-02-08)  acc=0.6415  auc=0.6605  iter=174
+2026-09-06 17:25:58,733 INFO [model]   Early stopping (chronological val, n=690): best_iter=93 val_logloss=0.6570
+2026-09-06 17:25:59,038 INFO [model]   Fold 6/8  train= 5418  test= 319  (2025-02-08 → 2025-08-16)  acc=0.6270  auc=0.6617  iter=93
+2026-09-06 17:26:04,675 INFO [model]   Early stopping (chronological val, n=731): best_iter=211 val_logloss=0.6589
+2026-09-06 17:26:05,287 INFO [model]   Fold 7/8  train= 5737  test= 319  (2025-08-16 → 2026-03-14)  acc=0.6332  auc=0.7021  iter=211
+2026-09-06 17:26:10,984 INFO [model]   Early stopping (chronological val, n=772): best_iter=155 val_logloss=0.6581
+2026-09-06 17:26:11,482 INFO [model]   Fold 8/8  train= 6056  test= 319  (2026-03-14 → 2026-09-05)  acc=0.6207  auc=0.6544  iter=155
+2026-09-06 17:26:11,524 INFO [model]   POOLED  n=2550  acc=0.6141 [0.5969, 0.6329]  auc=0.6519  brier=0.2316 (calibrated 0.2317)
+2026-09-06 17:26:11,525 INFO [model] 
+------------------------------------------------------------
+2026-09-06 17:26:11,525 INFO [model] ARM: simulator (competing risks over Glicko)
+2026-09-06 17:26:11,525 INFO [model] ------------------------------------------------------------
+2026-09-06 17:26:14,386 INFO [model]   Fold 1/8  train= 3825  test= 318  sims=5000  b_dec=+0.228
+2026-09-06 17:26:17,025 INFO [model]   Fold 2/8  train= 4143  test= 319  sims=5000  b_dec=+0.224
+2026-09-06 17:26:19,658 INFO [model]   Fold 3/8  train= 4462  test= 319  sims=5000  b_dec=+0.214
+2026-09-06 17:26:22,330 INFO [model]   Fold 4/8  train= 4781  test= 319  sims=5000  b_dec=+0.211
+2026-09-06 17:26:24,962 INFO [model]   Fold 5/8  train= 5100  test= 318  sims=5000  b_dec=+0.189
+2026-09-06 17:26:27,514 INFO [model]   Fold 6/8  train= 5418  test= 319  sims=5000  b_dec=+0.199
+2026-09-06 17:26:30,004 INFO [model]   Fold 7/8  train= 5737  test= 319  sims=5000  b_dec=+0.202
+2026-09-06 17:26:32,581 INFO [model]   Fold 8/8  train= 6056  test= 319  sims=5000  b_dec=+0.188
+2026-09-06 17:26:32,617 INFO [model] 
+  METHOD (scored on realised outcomes — no market exists for this)
+2026-09-06 17:26:32,617 INFO [model]     log loss   1.0046  vs base rate 1.0252
+2026-09-06 17:26:32,617 INFO [model]     accuracy   0.4910
+2026-09-06 17:26:32,617 INFO [model]     class     Brier     base
+2026-09-06 17:26:32,617 INFO [model]     KO       0.2199   0.2245
+2026-09-06 17:26:32,617 INFO [model]     SUB      0.1418   0.1453
+2026-09-06 17:26:32,617 INFO [model]     DEC      0.2466   0.2503
+2026-09-06 17:26:32,617 INFO [model]     predicted mix [0.335 0.17  0.495]  actual [0.339 0.176 0.485]
+2026-09-06 17:26:32,617 INFO [model] 
+------------------------------------------------------------
+2026-09-06 17:26:32,617 INFO [model] ARM: decorrelated (market-decorrelation penalty)
+2026-09-06 17:26:32,617 INFO [model] ------------------------------------------------------------
+2026-09-06 17:26:39,725 INFO [model]   Fold 1/8  train= 3825  test= 318  gamma=0.5  inner_roi=-3.31%
+2026-09-06 17:26:45,320 INFO [model]   Fold 2/8  train= 4143  test= 319  gamma=0.25 inner_roi=-1.20%
+2026-09-06 17:26:50,923 INFO [model]   Fold 3/8  train= 4462  test= 319  gamma=1.0  inner_roi=-0.45%
+2026-09-06 17:26:57,099 INFO [model]   Fold 4/8  train= 4781  test= 319  gamma=0.1  inner_roi=+4.69%
+2026-09-06 17:27:03,673 INFO [model]   Fold 5/8  train= 5100  test= 318  gamma=0.0  inner_roi=-5.21%
+2026-09-06 17:27:10,829 INFO [model]   Fold 6/8  train= 5418  test= 319  gamma=0.0  inner_roi=+1.28%
+2026-09-06 17:27:18,606 INFO [model]   Fold 7/8  train= 5737  test= 319  gamma=0.1  inner_roi=+2.13%
+2026-09-06 17:27:26,577 INFO [model]   Fold 8/8  train= 6056  test= 319  gamma=0.0  inner_roi=+4.25%
+2026-09-06 17:27:26,611 INFO [model]   gamma per fold: [0.5, 0.25, 1.0, 0.1, 0.0, 0.0, 0.1, 0.0]
+2026-09-06 17:27:26,640 INFO [model] 
+------------------------------------------------------------
+2026-09-06 17:27:26,640 INFO [model] MARKET-ANCHORED ARM  (base = no_odds)
+2026-09-06 17:27:26,640 INFO [model] ------------------------------------------------------------
+2026-09-06 17:27:26,640 INFO [model]   b = fraction of the model's disagreement with the line that is trusted
+2026-09-06 17:27:26,640 INFO [model]    Fold        b        c   n_fit
+2026-09-06 17:27:26,640 INFO [model]   --------------------------------
+2026-09-06 17:27:26,640 INFO [model]       1    0.320   +0.047     415
+2026-09-06 17:27:26,640 INFO [model]       2    0.508   +0.089     487
+2026-09-06 17:27:26,640 INFO [model]       3    0.430   +0.082     537
+2026-09-06 17:27:26,640 INFO [model]       4    0.315   +0.075     600
+2026-09-06 17:27:26,640 INFO [model]       5    0.095   -0.028     634
+2026-09-06 17:27:26,640 INFO [model]       6    0.135   +0.040     693
+2026-09-06 17:27:26,641 INFO [model]       7    0.107   +0.076     734
+2026-09-06 17:27:26,641 INFO [model]       8    0.311   +0.045     772
+2026-09-06 17:27:26,641 INFO [model]   mean b = 0.278
+2026-09-06 17:27:26,641 INFO [model] 
+------------------------------------------------------------
+2026-09-06 17:27:26,641 INFO [model] MARKET COMPARISON (fights with odds)
+2026-09-06 17:27:26,641 INFO [model] ------------------------------------------------------------
+2026-09-06 17:27:26,677 INFO [model]   Eval fights with odds: 2087 (2022-06-11 → 2026-09-05)
+2026-09-06 17:27:26,677 INFO [model]   Average vig: 0.000
+2026-09-06 17:27:26,677 INFO [model] 
+  Arm                       Acc             95% CI      AUC    Brier  corr(mkt)   partial
+2026-09-06 17:27:26,677 INFO [model]   ----------------------------------------------------------------------------------------
+2026-09-06 17:27:26,677 INFO [model]   market only            0.6770     [0.657, 0.698]        —   0.2055      1.000     1.000
+2026-09-06 17:27:26,798 INFO [model]   no_odds_no_glicko      0.6200     [0.598, 0.641]   0.6610   0.2297      0.554     0.506
+2026-09-06 17:27:26,917 INFO [model]   no_odds                0.6224     [0.601, 0.643]   0.6692   0.2277      0.545     0.497
+2026-09-06 17:27:27,041 INFO [model]   simulator              0.5946     [0.574, 0.615]   0.6110   0.2385      0.455     0.422
+2026-09-06 17:27:27,140 INFO [model]   with_odds              0.6679     [0.648, 0.688]   0.7255   0.2104      0.810     0.782
+2026-09-06 17:27:27,209 INFO [model]   market_anchored        0.6833     [0.663, 0.703]   0.7371   0.2072      0.942     0.930
+2026-09-06 17:27:27,340 INFO [model]   decorrelated           0.6459     [0.626, 0.666]   0.6763   0.2525      0.589     0.548
+2026-09-06 17:27:27,340 INFO [model] 
+  Arm                    Acc − market         95% CI of diff   Beats mkt?
+2026-09-06 17:27:27,340 INFO [model]   ------------------------------------------------------------------------
+2026-09-06 17:27:27,340 INFO [model]   no_odds_no_glicko           -0.0570     [-0.0805, -0.0355]           no
+2026-09-06 17:27:27,340 INFO [model]   no_odds                     -0.0546     [-0.0776, -0.0335]           no
+2026-09-06 17:27:27,340 INFO [model]   simulator                   -0.0824     [-0.1049, -0.0594]           no
+2026-09-06 17:27:27,340 INFO [model]   with_odds                   -0.0091     [-0.0254, +0.0048]           no
+2026-09-06 17:27:27,340 INFO [model]   market_anchored             +0.0062     [-0.0048, +0.0168]           no
+2026-09-06 17:27:27,340 INFO [model]   decorrelated                -0.0311     [-0.0503, -0.0105]           no
+2026-09-06 17:27:27,340 INFO [model] 
+  Betting ladder — no_odds_no_glicko (calibrated, frozen thresholds):
+2026-09-06 17:27:27,340 INFO [model]     Edge   Bets    Bet%    Win%     ROI%             ROI 95% CI
+2026-09-06 17:27:27,340 INFO [model]   --------------------------------------------------------------
+2026-09-06 17:27:27,340 INFO [model]       3%   1789   85.7%   39.0%    -6.48          [-12.3, -0.1]
+2026-09-06 17:27:27,340 INFO [model]       5%   1610   77.1%   39.0%    -4.72          [-11.2, +2.1]
+2026-09-06 17:27:27,340 INFO [model]       8%   1294   62.0%   37.6%    -7.31          [-14.5, +0.0]
+2026-09-06 17:27:27,340 INFO [model]      10%   1113   53.3%   37.4%    -5.44          [-13.4, +2.4]
+2026-09-06 17:27:27,340 INFO [model]      15%    699   33.5%   34.2%    -9.26          [-19.6, +0.7]
+2026-09-06 17:27:27,340 INFO [model] 
+  Betting ladder — no_odds (calibrated, frozen thresholds):
+2026-09-06 17:27:27,340 INFO [model]     Edge   Bets    Bet%    Win%     ROI%             ROI 95% CI
+2026-09-06 17:27:27,341 INFO [model]   --------------------------------------------------------------
+2026-09-06 17:27:27,341 INFO [model]       3%   1778   85.2%   40.5%    -4.68          [-10.7, +1.2]
+2026-09-06 17:27:27,341 INFO [model]       5%   1589   76.1%   39.8%    -4.29          [-10.7, +2.2]
+2026-09-06 17:27:27,341 INFO [model]       8%   1313   62.9%   38.4%    -5.89          [-12.9, +1.4]
+2026-09-06 17:27:27,341 INFO [model]      10%   1112   53.3%   37.7%    -5.95          [-13.5, +2.5]
+2026-09-06 17:27:27,341 INFO [model]      15%    723   34.6%   35.7%    -8.17          [-18.0, +1.6]
+2026-09-06 17:27:27,341 INFO [model] 
+  Betting ladder — simulator (calibrated, frozen thresholds):
+2026-09-06 17:27:27,341 INFO [model]     Edge   Bets    Bet%    Win%     ROI%             ROI 95% CI
+2026-09-06 17:27:27,341 INFO [model]   --------------------------------------------------------------
+2026-09-06 17:27:27,341 INFO [model]       3%   1819   87.2%   32.7%   -11.21          [-17.6, -4.4]
+2026-09-06 17:27:27,341 INFO [model]       5%   1634   78.3%   31.0%   -12.09          [-19.0, -5.1]
+2026-09-06 17:27:27,341 INFO [model]       8%   1392   66.7%   29.2%   -12.77          [-20.5, -5.3]
+2026-09-06 17:27:27,341 INFO [model]      10%   1239   59.4%   27.6%   -14.90          [-23.1, -6.5]
+2026-09-06 17:27:27,341 INFO [model]      15%    855   41.0%   23.9%   -19.18          [-29.2, -8.4]
+2026-09-06 17:27:27,341 INFO [model] 
+  Betting ladder — with_odds (calibrated, frozen thresholds):
+2026-09-06 17:27:27,341 INFO [model]     Edge   Bets    Bet%    Win%     ROI%             ROI 95% CI
+2026-09-06 17:27:27,341 INFO [model]   --------------------------------------------------------------
+2026-09-06 17:27:27,341 INFO [model]       3%   1531   73.4%   51.5%    -4.54          [-10.0, +0.9]
+2026-09-06 17:27:27,341 INFO [model]       5%   1248   59.8%   52.1%    -5.71          [-11.6, +0.3]
+2026-09-06 17:27:27,341 INFO [model]       8%    839   40.2%   52.8%    -6.40          [-13.1, +0.7]
+2026-09-06 17:27:27,341 INFO [model]      10%    620   29.7%   53.9%    -6.85          [-14.4, +1.1]
+2026-09-06 17:27:27,341 INFO [model]      15%    263   12.6%   54.4%   -10.83          [-21.3, +0.3]
+2026-09-06 17:27:27,341 INFO [model] 
+  Betting ladder — market_anchored (calibrated, frozen thresholds):
+2026-09-06 17:27:27,341 INFO [model]     Edge   Bets    Bet%    Win%     ROI%             ROI 95% CI
+2026-09-06 17:27:27,341 INFO [model]   --------------------------------------------------------------
+2026-09-06 17:27:27,341 INFO [model]       3%    866   41.5%   42.0%    -5.46          [-14.0, +3.2]
+2026-09-06 17:27:27,341 INFO [model]       5%    512   24.5%   43.4%    -5.80          [-16.5, +5.2]
+2026-09-06 17:27:27,341 INFO [model]       8%    250   12.0%   44.8%    -4.96         [-19.0, +10.4]
+2026-09-06 17:27:27,341 INFO [model]      10%    147    7.0%   51.0%     3.58         [-15.2, +23.0]
+2026-09-06 17:27:27,341 INFO [model]      15%     38    1.8%   52.6%    -9.90         [-39.5, +22.1]
+2026-09-06 17:27:27,342 INFO [model] 
+  Betting ladder — decorrelated (calibrated, frozen thresholds):
+2026-09-06 17:27:27,342 INFO [model]     Edge   Bets    Bet%    Win%     ROI%             ROI 95% CI
+2026-09-06 17:27:27,342 INFO [model]   --------------------------------------------------------------
+2026-09-06 17:27:27,342 INFO [model]       3%   1891   90.6%   58.6%    -2.68           [-6.9, +1.6]
+2026-09-06 17:27:27,342 INFO [model]       5%   1769   84.8%   59.4%    -2.26           [-6.4, +2.1]
+2026-09-06 17:27:27,342 INFO [model]       8%   1575   75.5%   59.4%    -3.02           [-7.5, +1.4]
+2026-09-06 17:27:27,342 INFO [model]      10%   1433   68.7%   59.2%    -2.35           [-6.9, +2.2]
+2026-09-06 17:27:27,342 INFO [model]      15%   1097   52.6%   58.4%    -1.99           [-7.2, +3.7]
+2026-09-06 17:27:27,376 INFO [model] 
+  Saved 2550 per-fight eval predictions to /Users/rafeburns/Downloads/ALocks/alocks-backend/models/ufc/h2h/eval_predictions.csv
+2026-09-06 17:27:27,383 INFO [model] 
+  Saved evaluation results to /Users/rafeburns/Downloads/ALocks/alocks-backend/models/ufc/h2h/eval_results.json
+2026-09-06 17:27:27,383 INFO [model] 
+============================================================
+2026-09-06 17:27:27,383 INFO [model] Walk-forward evaluation complete.
+2026-09-06 17:27:27,383 INFO [model] ============================================================
+2026-09-06 17:28:07,615 INFO [model] ============================================================
+2026-09-06 17:28:07,615 INFO [model] UFC Fight Winner Prediction Pipeline v6  (2026-09-06 17:28)
+2026-09-06 17:28:07,615 INFO [model] ============================================================
+2026-09-06 17:28:07,615 INFO [model] Loading data from database...
+2026-09-06 17:28:09,713 INFO [model]   Loaded 4616 fighters
+2026-09-06 17:28:13,455 INFO [model]   Loaded 22225 fight-stat rows (11161 unique fights)
+2026-09-06 17:28:13,455 INFO [model]   Loading per-round stats...
+2026-09-06 17:28:17,522 INFO [model]   Loaded 59640 per-round stat rows
+2026-09-06 17:28:17,647 INFO [model] Building features...
+2026-09-06 17:28:17,899 INFO [model]   Computing defensive stats...
+2026-09-06 17:28:19,276 INFO [model]   Computing Elo ratings...
+2026-09-06 17:28:19,771 INFO [model]   Computing resume scores...
+2026-09-06 17:28:19,915 INFO [model]   Loading Glicko rating snapshots from DB...
+2026-09-06 17:28:21,236 INFO [model]   Loaded 21312 Glicko snapshots
+2026-09-06 17:28:23,767 INFO [model]   Added 15 Glicko features  + 4 confidence features
+2026-09-06 17:28:23,767 INFO [model]   Computing Elo-adjusted stats...
+2026-09-06 17:28:23,769 INFO [model]   Computing rolling career averages...
+2026-09-06 17:28:49,029 INFO [model]   Computing streaks and career stats...
+2026-09-06 17:28:50,397 INFO [model]   Computing composite features...
+2026-09-06 17:28:50,402 INFO [model]   Computing round-by-round profiles...
+2026-09-06 17:28:59,038 INFO [model]   Computing age curve features...
+2026-09-06 17:28:59,041 INFO [model]   Computing damage accumulation...
+2026-09-06 17:29:00,310 INFO [model]   Computing weight-class movement...
+2026-09-06 17:29:00,512 INFO [model]   Computing pre-UFC records...
+2026-09-06 17:29:00,536 INFO [model]   Computing age-relative performance residuals...
+2026-09-06 17:29:00,632 INFO [model]   Computing fighter style clusters (k=6)...
+2026-09-06 17:29:01,079 INFO [model]     Fit on 22225 rows, assigned 22225 fighter-fights
+2026-09-06 17:29:01,080 INFO [model]     Style 0 (10812 fighter-fights): SigStr/5=16.4 TD/5=0.5 Sub/5=0.3 Ctrl/5=44.3 GndStr/5=3.0 top=ctrl_per5
+2026-09-06 17:29:01,080 INFO [model]     Style 1 (315 fighter-fights): SigStr/5=72.4 TD/5=0.9 Sub/5=0.3 Ctrl/5=58.3 GndStr/5=36.7 top=sig_str_landed_per5
+2026-09-06 17:29:01,080 INFO [model]     Style 2 (3915 fighter-fights): SigStr/5=17.0 TD/5=1.5 Sub/5=0.5 Ctrl/5=117.9 GndStr/5=7.5 top=ctrl_per5
+2026-09-06 17:29:01,080 INFO [model]     Style 3 (372 fighter-fights): SigStr/5=12.4 TD/5=2.1 Sub/5=4.4 Ctrl/5=61.3 GndStr/5=4.1 top=ctrl_per5
+2026-09-06 17:29:01,080 INFO [model]     Style 4 (3496 fighter-fights): SigStr/5=32.6 TD/5=0.3 Sub/5=0.2 Ctrl/5=36.0 GndStr/5=5.4 top=ctrl_per5
+2026-09-06 17:29:01,080 INFO [model]     Style 5 (3315 fighter-fights): SigStr/5=16.7 TD/5=0.5 Sub/5=0.5 Ctrl/5=49.8 GndStr/5=2.7 top=ctrl_per5
+2026-09-06 17:29:01,144 INFO [model]   Style matchup features computed expanding-in-time (6x6, 22128 fighter-fights)
+2026-09-06 17:29:01,399 INFO [model]   Feature matrix shape: (22225, 334)
+2026-09-06 17:29:01,433 INFO [model] Building matchup feature matrix...
+2026-09-06 17:29:01,539 INFO [model]   Loading odds from database...
+2026-09-06 17:29:03,283 INFO [model]   Odds matched: 2837/11064 fights (25.6%)
+2026-09-06 17:29:03,305 INFO [model]   Filtered to modern era (2015+): 6375 fights (dropped 4689 pre-2015)
+2026-09-06 17:29:03,306 INFO [model]   Red win rate (modern): 0.556
+2026-09-06 17:29:03,317 INFO [model]   Matchup matrix: 6375 fights, 292 candidate features
+2026-09-06 17:29:03,317 INFO [model]   Red win rate: 0.556
+2026-09-06 17:29:03,317 INFO [model]   Date range: 2015-01-03 to 2026-09-05
+2026-09-06 17:29:03,339 INFO [model] 
+  Style-cluster cutoff set to eval start: 2022-06-09
+2026-09-06 17:29:03,339 INFO [model] Building features...
+2026-09-06 17:29:03,593 INFO [model]   Computing defensive stats...
+2026-09-06 17:29:05,019 INFO [model]   Computing Elo ratings...
+2026-09-06 17:29:05,591 INFO [model]   Computing resume scores...
+2026-09-06 17:29:05,743 INFO [model]   Loading Glicko rating snapshots from DB...
+2026-09-06 17:29:07,046 INFO [model]   Loaded 21312 Glicko snapshots
+2026-09-06 17:29:09,598 INFO [model]   Added 15 Glicko features  + 4 confidence features
+2026-09-06 17:29:09,599 INFO [model]   Computing Elo-adjusted stats...
+2026-09-06 17:29:09,602 INFO [model]   Computing rolling career averages...
+2026-09-06 17:29:35,199 INFO [model]   Computing streaks and career stats...
+2026-09-06 17:29:36,629 INFO [model]   Computing composite features...
+2026-09-06 17:29:36,633 INFO [model]   Computing round-by-round profiles...
+2026-09-06 17:29:45,848 INFO [model]   Computing age curve features...
+2026-09-06 17:29:45,851 INFO [model]   Computing damage accumulation...
+2026-09-06 17:29:47,316 INFO [model]   Computing weight-class movement...
+2026-09-06 17:29:47,522 INFO [model]   Computing pre-UFC records...
+2026-09-06 17:29:47,548 INFO [model]   Computing age-relative performance residuals...
+2026-09-06 17:29:47,650 INFO [model]   Computing fighter style clusters (k=6)...
+2026-09-06 17:29:47,979 INFO [model]     Fit on 17109 rows, assigned 22225 fighter-fights
+2026-09-06 17:29:47,979 INFO [model]     Style 0 (319 fighter-fights): SigStr/5=11.3 TD/5=2.2 Sub/5=4.6 Ctrl/5=54.7 GndStr/5=3.9 top=ctrl_per5
+2026-09-06 17:29:47,979 INFO [model]     Style 1 (10310 fighter-fights): SigStr/5=15.2 TD/5=0.5 Sub/5=0.3 Ctrl/5=43.3 GndStr/5=3.1 top=ctrl_per5
+2026-09-06 17:29:47,979 INFO [model]     Style 2 (323 fighter-fights): SigStr/5=72.2 TD/5=1.0 Sub/5=0.3 Ctrl/5=54.5 GndStr/5=36.7 top=sig_str_landed_per5
+2026-09-06 17:29:47,980 INFO [model]     Style 3 (3320 fighter-fights): SigStr/5=15.4 TD/5=0.6 Sub/5=0.5 Ctrl/5=51.0 GndStr/5=3.1 top=ctrl_per5
+2026-09-06 17:29:47,980 INFO [model]     Style 4 (3749 fighter-fights): SigStr/5=16.6 TD/5=1.5 Sub/5=0.6 Ctrl/5=114.1 GndStr/5=7.9 top=ctrl_per5
+2026-09-06 17:29:47,980 INFO [model]     Style 5 (4204 fighter-fights): SigStr/5=30.5 TD/5=0.3 Sub/5=0.2 Ctrl/5=33.6 GndStr/5=5.7 top=ctrl_per5
+2026-09-06 17:29:48,032 INFO [model]   Style matchup features computed expanding-in-time (6x6, 22128 fighter-fights)
+2026-09-06 17:29:48,292 INFO [model]   Feature matrix shape: (22225, 334)
+2026-09-06 17:29:48,328 INFO [model] Building matchup feature matrix...
+2026-09-06 17:29:48,443 INFO [model]   Loading odds from database...
+2026-09-06 17:29:50,076 INFO [model]   Odds matched: 2837/11064 fights (25.6%)
+2026-09-06 17:29:50,095 INFO [model]   Filtered to modern era (2015+): 6375 fights (dropped 4689 pre-2015)
+2026-09-06 17:29:50,095 INFO [model]   Red win rate (modern): 0.556
+2026-09-06 17:29:50,107 INFO [model]   Matchup matrix: 6375 fights, 292 candidate features
+2026-09-06 17:29:50,107 INFO [model]   Red win rate: 0.556
+2026-09-06 17:29:50,108 INFO [model]   Date range: 2015-01-03 to 2026-09-05
+2026-09-06 17:29:50,114 INFO [model] ============================================================
+2026-09-06 17:29:50,114 INFO [model] WALK-FORWARD EVALUATION
+2026-09-06 17:29:50,114 INFO [model] ============================================================
+2026-09-06 17:29:50,125 INFO [model]   6375 fights | 8 folds over the last 40% (2550 eval fights)
+2026-09-06 17:29:50,125 INFO [model]   Hyperparameters are FIXED (not tuned per fold): {'max_depth': 3, 'learning_rate': 0.037, 'max_features': 0.65, 'min_samples_leaf': 32, 'l2_regularization': 4.4, 'max_bins': 128}
+2026-09-06 17:29:50,125 INFO [model]   Those values came from an Optuna search that scored on a chronological
+2026-09-06 17:29:50,125 INFO [model]   20% slice overlapping this eval window, so a residual selection optimism
+2026-09-06 17:29:50,125 INFO [model]   remains. It is bounded and disclosed rather than hidden.
+2026-09-06 17:29:50,125 INFO [model] 
+------------------------------------------------------------
+2026-09-06 17:29:50,125 INFO [model] ARM: with_odds  (292 candidate features)
+2026-09-06 17:29:50,125 INFO [model] ------------------------------------------------------------
+2026-09-06 17:29:54,722 INFO [model]   Early stopping (chronological val, n=487): best_iter=84 val_logloss=0.6643
+2026-09-06 17:29:54,979 INFO [model]   Fold 1/8  train= 3825  test= 318  (2022-06-09 → 2022-11-19)  acc=0.6195  auc=0.6676  iter=84
+2026-09-06 17:29:59,188 INFO [model]   Early stopping (chronological val, n=528): best_iter=137 val_logloss=0.6656
+2026-09-06 17:29:59,477 INFO [model]   Fold 2/8  train= 4143  test= 319  (2022-11-19 → 2023-07-01)  acc=0.6050  auc=0.6817  iter=137
+2026-09-06 17:30:03,931 INFO [model]   Early stopping (chronological val, n=568): best_iter=267 val_logloss=0.6539
+2026-09-06 17:30:04,578 INFO [model]   Fold 3/8  train= 4462  test= 319  (2023-07-01 → 2023-12-16)  acc=0.6270  auc=0.6668  iter=267
+2026-09-06 17:30:09,738 INFO [model]   Early stopping (chronological val, n=609): best_iter=175 val_logloss=0.6479
+2026-09-06 17:30:10,224 INFO [model]   Fold 4/8  train= 4781  test= 319  (2024-01-13 → 2024-07-27)  acc=0.6520  auc=0.6986  iter=175
+2026-09-06 17:30:15,955 INFO [model]   Early stopping (chronological val, n=650): best_iter=306 val_logloss=0.6115
+2026-09-06 17:30:16,852 INFO [model]   Fold 5/8  train= 5100  test= 318  (2024-07-27 → 2025-02-08)  acc=0.6981  auc=0.7177  iter=306
+2026-09-06 17:30:22,563 INFO [model]   Early stopping (chronological val, n=690): best_iter=183 val_logloss=0.6224
+2026-09-06 17:30:23,109 INFO [model]   Fold 6/8  train= 5418  test= 319  (2025-02-08 → 2025-08-16)  acc=0.6771  auc=0.7439  iter=183
+2026-09-06 17:30:29,121 INFO [model]   Early stopping (chronological val, n=731): best_iter=155 val_logloss=0.6203
+2026-09-06 17:30:29,567 INFO [model]   Fold 7/8  train= 5737  test= 319  (2025-08-16 → 2026-03-14)  acc=0.6708  auc=0.7424  iter=155
+2026-09-06 17:30:35,262 INFO [model]   Early stopping (chronological val, n=772): best_iter=176 val_logloss=0.6344
+2026-09-06 17:30:35,730 INFO [model]   Fold 8/8  train= 6056  test= 319  (2026-03-14 → 2026-09-05)  acc=0.6426  auc=0.6982  iter=176
+2026-09-06 17:30:35,773 INFO [model]   POOLED  n=2550  acc=0.6490 [0.6306, 0.6675]  auc=0.7038  brier=0.2170 (calibrated 0.2202)
+2026-09-06 17:30:35,773 INFO [model] 
+------------------------------------------------------------
+2026-09-06 17:30:35,773 INFO [model] ARM: no_odds  (285 candidate features)
+2026-09-06 17:30:35,773 INFO [model] ------------------------------------------------------------
+2026-09-06 17:30:40,384 INFO [model]   Early stopping (chronological val, n=487): best_iter=84 val_logloss=0.6644
+2026-09-06 17:30:40,689 INFO [model]     MarketAnchor: b=0.314 c=+0.038 on 415 priced rows (trusting 31% of disagreement)
+2026-09-06 17:30:40,692 INFO [model]   Fold 1/8  train= 3825  test= 318  (2022-06-09 → 2022-11-19)  acc=0.6069  auc=0.6463  iter=84
+2026-09-06 17:30:45,858 INFO [model]   Early stopping (chronological val, n=528): best_iter=69 val_logloss=0.6772
+2026-09-06 17:30:46,100 INFO [model]     MarketAnchor: b=0.488 c=+0.090 on 487 priced rows (trusting 49% of disagreement)
+2026-09-06 17:30:46,106 INFO [model]   Fold 2/8  train= 4143  test= 319  (2022-11-19 → 2023-07-01)  acc=0.6019  auc=0.6411  iter=69
+2026-09-06 17:30:52,505 INFO [model]   Early stopping (chronological val, n=568): best_iter=278 val_logloss=0.6711
+2026-09-06 17:30:53,315 INFO [model]     MarketAnchor: b=0.417 c=+0.084 on 537 priced rows (trusting 42% of disagreement)
+2026-09-06 17:30:53,318 INFO [model]   Fold 3/8  train= 4462  test= 319  (2023-07-01 → 2023-12-16)  acc=0.5705  auc=0.6107  iter=278
+2026-09-06 17:30:58,919 INFO [model]   Early stopping (chronological val, n=609): best_iter=175 val_logloss=0.6633
+2026-09-06 17:30:59,477 INFO [model]     MarketAnchor: b=0.364 c=+0.076 on 600 priced rows (trusting 36% of disagreement)
+2026-09-06 17:30:59,481 INFO [model]   Fold 4/8  train= 4781  test= 319  (2024-01-13 → 2024-07-27)  acc=0.6019  auc=0.6358  iter=175
+2026-09-06 17:31:04,795 INFO [model]   Early stopping (chronological val, n=650): best_iter=394 val_logloss=0.6413
+2026-09-06 17:31:05,690 INFO [model]     MarketAnchor: b=0.159 c=-0.027 on 634 priced rows (trusting 16% of disagreement)
+2026-09-06 17:31:05,693 INFO [model]   Fold 5/8  train= 5100  test= 318  (2024-07-27 → 2025-02-08)  acc=0.6384  auc=0.6474  iter=394
+2026-09-06 17:31:11,393 INFO [model]   Early stopping (chronological val, n=690): best_iter=148 val_logloss=0.6545
+2026-09-06 17:31:11,882 INFO [model]     MarketAnchor: b=0.160 c=+0.036 on 693 priced rows (trusting 16% of disagreement)
+2026-09-06 17:31:11,886 INFO [model]   Fold 6/8  train= 5418  test= 319  (2025-02-08 → 2025-08-16)  acc=0.6270  auc=0.6706  iter=148
+2026-09-06 17:31:18,231 INFO [model]   Early stopping (chronological val, n=731): best_iter=118 val_logloss=0.6597
+2026-09-06 17:31:18,616 INFO [model]     MarketAnchor: b=0.213 c=+0.065 on 734 priced rows (trusting 21% of disagreement)
+2026-09-06 17:31:18,620 INFO [model]   Fold 7/8  train= 5737  test= 319  (2025-08-16 → 2026-03-14)  acc=0.6458  auc=0.7138  iter=118
+2026-09-06 17:31:25,513 INFO [model]   Early stopping (chronological val, n=772): best_iter=164 val_logloss=0.6581
+2026-09-06 17:31:26,043 INFO [model]     MarketAnchor: b=0.287 c=+0.054 on 772 priced rows (trusting 29% of disagreement)
+2026-09-06 17:31:26,046 INFO [model]   Fold 8/8  train= 6056  test= 319  (2026-03-14 → 2026-09-05)  acc=0.6176  auc=0.6552  iter=164
+2026-09-06 17:31:26,092 INFO [model]   POOLED  n=2550  acc=0.6137 [0.5953, 0.6330]  auc=0.6537  brier=0.2307 (calibrated 0.2323)
+2026-09-06 17:31:26,092 INFO [model] 
+------------------------------------------------------------
+2026-09-06 17:31:26,092 INFO [model] ARM: no_odds_no_glicko  (228 candidate features)
+2026-09-06 17:31:26,092 INFO [model] ------------------------------------------------------------
+2026-09-06 17:31:30,467 INFO [model]   Early stopping (chronological val, n=487): best_iter=53 val_logloss=0.6716
+2026-09-06 17:31:30,656 INFO [model]   Fold 1/8  train= 3825  test= 318  (2022-06-09 → 2022-11-19)  acc=0.6258  auc=0.6659  iter=53
+2026-09-06 17:31:35,278 INFO [model]   Early stopping (chronological val, n=528): best_iter=72 val_logloss=0.6766
+2026-09-06 17:31:35,469 INFO [model]   Fold 2/8  train= 4143  test= 319  (2022-11-19 → 2023-07-01)  acc=0.5674  auc=0.6343  iter=72
+2026-09-06 17:31:40,673 INFO [model]   Early stopping (chronological val, n=568): best_iter=164 val_logloss=0.6719
+2026-09-06 17:31:41,104 INFO [model]   Fold 3/8  train= 4462  test= 319  (2023-07-01 → 2023-12-16)  acc=0.5549  auc=0.5951  iter=164
+2026-09-06 17:31:46,821 INFO [model]   Early stopping (chronological val, n=609): best_iter=139 val_logloss=0.6604
+2026-09-06 17:31:47,318 INFO [model]   Fold 4/8  train= 4781  test= 319  (2024-01-13 → 2024-07-27)  acc=0.5831  auc=0.6347  iter=139
+2026-09-06 17:31:53,197 INFO [model]   Early stopping (chronological val, n=650): best_iter=171 val_logloss=0.6559
+2026-09-06 17:31:53,785 INFO [model]   Fold 5/8  train= 5100  test= 318  (2024-07-27 → 2025-02-08)  acc=0.6572  auc=0.6648  iter=171
+2026-09-06 17:31:59,365 INFO [model]   Early stopping (chronological val, n=690): best_iter=106 val_logloss=0.6562
+2026-09-06 17:31:59,723 INFO [model]   Fold 6/8  train= 5418  test= 319  (2025-02-08 → 2025-08-16)  acc=0.6238  auc=0.6625  iter=106
+2026-09-06 17:32:05,497 INFO [model]   Early stopping (chronological val, n=731): best_iter=135 val_logloss=0.6586
+2026-09-06 17:32:05,864 INFO [model]   Fold 7/8  train= 5737  test= 319  (2025-08-16 → 2026-03-14)  acc=0.6332  auc=0.7028  iter=135
+2026-09-06 17:32:11,190 INFO [model]   Early stopping (chronological val, n=772): best_iter=151 val_logloss=0.6602
+2026-09-06 17:32:11,863 INFO [model]   Fold 8/8  train= 6056  test= 319  (2026-03-14 → 2026-09-05)  acc=0.6207  auc=0.6578  iter=151
+2026-09-06 17:32:11,915 INFO [model]   POOLED  n=2550  acc=0.6082 [0.5898, 0.6278]  auc=0.6515  brier=0.2317 (calibrated 0.2319)
+2026-09-06 17:32:11,915 INFO [model] 
+------------------------------------------------------------
+2026-09-06 17:32:11,915 INFO [model] ARM: simulator (competing risks over Glicko)
+2026-09-06 17:32:11,915 INFO [model] ------------------------------------------------------------
+2026-09-06 17:32:14,734 INFO [model]   Fold 1/8  train= 3825  test= 318  sims=5000  b_dec=+0.227
+2026-09-06 17:32:17,784 INFO [model]   Fold 2/8  train= 4143  test= 319  sims=5000  b_dec=+0.223
+2026-09-06 17:32:20,691 INFO [model]   Fold 3/8  train= 4462  test= 319  sims=5000  b_dec=+0.213
+2026-09-06 17:32:23,824 INFO [model]   Fold 4/8  train= 4781  test= 319  sims=5000  b_dec=+0.210
+2026-09-06 17:32:27,094 INFO [model]   Fold 5/8  train= 5100  test= 318  sims=5000  b_dec=+0.189
+2026-09-06 17:32:30,256 INFO [model]   Fold 6/8  train= 5418  test= 319  sims=5000  b_dec=+0.198
+2026-09-06 17:32:33,130 INFO [model]   Fold 7/8  train= 5737  test= 319  sims=5000  b_dec=+0.201
+2026-09-06 17:32:36,053 INFO [model]   Fold 8/8  train= 6056  test= 319  sims=5000  b_dec=+0.188
+2026-09-06 17:32:36,096 INFO [model] 
+  METHOD (scored on realised outcomes — no market exists for this)
+2026-09-06 17:32:36,096 INFO [model]     log loss   1.0152  vs base rate 1.0252
+2026-09-06 17:32:36,096 INFO [model]     accuracy   0.4898
+2026-09-06 17:32:36,096 INFO [model]     class     Brier     base
+2026-09-06 17:32:36,097 INFO [model]     KO       0.2216   0.2245
+2026-09-06 17:32:36,097 INFO [model]     SUB      0.1431   0.1453
+2026-09-06 17:32:36,097 INFO [model]     DEC      0.2504   0.2503
+2026-09-06 17:32:36,097 INFO [model]     predicted mix [0.335 0.178 0.488]  actual [0.339 0.176 0.485]
+2026-09-06 17:32:36,097 INFO [model] 
+------------------------------------------------------------
+2026-09-06 17:32:36,097 INFO [model] ARM: decorrelated (market-decorrelation penalty)
+2026-09-06 17:32:36,097 INFO [model] ------------------------------------------------------------
+2026-09-06 17:32:43,193 INFO [model]   Fold 1/8  train= 3825  test= 318  gamma=0.5  inner_roi=+1.55%
+2026-09-06 17:32:48,348 INFO [model]   Fold 2/8  train= 4143  test= 319  gamma=0.0  inner_roi=+0.27%
+2026-09-06 17:32:53,883 INFO [model]   Fold 3/8  train= 4462  test= 319  gamma=0.1  inner_roi=+1.30%
+2026-09-06 17:32:59,807 INFO [model]   Fold 4/8  train= 4781  test= 319  gamma=0.0  inner_roi=+6.54%
+2026-09-06 17:33:06,710 INFO [model]   Fold 5/8  train= 5100  test= 318  gamma=0.5  inner_roi=-4.07%
+2026-09-06 17:33:13,207 INFO [model]   Fold 6/8  train= 5418  test= 319  gamma=0.0  inner_roi=+1.01%
+2026-09-06 17:33:20,994 INFO [model]   Fold 7/8  train= 5737  test= 319  gamma=0.0  inner_roi=+6.05%
+2026-09-06 17:33:29,262 INFO [model]   Fold 8/8  train= 6056  test= 319  gamma=0.0  inner_roi=+7.63%
+2026-09-06 17:33:29,302 INFO [model]   gamma per fold: [0.5, 0.0, 0.1, 0.0, 0.5, 0.0, 0.0, 0.0]
+2026-09-06 17:33:29,330 INFO [model] 
+------------------------------------------------------------
+2026-09-06 17:33:29,331 INFO [model] MARKET-ANCHORED ARM  (base = no_odds)
+2026-09-06 17:33:29,331 INFO [model] ------------------------------------------------------------
+2026-09-06 17:33:29,331 INFO [model]   b = fraction of the model's disagreement with the line that is trusted
+2026-09-06 17:33:29,331 INFO [model]    Fold        b        c   n_fit
+2026-09-06 17:33:29,331 INFO [model]   --------------------------------
+2026-09-06 17:33:29,331 INFO [model]       1    0.314   +0.038     415
+2026-09-06 17:33:29,331 INFO [model]       2    0.488   +0.090     487
+2026-09-06 17:33:29,331 INFO [model]       3    0.417   +0.084     537
+2026-09-06 17:33:29,331 INFO [model]       4    0.364   +0.076     600
+2026-09-06 17:33:29,331 INFO [model]       5    0.159   -0.027     634
+2026-09-06 17:33:29,331 INFO [model]       6    0.160   +0.036     693
+2026-09-06 17:33:29,331 INFO [model]       7    0.213   +0.065     734
+2026-09-06 17:33:29,331 INFO [model]       8    0.287   +0.054     772
+2026-09-06 17:33:29,331 INFO [model]   mean b = 0.300
+2026-09-06 17:33:29,331 INFO [model] 
+------------------------------------------------------------
+2026-09-06 17:33:29,331 INFO [model] MARKET COMPARISON (fights with odds)
+2026-09-06 17:33:29,331 INFO [model] ------------------------------------------------------------
+2026-09-06 17:33:29,369 INFO [model]   Eval fights with odds: 2087 (2022-06-11 → 2026-09-05)
+2026-09-06 17:33:29,369 INFO [model]   Average vig: 0.000
+2026-09-06 17:33:29,369 INFO [model] 
+  Arm                       Acc             95% CI      AUC    Brier  corr(mkt)   partial
+2026-09-06 17:33:29,369 INFO [model]   ----------------------------------------------------------------------------------------
+2026-09-06 17:33:29,369 INFO [model]   market only            0.6770     [0.657, 0.698]        —   0.2055      1.000     1.000
+2026-09-06 17:33:29,499 INFO [model]   no_odds_no_glicko      0.6176     [0.596, 0.637]   0.6600   0.2299      0.545     0.500
+2026-09-06 17:33:29,657 INFO [model]   no_odds                0.6243     [0.603, 0.644]   0.6672   0.2279      0.544     0.496
+2026-09-06 17:33:29,795 INFO [model]   simulator              0.5956     [0.575, 0.617]   0.6220   0.2373      0.518     0.483
+2026-09-06 17:33:29,904 INFO [model]   with_odds              0.6694     [0.649, 0.690]   0.7229   0.2110      0.820     0.793
+2026-09-06 17:33:29,990 INFO [model]   market_anchored        0.6785     [0.658, 0.699]   0.7366   0.2074      0.939     0.927
+2026-09-06 17:33:30,133 INFO [model]   decorrelated           0.6459     [0.625, 0.666]   0.6905   0.2407      0.622     0.577
+2026-09-06 17:33:30,133 INFO [model] 
+  Arm                    Acc − market         95% CI of diff   Beats mkt?
+2026-09-06 17:33:30,133 INFO [model]   ------------------------------------------------------------------------
+2026-09-06 17:33:30,133 INFO [model]   no_odds_no_glicko           -0.0594     [-0.0829, -0.0374]           no
+2026-09-06 17:33:30,133 INFO [model]   no_odds                     -0.0527     [-0.0752, -0.0307]           no
+2026-09-06 17:33:30,133 INFO [model]   simulator                   -0.0815     [-0.1054, -0.0580]           no
+2026-09-06 17:33:30,133 INFO [model]   with_odds                   -0.0077     [-0.0230, +0.0067]           no
+2026-09-06 17:33:30,133 INFO [model]   market_anchored             +0.0014     [-0.0086, +0.0115]           no
+2026-09-06 17:33:30,133 INFO [model]   decorrelated                -0.0311     [-0.0508, -0.0110]           no
+2026-09-06 17:33:30,133 INFO [model] 
+  Betting ladder — no_odds_no_glicko (calibrated, frozen thresholds):
+2026-09-06 17:33:30,133 INFO [model]     Edge   Bets    Bet%    Win%     ROI%             ROI 95% CI
+2026-09-06 17:33:30,133 INFO [model]   --------------------------------------------------------------
+2026-09-06 17:33:30,134 INFO [model]       3%   1780   85.3%   39.3%    -6.91          [-13.1, -0.7]
+2026-09-06 17:33:30,134 INFO [model]       5%   1597   76.5%   38.5%    -7.23          [-13.4, -0.4]
+2026-09-06 17:33:30,134 INFO [model]       8%   1290   61.8%   38.4%    -4.38          [-11.9, +2.9]
+2026-09-06 17:33:30,134 INFO [model]      10%   1102   52.8%   36.6%    -6.32          [-14.3, +2.2]
+2026-09-06 17:33:30,134 INFO [model]      15%    691   33.1%   34.9%    -7.19          [-17.5, +3.6]
+2026-09-06 17:33:30,134 INFO [model] 
+  Betting ladder — no_odds (calibrated, frozen thresholds):
+2026-09-06 17:33:30,134 INFO [model]     Edge   Bets    Bet%    Win%     ROI%             ROI 95% CI
+2026-09-06 17:33:30,134 INFO [model]   --------------------------------------------------------------
+2026-09-06 17:33:30,134 INFO [model]       3%   1811   86.8%   41.2%    -4.31          [-10.3, +2.2]
+2026-09-06 17:33:30,134 INFO [model]       5%   1638   78.5%   40.7%    -3.56          [-10.0, +3.1]
+2026-09-06 17:33:30,134 INFO [model]       8%   1342   64.3%   39.1%    -5.31          [-12.5, +1.9]
+2026-09-06 17:33:30,134 INFO [model]      10%   1146   54.9%   38.5%    -4.84          [-12.5, +3.1]
+2026-09-06 17:33:30,134 INFO [model]      15%    752   36.0%   37.5%    -5.10          [-15.2, +5.1]
+2026-09-06 17:33:30,134 INFO [model] 
+  Betting ladder — simulator (calibrated, frozen thresholds):
+2026-09-06 17:33:30,134 INFO [model]     Edge   Bets    Bet%    Win%     ROI%             ROI 95% CI
+2026-09-06 17:33:30,134 INFO [model]   --------------------------------------------------------------
+2026-09-06 17:33:30,134 INFO [model]       3%   1812   86.8%   32.2%   -11.43          [-17.8, -5.0]
+2026-09-06 17:33:30,134 INFO [model]       5%   1623   77.8%   30.3%   -13.42          [-20.7, -6.5]
+2026-09-06 17:33:30,134 INFO [model]       8%   1362   65.3%   28.9%   -13.13          [-20.8, -5.3]
+2026-09-06 17:33:30,134 INFO [model]      10%   1210   58.0%   27.7%   -14.48          [-22.7, -5.8]
+2026-09-06 17:33:30,134 INFO [model]      15%    826   39.6%   24.8%   -16.22          [-27.2, -5.8]
+2026-09-06 17:33:30,134 INFO [model] 
+  Betting ladder — with_odds (calibrated, frozen thresholds):
+2026-09-06 17:33:30,134 INFO [model]     Edge   Bets    Bet%    Win%     ROI%             ROI 95% CI
+2026-09-06 17:33:30,134 INFO [model]   --------------------------------------------------------------
+2026-09-06 17:33:30,134 INFO [model]       3%   1506   72.2%   50.0%    -7.21          [-12.6, -1.7]
+2026-09-06 17:33:30,134 INFO [model]       5%   1234   59.1%   51.0%    -6.27          [-12.5, -0.0]
+2026-09-06 17:33:30,134 INFO [model]       8%    807   38.7%   51.7%    -6.81          [-14.0, +0.3]
+2026-09-06 17:33:30,134 INFO [model]      10%    558   26.7%   52.5%    -5.74          [-14.4, +2.9]
+2026-09-06 17:33:30,134 INFO [model]      15%    247   11.8%   52.2%    -1.87         [-15.5, +11.6]
+2026-09-06 17:33:30,134 INFO [model] 
+  Betting ladder — market_anchored (calibrated, frozen thresholds):
+2026-09-06 17:33:30,134 INFO [model]     Edge   Bets    Bet%    Win%     ROI%             ROI 95% CI
+2026-09-06 17:33:30,134 INFO [model]   --------------------------------------------------------------
+2026-09-06 17:33:30,134 INFO [model]       3%   1014   48.6%   42.9%    -2.21          [-10.1, +5.6]
+2026-09-06 17:33:30,134 INFO [model]       5%    596   28.6%   45.3%    -1.87          [-11.5, +8.0]
+2026-09-06 17:33:30,134 INFO [model]       8%    275   13.2%   49.5%     2.91         [-11.3, +17.6]
+2026-09-06 17:33:30,134 INFO [model]      10%    170    8.1%   48.8%    -3.77         [-19.7, +14.0]
+2026-09-06 17:33:30,135 INFO [model]      15%     44    2.1%   52.3%    -1.39         [-31.0, +30.7]
+2026-09-06 17:33:30,135 INFO [model] 
+  Betting ladder — decorrelated (calibrated, frozen thresholds):
+2026-09-06 17:33:30,135 INFO [model]     Edge   Bets    Bet%    Win%     ROI%             ROI 95% CI
+2026-09-06 17:33:30,135 INFO [model]   --------------------------------------------------------------
+2026-09-06 17:33:30,135 INFO [model]       3%   1858   89.0%   58.2%    -2.15           [-6.4, +2.0]
+2026-09-06 17:33:30,135 INFO [model]       5%   1723   82.6%   58.6%    -2.14           [-6.4, +2.2]
+2026-09-06 17:33:30,135 INFO [model]       8%   1512   72.4%   59.9%    -0.53           [-5.0, +4.3]
+2026-09-06 17:33:30,135 INFO [model]      10%   1357   65.0%   59.8%    -0.18           [-4.9, +4.8]
+2026-09-06 17:33:30,135 INFO [model]      15%    992   47.5%   59.0%     0.31           [-5.5, +6.2]
+2026-09-06 17:33:30,170 INFO [model] 
+  Saved 2550 per-fight eval predictions to /Users/rafeburns/Downloads/ALocks/alocks-backend/models/ufc/h2h/eval_predictions.csv
+2026-09-06 17:33:30,179 INFO [model] 
+  Saved evaluation results to /Users/rafeburns/Downloads/ALocks/alocks-backend/models/ufc/h2h/eval_results.json
+2026-09-06 17:33:30,179 INFO [model] 
+============================================================
+2026-09-06 17:33:30,179 INFO [model] Walk-forward evaluation complete.
+2026-09-06 17:33:30,179 INFO [model] ============================================================
+2026-09-06 17:35:08,417 INFO [model] ============================================================
+2026-09-06 17:35:08,418 INFO [model] TRAINING MLP FOR SERVING (gamma=0.0)
+2026-09-06 17:35:08,418 INFO [model] ============================================================
+2026-09-06 17:35:08,418 INFO [glicko_service]   Loading fight data...
+2026-09-06 17:35:11,030 INFO [glicko_service]   Loaded 11564 fights
+2026-09-06 17:35:11,030 INFO [glicko_service]   Loading per-round stats...
+2026-09-06 17:35:14,748 INFO [glicko_service]   Loaded rounds for 11232 fights
+2026-09-06 17:35:14,749 INFO [glicko_service]   Loading per-fight derived totals...
+2026-09-06 17:35:17,610 INFO [glicko_service]   Loaded 22464 derived totals rows
+2026-09-06 17:35:17,824 INFO [glicko_service]   Loaded 4616 fighters
+2026-09-06 17:35:18,121 INFO [glicko_service]   Computing weight class baseline rates...
+2026-09-06 17:35:18,221 INFO [glicko_service]     P4P: 1 rounds, KD=0.0000, SUB=0.0000, TD=0.0000, td15s_cap=10.0, ctrl15g_cap=10.0, gnp15g_cap=10.0
+2026-09-06 17:35:18,222 INFO [glicko_service]     Flyweight: 1650 rounds, KD=0.0224, SUB=0.0692, TD=0.0841, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=79.1
+2026-09-06 17:35:18,222 INFO [glicko_service]     Bantamweight: 2847 rounds, KD=0.0266, SUB=0.0654, TD=0.0808, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=84.0
+2026-09-06 17:35:18,223 INFO [glicko_service]     Featherweight: 3282 rounds, KD=0.0258, SUB=0.0677, TD=0.0810, td15s_cap=26.9, ctrl15g_cap=15.0, gnp15g_cap=85.1
+2026-09-06 17:35:18,225 INFO [glicko_service]     Lightweight: 4754 rounds, KD=0.0259, SUB=0.0862, TD=0.0880, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=77.1
+2026-09-06 17:35:18,226 INFO [glicko_service]     Welterweight: 4313 rounds, KD=0.0304, SUB=0.0738, TD=0.0837, td15s_cap=28.1, ctrl15g_cap=15.0, gnp15g_cap=77.6
+2026-09-06 17:35:18,227 INFO [glicko_service]     Middleweight: 3888 rounds, KD=0.0305, SUB=0.0772, TD=0.0760, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=94.7
+2026-09-06 17:35:18,228 INFO [glicko_service]     Light Heavyweight: 2382 rounds, KD=0.0341, SUB=0.0530, TD=0.0697, td15s_cap=26.3, ctrl15g_cap=15.0, gnp15g_cap=106.6
+2026-09-06 17:35:18,228 INFO [glicko_service]     Heavyweight: 2555 rounds, KD=0.0335, SUB=0.0598, TD=0.0610, td15s_cap=23.1, ctrl15g_cap=15.0, gnp15g_cap=103.8
+2026-09-06 17:35:18,228 INFO [glicko_service]     P4P: 1 rounds, KD=0.0000, SUB=0.0000, TD=0.0000, td15s_cap=10.0, ctrl15g_cap=10.0, gnp15g_cap=10.0
+2026-09-06 17:35:18,229 INFO [glicko_service]     Strawweight: 1337 rounds, KD=0.0092, SUB=0.0509, TD=0.0717, td15s_cap=23.4, ctrl15g_cap=15.0, gnp15g_cap=64.7
+2026-09-06 17:35:18,229 INFO [glicko_service]     Flyweight: 977 rounds, KD=0.0082, SUB=0.0499, TD=0.0667, td15s_cap=22.2, ctrl15g_cap=15.0, gnp15g_cap=77.1
+2026-09-06 17:35:18,229 INFO [glicko_service]     Bantamweight: 943 rounds, KD=0.0104, SUB=0.0520, TD=0.0659, td15s_cap=27.3, ctrl15g_cap=15.0, gnp15g_cap=78.8
+2026-09-06 17:35:19,452 INFO [glicko_service]   Processed 27341 rounds
+2026-09-06 17:35:19,473 INFO [model]   Recomputed 21312 Glicko snapshots (fixed newcomer seed)
+2026-09-06 17:35:19,473 INFO [model] Loading data from database...
+2026-09-06 17:35:20,063 INFO [model]   Loaded 4616 fighters
+2026-09-06 17:35:25,628 INFO [model]   Loaded 22225 fight-stat rows (11161 unique fights)
+2026-09-06 17:35:25,628 INFO [model]   Loading per-round stats...
+2026-09-06 17:35:29,813 INFO [model]   Loaded 59640 per-round stat rows
+2026-09-06 17:35:29,958 INFO [model] Building features...
+2026-09-06 17:35:30,242 INFO [model]   Computing defensive stats...
+2026-09-06 17:35:31,707 INFO [model]   Computing Elo ratings...
+2026-09-06 17:35:32,274 INFO [model]   Computing resume scores...
+2026-09-06 17:35:32,495 INFO [model]   Using 21312 caller-supplied Glicko snapshots
+2026-09-06 17:35:35,404 INFO [model]   Added 15 Glicko features  + 4 confidence features
+2026-09-06 17:35:35,405 INFO [model]   Computing Elo-adjusted stats...
+2026-09-06 17:35:35,406 INFO [model]   Computing rolling career averages...
+2026-09-06 17:36:02,892 INFO [model]   Computing streaks and career stats...
+2026-09-06 17:36:04,208 INFO [model]   Computing composite features...
+2026-09-06 17:36:04,212 INFO [model]   Computing round-by-round profiles...
+2026-09-06 17:36:13,474 INFO [model]   Computing age curve features...
+2026-09-06 17:36:13,477 INFO [model]   Computing damage accumulation...
+2026-09-06 17:36:15,045 INFO [model]   Computing weight-class movement...
+2026-09-06 17:36:15,270 INFO [model]   Computing pre-UFC records...
+2026-09-06 17:36:15,297 INFO [model]   Computing age-relative performance residuals...
+2026-09-06 17:36:15,403 INFO [model]   Computing fighter style clusters (k=6)...
+2026-09-06 17:36:15,851 INFO [model]     Fit on 22225 rows, assigned 22225 fighter-fights
+2026-09-06 17:36:15,852 INFO [model]     Style 0 (3941 fighter-fights): SigStr/5=17.0 TD/5=1.5 Sub/5=0.5 Ctrl/5=117.6 GndStr/5=7.5 top=ctrl_per5
+2026-09-06 17:36:15,853 INFO [model]     Style 1 (10822 fighter-fights): SigStr/5=16.4 TD/5=0.5 Sub/5=0.3 Ctrl/5=44.4 GndStr/5=3.0 top=ctrl_per5
+2026-09-06 17:36:15,853 INFO [model]     Style 2 (3482 fighter-fights): SigStr/5=32.7 TD/5=0.3 Sub/5=0.2 Ctrl/5=36.0 GndStr/5=5.5 top=ctrl_per5
+2026-09-06 17:36:15,853 INFO [model]     Style 3 (3341 fighter-fights): SigStr/5=16.7 TD/5=0.5 Sub/5=0.5 Ctrl/5=49.5 GndStr/5=2.7 top=ctrl_per5
+2026-09-06 17:36:15,853 INFO [model]     Style 4 (338 fighter-fights): SigStr/5=12.4 TD/5=2.2 Sub/5=4.6 Ctrl/5=61.5 GndStr/5=3.9 top=ctrl_per5
+2026-09-06 17:36:15,853 INFO [model]     Style 5 (301 fighter-fights): SigStr/5=73.6 TD/5=1.0 Sub/5=0.3 Ctrl/5=59.0 GndStr/5=37.8 top=sig_str_landed_per5
+2026-09-06 17:36:15,919 INFO [model]   Style matchup features computed expanding-in-time (6x6, 22128 fighter-fights)
+2026-09-06 17:36:16,208 INFO [model]   Feature matrix shape: (22225, 334)
+2026-09-06 17:36:16,231 INFO [model] Building matchup feature matrix...
+2026-09-06 17:36:16,359 INFO [model]   Loading odds from database...
+2026-09-06 17:36:18,186 INFO [model]   Odds matched: 2837/11064 fights (25.6%)
+2026-09-06 17:36:18,207 INFO [model]   Filtered to modern era (2015+): 6375 fights (dropped 4689 pre-2015)
+2026-09-06 17:36:18,207 INFO [model]   Red win rate (modern): 0.556
+2026-09-06 17:36:18,219 INFO [model]   Matchup matrix: 6375 fights, 292 candidate features
+2026-09-06 17:36:18,219 INFO [model]   Red win rate: 0.556
+2026-09-06 17:36:18,219 INFO [model]   Date range: 2015-01-03 to 2026-09-05
+2026-09-06 17:36:18,241 INFO [model] Building features...
+2026-09-06 17:36:18,517 INFO [model]   Computing defensive stats...
+2026-09-06 17:36:20,074 INFO [model]   Computing Elo ratings...
+2026-09-06 17:36:20,625 INFO [model]   Computing resume scores...
+2026-09-06 17:36:20,796 INFO [model]   Using 21312 caller-supplied Glicko snapshots
+2026-09-06 17:36:23,719 INFO [model]   Added 15 Glicko features  + 4 confidence features
+2026-09-06 17:36:23,720 INFO [model]   Computing Elo-adjusted stats...
+2026-09-06 17:36:23,721 INFO [model]   Computing rolling career averages...
+2026-09-06 17:36:50,201 INFO [model]   Computing streaks and career stats...
+2026-09-06 17:36:51,856 INFO [model]   Computing composite features...
+2026-09-06 17:36:51,861 INFO [model]   Computing round-by-round profiles...
+2026-09-06 17:37:02,256 INFO [model]   Computing age curve features...
+2026-09-06 17:37:02,259 INFO [model]   Computing damage accumulation...
+2026-09-06 17:37:03,749 INFO [model]   Computing weight-class movement...
+2026-09-06 17:37:04,065 INFO [model]   Computing pre-UFC records...
+2026-09-06 17:37:04,093 INFO [model]   Computing age-relative performance residuals...
+2026-09-06 17:37:04,201 INFO [model]   Computing fighter style clusters (k=6)...
+2026-09-06 17:37:04,561 INFO [model]     Fit on 17109 rows, assigned 22225 fighter-fights
+2026-09-06 17:37:04,562 INFO [model]     Style 0 (10546 fighter-fights): SigStr/5=15.4 TD/5=0.5 Sub/5=0.3 Ctrl/5=42.8 GndStr/5=3.0 top=ctrl_per5
+2026-09-06 17:37:04,562 INFO [model]     Style 1 (3431 fighter-fights): SigStr/5=15.5 TD/5=0.6 Sub/5=0.5 Ctrl/5=50.9 GndStr/5=3.1 top=ctrl_per5
+2026-09-06 17:37:04,562 INFO [model]     Style 2 (304 fighter-fights): SigStr/5=11.6 TD/5=2.2 Sub/5=4.8 Ctrl/5=54.2 GndStr/5=3.8 top=ctrl_per5
+2026-09-06 17:37:04,563 INFO [model]     Style 3 (3880 fighter-fights): SigStr/5=31.9 TD/5=0.3 Sub/5=0.2 Ctrl/5=34.3 GndStr/5=6.2 top=ctrl_per5
+2026-09-06 17:37:04,563 INFO [model]     Style 4 (260 fighter-fights): SigStr/5=75.9 TD/5=1.1 Sub/5=0.3 Ctrl/5=54.7 GndStr/5=40.9 top=sig_str_landed_per5
+2026-09-06 17:37:04,563 INFO [model]     Style 5 (3804 fighter-fights): SigStr/5=16.5 TD/5=1.5 Sub/5=0.6 Ctrl/5=113.2 GndStr/5=7.9 top=ctrl_per5
+2026-09-06 17:37:04,648 INFO [model]   Style matchup features computed expanding-in-time (6x6, 22128 fighter-fights)
+2026-09-06 17:37:05,032 INFO [model]   Feature matrix shape: (22225, 334)
+2026-09-06 17:37:05,056 INFO [model] Building matchup feature matrix...
+2026-09-06 17:37:05,189 INFO [model]   Loading odds from database...
+2026-09-06 17:37:06,849 INFO [model]   Odds matched: 2837/11064 fights (25.6%)
+2026-09-06 17:37:06,870 INFO [model]   Filtered to modern era (2015+): 6375 fights (dropped 4689 pre-2015)
+2026-09-06 17:37:06,870 INFO [model]   Red win rate (modern): 0.556
+2026-09-06 17:37:06,883 INFO [model]   Matchup matrix: 6375 fights, 292 candidate features
+2026-09-06 17:37:06,883 INFO [model]   Red win rate: 0.556
+2026-09-06 17:37:06,884 INFO [model]   Date range: 2015-01-03 to 2026-09-05
+2026-09-06 17:37:06,965 INFO [model]   Feature selection: MI on 5418 training rows only
+2026-09-06 17:37:10,133 INFO [model]   Top 30 features by mutual information:
+2026-09-06 17:37:10,134 INFO [model]     diff_age                                           0.0276
+2026-09-06 17:37:10,134 INFO [model]     diff_age_x_log_layoff                              0.0228
+2026-09-06 17:37:10,134 INFO [model]     diff_avg_finished_opp                              0.0220
+2026-09-06 17:37:10,134 INFO [model]     diff_last3_defense_composite                       0.0214
+2026-09-06 17:37:10,134 INFO [model]     diff_recent_ctrl_per5                              0.0212
+2026-09-06 17:37:10,134 INFO [model]     blue_glicko_meta_rounds_seen                       0.0189
+2026-09-06 17:37:10,134 INFO [model]     diff_age_sq                                        0.0185
+2026-09-06 17:37:10,134 INFO [model]     diff_career_knockdowns_absorbed                    0.0175
+2026-09-06 17:37:10,134 INFO [model]     diff_years_past_peak                               0.0167
+2026-09-06 17:37:10,134 INFO [model]     fight_div_featherweight                            0.0163
+2026-09-06 17:37:10,134 INFO [model]     diff_recent_distance_landed_per5                   0.0153
+2026-09-06 17:37:10,134 INFO [model]     diff_avg_opp_ctrl_per5                             0.0149
+2026-09-06 17:37:10,134 INFO [model]     red_career_win_pct                                 0.0145
+2026-09-06 17:37:10,134 INFO [model]     diff_recent_r1_sig_str                             0.0138
+2026-09-06 17:37:10,134 INFO [model]     diff_avg_sig_str_def                               0.0134
+2026-09-06 17:37:10,134 INFO [model]     diff_glicko_gnd                                    0.0133
+2026-09-06 17:37:10,134 INFO [model]     blue_glicko_meta_fights_seen                       0.0131
+2026-09-06 17:37:10,134 INFO [model]     diff_recent_finishing_composite                    0.0131
+2026-09-06 17:37:10,134 INFO [model]     diff_divisions_fought_count                        0.0128
+2026-09-06 17:37:10,134 INFO [model]     diff_years_to_peak                                 0.0128
+2026-09-06 17:37:10,134 INFO [model]     diff_recent_elo_adj_td_landed_per5                 0.0127
+2026-09-06 17:37:10,134 INFO [model]     diff_last3_opp_sig_str_landed_per5                 0.0120
+2026-09-06 17:37:10,134 INFO [model]     fight_is_five_round                                0.0117
+2026-09-06 17:37:10,134 INFO [model]     diff_glicko_ctrl                                   0.0116
+2026-09-06 17:37:10,134 INFO [model]     red_glicko_str_vol                                 0.0115
+2026-09-06 17:37:10,134 INFO [model]     diff_glicko_tdd                                    0.0115
+2026-09-06 17:37:10,134 INFO [model]     fight_div_bantamweight                             0.0113
+2026-09-06 17:37:10,134 INFO [model]     diff_recent_opp_ctrl_per5                          0.0105
+2026-09-06 17:37:10,134 INFO [model]     red_glicko_durability                              0.0102
+2026-09-06 17:37:10,134 INFO [model]     diff_recent_elo_adj_sub_att_per5                   0.0102
+2026-09-06 17:37:10,134 INFO [model]   Selected 46 features (39 MI + 7 odds, from 292)
+2026-09-06 17:37:10,136 INFO [model]   Train 5418 (2015-01-03 to 2025-02-08)
+2026-09-06 17:37:10,136 INFO [model]   Early-stopping holdout 957 (NOT a performance estimate)
+2026-09-06 17:37:10,136 INFO [model]   Features: 46
+2026-09-06 17:37:12,452 INFO [model]   Holdout acc=0.6656 brier=0.2082 (early-stopping set; optimistic)
+2026-09-06 17:37:12,454 INFO [model]   Saved to /Users/rafeburns/Downloads/ALocks/alocks-backend/models/ufc/h2h/mlp_v1.pkl
+2026-09-06 18:46:08,660 INFO [model] ============================================================
+2026-09-06 18:46:08,661 INFO [model] UFC Fight Winner Prediction Pipeline v6  (2026-09-06 18:46)
+2026-09-06 18:46:08,661 INFO [model] ============================================================
+2026-09-06 18:46:08,661 INFO [model] Loading data from database...
+2026-09-06 18:46:10,848 INFO [model]   Loaded 4616 fighters
+2026-09-06 18:46:14,530 INFO [model]   Loaded 22225 fight-stat rows (11161 unique fights)
+2026-09-06 18:46:14,531 INFO [model]   Loading per-round stats...
+2026-09-06 18:46:18,672 INFO [model]   Loaded 59640 per-round stat rows
+2026-09-06 18:46:18,788 INFO [model] 
+  Recomputing Glicko snapshots in memory (fixed newcomer seed)...
+2026-09-06 18:46:18,788 INFO [glicko_service]   Loading fight data...
+2026-09-06 18:46:20,089 INFO [glicko_service]   Loaded 11564 fights
+2026-09-06 18:46:20,089 INFO [glicko_service]   Loading per-round stats...
+2026-09-06 18:46:24,002 INFO [glicko_service]   Loaded rounds for 11232 fights
+2026-09-06 18:46:24,002 INFO [glicko_service]   Loading per-fight derived totals...
+2026-09-06 18:46:26,933 INFO [glicko_service]   Loaded 22464 derived totals rows
+2026-09-06 18:46:27,325 INFO [glicko_service]   Loaded 4616 fighters
+2026-09-06 18:46:27,538 INFO [glicko_service]   Computing weight class baseline rates...
+2026-09-06 18:46:27,620 INFO [glicko_service]     P4P: 1 rounds, KD=0.0000, SUB=0.0000, TD=0.0000, td15s_cap=10.0, ctrl15g_cap=10.0, gnp15g_cap=10.0
+2026-09-06 18:46:27,620 INFO [glicko_service]     Flyweight: 1650 rounds, KD=0.0224, SUB=0.0692, TD=0.0841, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=79.1
+2026-09-06 18:46:27,621 INFO [glicko_service]     Bantamweight: 2847 rounds, KD=0.0266, SUB=0.0654, TD=0.0808, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=84.0
+2026-09-06 18:46:27,623 INFO [glicko_service]     Featherweight: 3282 rounds, KD=0.0258, SUB=0.0677, TD=0.0810, td15s_cap=26.9, ctrl15g_cap=15.0, gnp15g_cap=85.1
+2026-09-06 18:46:27,624 INFO [glicko_service]     Lightweight: 4754 rounds, KD=0.0259, SUB=0.0862, TD=0.0880, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=77.1
+2026-09-06 18:46:27,625 INFO [glicko_service]     Welterweight: 4313 rounds, KD=0.0304, SUB=0.0738, TD=0.0837, td15s_cap=28.1, ctrl15g_cap=15.0, gnp15g_cap=77.6
+2026-09-06 18:46:27,626 INFO [glicko_service]     Middleweight: 3888 rounds, KD=0.0305, SUB=0.0772, TD=0.0760, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=94.7
+2026-09-06 18:46:27,627 INFO [glicko_service]     Light Heavyweight: 2382 rounds, KD=0.0341, SUB=0.0530, TD=0.0697, td15s_cap=26.3, ctrl15g_cap=15.0, gnp15g_cap=106.6
+2026-09-06 18:46:27,628 INFO [glicko_service]     Heavyweight: 2555 rounds, KD=0.0335, SUB=0.0598, TD=0.0610, td15s_cap=23.1, ctrl15g_cap=15.0, gnp15g_cap=103.8
+2026-09-06 18:46:27,628 INFO [glicko_service]     P4P: 1 rounds, KD=0.0000, SUB=0.0000, TD=0.0000, td15s_cap=10.0, ctrl15g_cap=10.0, gnp15g_cap=10.0
+2026-09-06 18:46:27,628 INFO [glicko_service]     Strawweight: 1337 rounds, KD=0.0092, SUB=0.0509, TD=0.0717, td15s_cap=23.4, ctrl15g_cap=15.0, gnp15g_cap=64.7
+2026-09-06 18:46:27,628 INFO [glicko_service]     Flyweight: 977 rounds, KD=0.0082, SUB=0.0499, TD=0.0667, td15s_cap=22.2, ctrl15g_cap=15.0, gnp15g_cap=77.1
+2026-09-06 18:46:27,629 INFO [glicko_service]     Bantamweight: 943 rounds, KD=0.0104, SUB=0.0520, TD=0.0659, td15s_cap=27.3, ctrl15g_cap=15.0, gnp15g_cap=78.8
+2026-09-06 18:46:28,883 INFO [glicko_service]   Processed 27341 rounds
+2026-09-06 18:46:28,910 INFO [model]   Computed 21312 snapshots
+2026-09-06 18:46:28,924 INFO [model] Building features...
+2026-09-06 18:46:29,201 INFO [model]   Computing defensive stats...
+2026-09-06 18:46:30,595 INFO [model]   Computing Elo ratings...
+2026-09-06 18:46:31,127 INFO [model]   Computing resume scores...
+2026-09-06 18:46:31,342 INFO [model]   Using 21312 caller-supplied Glicko snapshots
+2026-09-06 18:46:34,429 INFO [model]   Added 15 Glicko features  + 4 confidence features
+2026-09-06 18:46:34,431 INFO [model]   Computing Elo-adjusted stats...
+2026-09-06 18:46:34,433 INFO [model]   Computing rolling career averages...
+2026-09-06 18:47:07,437 INFO [model]   Computing streaks and career stats...
+2026-09-06 18:47:09,257 INFO [model]   Computing composite features...
+2026-09-06 18:47:09,262 INFO [model]   Computing round-by-round profiles...
+2026-09-06 18:47:22,744 INFO [model]   Computing age curve features...
+2026-09-06 18:47:22,749 INFO [model]   Computing damage accumulation...
+2026-09-06 18:47:24,788 INFO [model]   Computing weight-class movement...
+2026-09-06 18:47:25,163 INFO [model]   Computing pre-UFC records...
+2026-09-06 18:47:25,202 INFO [model]   Computing age-relative performance residuals...
+2026-09-06 18:47:25,337 INFO [model]   Computing fighter style clusters (k=6)...
+2026-09-06 18:47:25,965 INFO [model]     Fit on 22225 rows, assigned 22225 fighter-fights
+2026-09-06 18:47:25,968 INFO [model]     Style 0 (10819 fighter-fights): SigStr/5=16.4 TD/5=0.5 Sub/5=0.3 Ctrl/5=44.4 GndStr/5=3.0 top=ctrl_per5
+2026-09-06 18:47:25,968 INFO [model]     Style 1 (295 fighter-fights): SigStr/5=73.7 TD/5=0.8 Sub/5=0.3 Ctrl/5=58.7 GndStr/5=37.3 top=sig_str_landed_per5
+2026-09-06 18:47:25,969 INFO [model]     Style 2 (3914 fighter-fights): SigStr/5=17.1 TD/5=1.5 Sub/5=0.5 Ctrl/5=117.6 GndStr/5=7.6 top=ctrl_per5
+2026-09-06 18:47:25,969 INFO [model]     Style 3 (373 fighter-fights): SigStr/5=12.3 TD/5=2.2 Sub/5=4.4 Ctrl/5=61.4 GndStr/5=4.0 top=ctrl_per5
+2026-09-06 18:47:25,969 INFO [model]     Style 4 (3454 fighter-fights): SigStr/5=32.8 TD/5=0.3 Sub/5=0.2 Ctrl/5=35.9 GndStr/5=5.5 top=ctrl_per5
+2026-09-06 18:47:25,969 INFO [model]     Style 5 (3370 fighter-fights): SigStr/5=16.7 TD/5=0.5 Sub/5=0.5 Ctrl/5=49.7 GndStr/5=2.7 top=ctrl_per5
+2026-09-06 18:47:26,111 INFO [model]   Style matchup features computed expanding-in-time (6x6, 22128 fighter-fights)
+2026-09-06 18:47:26,618 INFO [model]   Feature matrix shape: (22225, 334)
+2026-09-06 18:47:26,644 INFO [model] Building matchup feature matrix...
+2026-09-06 18:47:26,857 INFO [model]   Loading odds from database...
+2026-09-06 18:47:29,033 INFO [model]   Odds matched: 2837/11064 fights (25.6%)
+2026-09-06 18:47:29,062 INFO [model]   Filtered to modern era (2015+): 6375 fights (dropped 4689 pre-2015)
+2026-09-06 18:47:29,062 INFO [model]   Red win rate (modern): 0.556
+2026-09-06 18:47:29,077 INFO [model]   Matchup matrix: 6375 fights, 292 candidate features
+2026-09-06 18:47:29,077 INFO [model]   Red win rate: 0.556
+2026-09-06 18:47:29,078 INFO [model]   Date range: 2015-01-03 to 2026-09-05
+2026-09-06 18:47:29,106 INFO [model] 
+  Style-cluster cutoff set to eval start: 2022-06-09
+2026-09-06 18:47:29,106 INFO [model] Building features...
+2026-09-06 18:47:29,480 INFO [model]   Computing defensive stats...
+2026-09-06 18:47:31,707 INFO [model]   Computing Elo ratings...
+2026-09-06 18:47:32,542 INFO [model]   Computing resume scores...
+2026-09-06 18:47:32,795 INFO [model]   Using 21312 caller-supplied Glicko snapshots
+2026-09-06 18:47:36,690 INFO [model]   Added 15 Glicko features  + 4 confidence features
+2026-09-06 18:47:36,692 INFO [model]   Computing Elo-adjusted stats...
+2026-09-06 18:47:36,694 INFO [model]   Computing rolling career averages...
+2026-09-06 18:48:18,536 INFO [model]   Computing streaks and career stats...
+2026-09-06 18:48:20,499 INFO [model]   Computing composite features...
+2026-09-06 18:48:20,506 INFO [model]   Computing round-by-round profiles...
+2026-09-06 18:48:35,027 INFO [model]   Computing age curve features...
+2026-09-06 18:48:35,033 INFO [model]   Computing damage accumulation...
+2026-09-06 18:48:37,637 INFO [model]   Computing weight-class movement...
+2026-09-06 18:48:38,161 INFO [model]   Computing pre-UFC records...
+2026-09-06 18:48:38,218 INFO [model]   Computing age-relative performance residuals...
+2026-09-06 18:48:38,409 INFO [model]   Computing fighter style clusters (k=6)...
+2026-09-06 18:48:38,891 INFO [model]     Fit on 17109 rows, assigned 22225 fighter-fights
+2026-09-06 18:48:38,892 INFO [model]     Style 0 (321 fighter-fights): SigStr/5=11.7 TD/5=2.3 Sub/5=4.6 Ctrl/5=54.2 GndStr/5=4.1 top=ctrl_per5
+2026-09-06 18:48:38,892 INFO [model]     Style 1 (3898 fighter-fights): SigStr/5=31.8 TD/5=0.3 Sub/5=0.2 Ctrl/5=34.3 GndStr/5=6.1 top=ctrl_per5
+2026-09-06 18:48:38,892 INFO [model]     Style 2 (3752 fighter-fights): SigStr/5=16.6 TD/5=1.5 Sub/5=0.6 Ctrl/5=113.9 GndStr/5=8.0 top=ctrl_per5
+2026-09-06 18:48:38,892 INFO [model]     Style 3 (10552 fighter-fights): SigStr/5=15.4 TD/5=0.5 Sub/5=0.3 Ctrl/5=43.1 GndStr/5=3.1 top=ctrl_per5
+2026-09-06 18:48:38,893 INFO [model]     Style 4 (260 fighter-fights): SigStr/5=75.6 TD/5=0.9 Sub/5=0.3 Ctrl/5=55.7 GndStr/5=39.7 top=sig_str_landed_per5
+2026-09-06 18:48:38,893 INFO [model]     Style 5 (3442 fighter-fights): SigStr/5=15.5 TD/5=0.6 Sub/5=0.5 Ctrl/5=50.3 GndStr/5=3.0 top=ctrl_per5
+2026-09-06 18:48:39,047 INFO [model]   Style matchup features computed expanding-in-time (6x6, 22128 fighter-fights)
+2026-09-06 18:48:39,627 INFO [model]   Feature matrix shape: (22225, 334)
+2026-09-06 18:48:39,660 INFO [model] Building matchup feature matrix...
+2026-09-06 18:48:39,923 INFO [model]   Loading odds from database...
+2026-09-06 18:48:42,674 INFO [model]   Odds matched: 2837/11064 fights (25.6%)
+2026-09-06 18:48:42,716 INFO [model]   Filtered to modern era (2015+): 6375 fights (dropped 4689 pre-2015)
+2026-09-06 18:48:42,717 INFO [model]   Red win rate (modern): 0.556
+2026-09-06 18:48:42,739 INFO [model]   Matchup matrix: 6375 fights, 292 candidate features
+2026-09-06 18:48:42,740 INFO [model]   Red win rate: 0.556
+2026-09-06 18:48:42,741 INFO [model]   Date range: 2015-01-03 to 2026-09-05
+2026-09-06 18:48:42,749 INFO [model] ============================================================
+2026-09-06 18:48:42,749 INFO [model] WALK-FORWARD EVALUATION
+2026-09-06 18:48:42,749 INFO [model] ============================================================
+2026-09-06 18:48:42,770 INFO [model]   6375 fights | 8 folds over the last 40% (2550 eval fights)
+2026-09-06 18:48:42,770 INFO [model]   Hyperparameters are FIXED (not tuned per fold): {'max_depth': 3, 'learning_rate': 0.037, 'max_features': 0.65, 'min_samples_leaf': 32, 'l2_regularization': 4.4, 'max_bins': 128}
+2026-09-06 18:48:42,770 INFO [model]   Those values came from an Optuna search that scored on a chronological
+2026-09-06 18:48:42,770 INFO [model]   20% slice overlapping this eval window, so a residual selection optimism
+2026-09-06 18:48:42,770 INFO [model]   remains. It is bounded and disclosed rather than hidden.
+2026-09-06 18:48:42,771 INFO [model] 
+------------------------------------------------------------
+2026-09-06 18:48:42,771 INFO [model] ARM: with_odds  (292 candidate features)
+2026-09-06 18:48:42,771 INFO [model] ------------------------------------------------------------
+2026-09-06 18:48:54,813 INFO [model]   Early stopping (chronological val, n=487): best_iter=241 val_logloss=0.6624
+2026-09-06 18:48:58,280 INFO [model]   Fold 1/8  train= 3825  test= 318  (2022-06-09 → 2022-11-19)  acc=0.6226  auc=0.6834  iter=241
+2026-09-06 18:49:18,535 INFO [model]   Early stopping (chronological val, n=528): best_iter=175 val_logloss=0.6631
+2026-09-06 18:49:20,509 INFO [model]   Fold 2/8  train= 4143  test= 319  (2022-11-19 → 2023-07-01)  acc=0.6113  auc=0.6939  iter=175
+2026-09-06 18:49:31,452 INFO [model]   Early stopping (chronological val, n=568): best_iter=255 val_logloss=0.6597
+2026-09-06 18:49:33,210 INFO [model]   Fold 3/8  train= 4462  test= 319  (2023-07-01 → 2023-12-16)  acc=0.6113  auc=0.6567  iter=255
+2026-09-06 18:49:43,387 INFO [model]   Early stopping (chronological val, n=609): best_iter=155 val_logloss=0.6467
+2026-09-06 18:49:44,413 INFO [model]   Fold 4/8  train= 4781  test= 319  (2024-01-13 → 2024-07-27)  acc=0.6395  auc=0.7056  iter=155
+2026-09-06 18:49:55,951 INFO [model]   Early stopping (chronological val, n=650): best_iter=420 val_logloss=0.6084
+2026-09-06 18:49:58,305 INFO [model]   Fold 5/8  train= 5100  test= 318  (2024-07-27 → 2025-02-08)  acc=0.6950  auc=0.7247  iter=420
+2026-09-06 18:50:10,157 INFO [model]   Early stopping (chronological val, n=690): best_iter=180 val_logloss=0.6263
+2026-09-06 18:50:10,988 INFO [model]   Fold 6/8  train= 5418  test= 319  (2025-02-08 → 2025-08-16)  acc=0.6708  auc=0.7410  iter=180
+2026-09-06 18:50:21,741 INFO [model]   Early stopping (chronological val, n=731): best_iter=150 val_logloss=0.6293
+2026-09-06 18:50:22,764 INFO [model]   Fold 7/8  train= 5737  test= 319  (2025-08-16 → 2026-03-14)  acc=0.6677  auc=0.7458  iter=150
+2026-09-06 18:50:32,342 INFO [model]   Early stopping (chronological val, n=772): best_iter=179 val_logloss=0.6327
+2026-09-06 18:50:33,171 INFO [model]   Fold 8/8  train= 6056  test= 319  (2026-03-14 → 2026-09-05)  acc=0.6740  auc=0.7132  iter=179
+2026-09-06 18:50:33,257 INFO [model]   POOLED  n=2550  acc=0.6490 [0.6321, 0.6671]  auc=0.7088  brier=0.2155 (calibrated 0.2174)
+2026-09-06 18:50:33,257 INFO [model] 
+------------------------------------------------------------
+2026-09-06 18:50:33,257 INFO [model] ARM: no_odds  (285 candidate features)
+2026-09-06 18:50:33,257 INFO [model] ------------------------------------------------------------
+2026-09-06 18:50:41,251 INFO [model]   Early stopping (chronological val, n=487): best_iter=89 val_logloss=0.6646
+2026-09-06 18:50:41,788 INFO [model]     MarketAnchor: b=0.294 c=+0.040 on 415 priced rows (trusting 29% of disagreement)
+2026-09-06 18:50:41,793 INFO [model]   Fold 1/8  train= 3825  test= 318  (2022-06-09 → 2022-11-19)  acc=0.6164  auc=0.6539  iter=89
+2026-09-06 18:50:49,290 INFO [model]   Early stopping (chronological val, n=528): best_iter=69 val_logloss=0.6742
+2026-09-06 18:50:51,492 INFO [model]     MarketAnchor: b=0.378 c=+0.096 on 487 priced rows (trusting 38% of disagreement)
+2026-09-06 18:50:51,501 INFO [model]   Fold 2/8  train= 4143  test= 319  (2022-11-19 → 2023-07-01)  acc=0.5956  auc=0.6594  iter=69
+2026-09-06 18:50:59,179 INFO [model]   Early stopping (chronological val, n=568): best_iter=114 val_logloss=0.6746
+2026-09-06 18:50:59,720 INFO [model]     MarketAnchor: b=0.313 c=+0.086 on 537 priced rows (trusting 31% of disagreement)
+2026-09-06 18:50:59,726 INFO [model]   Fold 3/8  train= 4462  test= 319  (2023-07-01 → 2023-12-16)  acc=0.5674  auc=0.5950  iter=114
+2026-09-06 18:51:07,748 INFO [model]   Early stopping (chronological val, n=609): best_iter=140 val_logloss=0.6592
+2026-09-06 18:51:08,711 INFO [model]     MarketAnchor: b=0.328 c=+0.071 on 600 priced rows (trusting 33% of disagreement)
+2026-09-06 18:51:08,719 INFO [model]   Fold 4/8  train= 4781  test= 319  (2024-01-13 → 2024-07-27)  acc=0.6113  auc=0.6704  iter=140
+2026-09-06 18:51:18,088 INFO [model]   Early stopping (chronological val, n=650): best_iter=309 val_logloss=0.6360
+2026-09-06 18:51:19,805 INFO [model]     MarketAnchor: b=0.180 c=-0.028 on 634 priced rows (trusting 18% of disagreement)
+2026-09-06 18:51:19,813 INFO [model]   Fold 5/8  train= 5100  test= 318  (2024-07-27 → 2025-02-08)  acc=0.6478  auc=0.6661  iter=309
+2026-09-06 18:51:29,127 INFO [model]   Early stopping (chronological val, n=690): best_iter=139 val_logloss=0.6575
+2026-09-06 18:51:29,761 INFO [model]     MarketAnchor: b=0.166 c=+0.038 on 693 priced rows (trusting 17% of disagreement)
+2026-09-06 18:51:29,768 INFO [model]   Fold 6/8  train= 5418  test= 319  (2025-02-08 → 2025-08-16)  acc=0.6176  auc=0.6719  iter=139
+2026-09-06 18:51:38,051 INFO [model]   Early stopping (chronological val, n=731): best_iter=110 val_logloss=0.6624
+2026-09-06 18:51:38,675 INFO [model]     MarketAnchor: b=0.176 c=+0.068 on 734 priced rows (trusting 18% of disagreement)
+2026-09-06 18:51:38,682 INFO [model]   Fold 7/8  train= 5737  test= 319  (2025-08-16 → 2026-03-14)  acc=0.6301  auc=0.7132  iter=110
+2026-09-06 18:51:47,845 INFO [model]   Early stopping (chronological val, n=772): best_iter=183 val_logloss=0.6567
+2026-09-06 18:51:49,011 INFO [model]     MarketAnchor: b=0.263 c=+0.051 on 772 priced rows (trusting 26% of disagreement)
+2026-09-06 18:51:49,018 INFO [model]   Fold 8/8  train= 6056  test= 319  (2026-03-14 → 2026-09-05)  acc=0.6458  auc=0.6701  iter=183
+2026-09-06 18:51:49,103 INFO [model]   POOLED  n=2550  acc=0.6165 [0.5992, 0.6361]  auc=0.6627  brier=0.2291 (calibrated 0.2297)
+2026-09-06 18:51:49,103 INFO [model] 
+------------------------------------------------------------
+2026-09-06 18:51:49,103 INFO [model] ARM: no_odds_no_glicko  (228 candidate features)
+2026-09-06 18:51:49,103 INFO [model] ------------------------------------------------------------
+2026-09-06 18:51:55,936 INFO [model]   Early stopping (chronological val, n=487): best_iter=53 val_logloss=0.6711
+2026-09-06 18:51:56,294 INFO [model]   Fold 1/8  train= 3825  test= 318  (2022-06-09 → 2022-11-19)  acc=0.6289  auc=0.6664  iter=53
+2026-09-06 18:52:03,672 INFO [model]   Early stopping (chronological val, n=528): best_iter=65 val_logloss=0.6770
+2026-09-06 18:52:04,064 INFO [model]   Fold 2/8  train= 4143  test= 319  (2022-11-19 → 2023-07-01)  acc=0.5737  auc=0.6354  iter=65
+2026-09-06 18:52:11,857 INFO [model]   Early stopping (chronological val, n=568): best_iter=158 val_logloss=0.6717
+2026-09-06 18:52:12,732 INFO [model]   Fold 3/8  train= 4462  test= 319  (2023-07-01 → 2023-12-16)  acc=0.5517  auc=0.5942  iter=158
+2026-09-06 18:52:20,653 INFO [model]   Early stopping (chronological val, n=609): best_iter=126 val_logloss=0.6594
+2026-09-06 18:52:21,407 INFO [model]   Fold 4/8  train= 4781  test= 319  (2024-01-13 → 2024-07-27)  acc=0.5799  auc=0.6280  iter=126
+2026-09-06 18:52:29,562 INFO [model]   Early stopping (chronological val, n=650): best_iter=136 val_logloss=0.6563
+2026-09-06 18:52:30,274 INFO [model]   Fold 5/8  train= 5100  test= 318  (2024-07-27 → 2025-02-08)  acc=0.6509  auc=0.6610  iter=136
+2026-09-06 18:52:37,672 INFO [model]   Early stopping (chronological val, n=690): best_iter=77 val_logloss=0.6566
+2026-09-06 18:52:38,278 INFO [model]   Fold 6/8  train= 5418  test= 319  (2025-02-08 → 2025-08-16)  acc=0.6207  auc=0.6597  iter=77
+2026-09-06 18:52:46,387 INFO [model]   Early stopping (chronological val, n=731): best_iter=131 val_logloss=0.6576
+2026-09-06 18:52:47,140 INFO [model]   Fold 7/8  train= 5737  test= 319  (2025-08-16 → 2026-03-14)  acc=0.6238  auc=0.6967  iter=131
+2026-09-06 18:52:56,195 INFO [model]   Early stopping (chronological val, n=772): best_iter=172 val_logloss=0.6600
+2026-09-06 18:52:57,134 INFO [model]   Fold 8/8  train= 6056  test= 319  (2026-03-14 → 2026-09-05)  acc=0.6019  auc=0.6508  iter=172
+2026-09-06 18:52:57,211 INFO [model]   POOLED  n=2550  acc=0.6039 [0.5855, 0.6227]  auc=0.6474  brier=0.2322 (calibrated 0.2326)
+2026-09-06 18:52:57,212 INFO [model] 
+------------------------------------------------------------
+2026-09-06 18:52:57,212 INFO [model] ARM: simulator (competing risks over Glicko)
+2026-09-06 18:52:57,212 INFO [model] ------------------------------------------------------------
+2026-09-06 18:53:01,152 INFO [model]   Fold 1/8  train= 3825  test= 318  sims=5000  b_dec=+0.232
+2026-09-06 18:53:04,989 INFO [model]   Fold 2/8  train= 4143  test= 319  sims=5000  b_dec=+0.228
+2026-09-06 18:53:08,874 INFO [model]   Fold 3/8  train= 4462  test= 319  sims=5000  b_dec=+0.218
+2026-09-06 18:53:12,503 INFO [model]   Fold 4/8  train= 4781  test= 319  sims=5000  b_dec=+0.215
+2026-09-06 18:53:16,353 INFO [model]   Fold 5/8  train= 5100  test= 318  sims=5000  b_dec=+0.193
+2026-09-06 18:53:19,514 INFO [model]   Fold 6/8  train= 5418  test= 319  sims=5000  b_dec=+0.202
+2026-09-06 18:53:22,606 INFO [model]   Fold 7/8  train= 5737  test= 319  sims=5000  b_dec=+0.205
+2026-09-06 18:53:25,660 INFO [model]   Fold 8/8  train= 6056  test= 319  sims=5000  b_dec=+0.192
+2026-09-06 18:53:25,700 INFO [model] 
+  METHOD (scored on realised outcomes — no market exists for this)
+2026-09-06 18:53:25,700 INFO [model]     log loss   1.0022  vs base rate 1.0252
+2026-09-06 18:53:25,700 INFO [model]     accuracy   0.4949
+2026-09-06 18:53:25,700 INFO [model]     class     Brier     base
+2026-09-06 18:53:25,700 INFO [model]     KO       0.2188   0.2245
+2026-09-06 18:53:25,700 INFO [model]     SUB      0.1417   0.1453
+2026-09-06 18:53:25,700 INFO [model]     DEC      0.2462   0.2503
+2026-09-06 18:53:25,701 INFO [model]     predicted mix [0.336 0.17  0.493]  actual [0.339 0.176 0.485]
+2026-09-06 18:53:25,701 INFO [model] 
+------------------------------------------------------------
+2026-09-06 18:53:25,701 INFO [model] ARM: decorrelated (market-decorrelation penalty)
+2026-09-06 18:53:25,701 INFO [model] ------------------------------------------------------------
+2026-09-06 18:53:34,159 INFO [model]   Fold 1/8  train= 3825  test= 318  gamma=0.25 inner_roi=-0.95%
+2026-09-06 18:53:40,551 INFO [model]   Fold 2/8  train= 4143  test= 319  gamma=1.0  inner_roi=-2.91%
+2026-09-06 18:53:47,008 INFO [model]   Fold 3/8  train= 4462  test= 319  gamma=0.1  inner_roi=-1.12%
+2026-09-06 18:53:55,579 INFO [model]   Fold 4/8  train= 4781  test= 319  gamma=0.0  inner_roi=+1.81%
+2026-09-06 18:54:02,996 INFO [model]   Fold 5/8  train= 5100  test= 318  gamma=0.0  inner_roi=-2.98%
+2026-09-06 18:54:11,923 INFO [model]   Fold 6/8  train= 5418  test= 319  gamma=0.0  inner_roi=+3.63%
+2026-09-06 18:54:21,502 INFO [model]   Fold 7/8  train= 5737  test= 319  gamma=0.25 inner_roi=+1.95%
+2026-09-06 18:54:30,016 INFO [model]   Fold 8/8  train= 6056  test= 319  gamma=0.0  inner_roi=+6.80%
+2026-09-06 18:54:30,063 INFO [model]   gamma per fold: [0.25, 1.0, 0.1, 0.0, 0.0, 0.0, 0.25, 0.0]
+2026-09-06 18:54:30,095 INFO [model] 
+------------------------------------------------------------
+2026-09-06 18:54:30,095 INFO [model] MARKET-ANCHORED ARM  (base = no_odds)
+2026-09-06 18:54:30,095 INFO [model] ------------------------------------------------------------
+2026-09-06 18:54:30,095 INFO [model]   b = fraction of the model's disagreement with the line that is trusted
+2026-09-06 18:54:30,095 INFO [model]    Fold        b        c   n_fit
+2026-09-06 18:54:30,095 INFO [model]   --------------------------------
+2026-09-06 18:54:30,095 INFO [model]       1    0.294   +0.040     415
+2026-09-06 18:54:30,095 INFO [model]       2    0.378   +0.096     487
+2026-09-06 18:54:30,095 INFO [model]       3    0.313   +0.086     537
+2026-09-06 18:54:30,095 INFO [model]       4    0.328   +0.071     600
+2026-09-06 18:54:30,096 INFO [model]       5    0.180   -0.028     634
+2026-09-06 18:54:30,096 INFO [model]       6    0.166   +0.038     693
+2026-09-06 18:54:30,096 INFO [model]       7    0.176   +0.068     734
+2026-09-06 18:54:30,096 INFO [model]       8    0.263   +0.051     772
+2026-09-06 18:54:30,096 INFO [model]   mean b = 0.262
+2026-09-06 18:54:30,096 INFO [model] 
+------------------------------------------------------------
+2026-09-06 18:54:30,096 INFO [model] MARKET COMPARISON (fights with odds)
+2026-09-06 18:54:30,096 INFO [model] ------------------------------------------------------------
+2026-09-06 18:54:30,140 INFO [model]   Eval fights with odds: 2087 (2022-06-11 → 2026-09-05)
+2026-09-06 18:54:30,140 INFO [model]   Average vig: 0.000
+2026-09-06 18:54:30,140 INFO [model] 
+  Arm                       Acc             95% CI      AUC    Brier  corr(mkt)   partial
+2026-09-06 18:54:30,140 INFO [model]   ----------------------------------------------------------------------------------------
+2026-09-06 18:54:30,140 INFO [model]   market only            0.6770     [0.657, 0.698]        —   0.2055      1.000     1.000
+2026-09-06 18:54:30,286 INFO [model]   no_odds_no_glicko      0.6109     [0.590, 0.632]   0.6558   0.2305      0.535     0.488
+2026-09-06 18:54:30,443 INFO [model]   no_odds                0.6282     [0.607, 0.648]   0.6758   0.2263      0.565     0.515
+2026-09-06 18:54:30,591 INFO [model]   simulator              0.6013     [0.581, 0.622]   0.6263   0.2361      0.512     0.477
+2026-09-06 18:54:30,704 INFO [model]   with_odds              0.6679     [0.647, 0.687]   0.7285   0.2090      0.837     0.810
+2026-09-06 18:54:30,783 INFO [model]   market_anchored        0.6852     [0.665, 0.705]   0.7401   0.2062      0.961     0.954
+2026-09-06 18:54:30,935 INFO [model]   decorrelated           0.6473     [0.628, 0.667]   0.6802   0.2474      0.580     0.536
+2026-09-06 18:54:30,935 INFO [model] 
+  Arm                    Acc − market         95% CI of diff   Beats mkt?
+2026-09-06 18:54:30,935 INFO [model]   ------------------------------------------------------------------------
+2026-09-06 18:54:30,935 INFO [model]   no_odds_no_glicko           -0.0661     [-0.0891, -0.0445]           no
+2026-09-06 18:54:30,935 INFO [model]   no_odds                     -0.0489     [-0.0704, -0.0287]           no
+2026-09-06 18:54:30,936 INFO [model]   simulator                   -0.0757     [-0.0987, -0.0522]           no
+2026-09-06 18:54:30,936 INFO [model]   with_odds                   -0.0091     [-0.0244, +0.0057]           no
+2026-09-06 18:54:30,936 INFO [model]   market_anchored             +0.0081     [-0.0010, +0.0172]           no
+2026-09-06 18:54:30,936 INFO [model]   decorrelated                -0.0297     [-0.0498, -0.0105]           no
+2026-09-06 18:54:30,936 INFO [model] 
+  Betting ladder — no_odds_no_glicko (calibrated, frozen thresholds):
+2026-09-06 18:54:30,936 INFO [model]     Edge   Bets    Bet%    Win%     ROI%             ROI 95% CI
+2026-09-06 18:54:30,936 INFO [model]   --------------------------------------------------------------
+2026-09-06 18:54:30,936 INFO [model]       3%   1780   85.3%   39.6%    -6.36          [-12.4, -0.1]
+2026-09-06 18:54:30,936 INFO [model]       5%   1591   76.2%   38.3%    -6.69          [-13.4, -0.1]
+2026-09-06 18:54:30,936 INFO [model]       8%   1284   61.5%   37.8%    -5.54          [-13.3, +1.9]
+2026-09-06 18:54:30,936 INFO [model]      10%   1103   52.9%   37.2%    -6.54          [-14.8, +2.1]
+2026-09-06 18:54:30,936 INFO [model]      15%    696   33.3%   34.3%    -9.72          [-20.1, +1.0]
+2026-09-06 18:54:30,936 INFO [model] 
+  Betting ladder — no_odds (calibrated, frozen thresholds):
+2026-09-06 18:54:30,936 INFO [model]     Edge   Bets    Bet%    Win%     ROI%             ROI 95% CI
+2026-09-06 18:54:30,936 INFO [model]   --------------------------------------------------------------
+2026-09-06 18:54:30,936 INFO [model]       3%   1779   85.2%   41.7%    -2.64           [-8.6, +3.5]
+2026-09-06 18:54:30,936 INFO [model]       5%   1584   75.9%   41.0%    -2.26           [-8.7, +4.1]
+2026-09-06 18:54:30,936 INFO [model]       8%   1278   61.2%   39.7%    -3.57          [-11.2, +4.2]
+2026-09-06 18:54:30,936 INFO [model]      10%   1083   51.9%   38.1%    -5.86          [-14.0, +2.4]
+2026-09-06 18:54:30,936 INFO [model]      15%    691   33.1%   34.7%   -11.07          [-21.5, -0.1]
+2026-09-06 18:54:30,936 INFO [model] 
+  Betting ladder — simulator (calibrated, frozen thresholds):
+2026-09-06 18:54:30,936 INFO [model]     Edge   Bets    Bet%    Win%     ROI%             ROI 95% CI
+2026-09-06 18:54:30,936 INFO [model]   --------------------------------------------------------------
+2026-09-06 18:54:30,936 INFO [model]       3%   1783   85.4%   33.5%   -10.16          [-16.5, -3.6]
+2026-09-06 18:54:30,936 INFO [model]       5%   1619   77.6%   32.4%   -10.53          [-17.1, -3.9]
+2026-09-06 18:54:30,936 INFO [model]       8%   1361   65.2%   29.7%   -12.52          [-19.6, -4.4]
+2026-09-06 18:54:30,936 INFO [model]      10%   1169   56.0%   27.6%   -15.87          [-23.8, -7.1]
+2026-09-06 18:54:30,936 INFO [model]      15%    785   37.6%   23.7%   -19.71          [-30.4, -8.7]
+2026-09-06 18:54:30,936 INFO [model] 
+  Betting ladder — with_odds (calibrated, frozen thresholds):
+2026-09-06 18:54:30,936 INFO [model]     Edge   Bets    Bet%    Win%     ROI%             ROI 95% CI
+2026-09-06 18:54:30,936 INFO [model]   --------------------------------------------------------------
+2026-09-06 18:54:30,936 INFO [model]       3%   1512   72.4%   53.9%    -1.65           [-7.3, +3.9]
+2026-09-06 18:54:30,937 INFO [model]       5%   1196   57.3%   54.3%    -3.13           [-9.0, +2.8]
+2026-09-06 18:54:30,937 INFO [model]       8%    763   36.6%   55.7%    -3.40          [-10.7, +3.4]
+2026-09-06 18:54:30,937 INFO [model]      10%    555   26.6%   57.5%     0.80           [-7.8, +9.2]
+2026-09-06 18:54:30,937 INFO [model]      15%    219   10.5%   55.7%    -2.30         [-15.6, +11.0]
+2026-09-06 18:54:30,937 INFO [model] 
+  Betting ladder — market_anchored (calibrated, frozen thresholds):
+2026-09-06 18:54:30,937 INFO [model]     Edge   Bets    Bet%    Win%     ROI%             ROI 95% CI
+2026-09-06 18:54:30,937 INFO [model]   --------------------------------------------------------------
+2026-09-06 18:54:30,937 INFO [model]       3%    918   44.0%   41.4%    -6.98          [-15.4, +1.3]
+2026-09-06 18:54:30,937 INFO [model]       5%    484   23.2%   45.2%    -2.38          [-12.8, +8.7]
+2026-09-06 18:54:30,937 INFO [model]       8%    156    7.5%   53.8%    10.27          [-8.8, +30.2]
+2026-09-06 18:54:30,937 INFO [model]      10%     80    3.8%   55.0%     3.98         [-19.5, +28.0]
+2026-09-06 18:54:30,937 INFO [model]      15%     23    1.1%   56.5%    -9.23         [-42.3, +23.4]
+2026-09-06 18:54:30,937 INFO [model] 
+  Betting ladder — decorrelated (calibrated, frozen thresholds):
+2026-09-06 18:54:30,937 INFO [model]     Edge   Bets    Bet%    Win%     ROI%             ROI 95% CI
+2026-09-06 18:54:30,937 INFO [model]   --------------------------------------------------------------
+2026-09-06 18:54:30,937 INFO [model]       3%   1872   89.7%   58.5%    -0.82           [-5.0, +3.8]
+2026-09-06 18:54:30,937 INFO [model]       5%   1747   83.7%   59.1%    -0.13           [-4.8, +4.6]
+2026-09-06 18:54:30,937 INFO [model]       8%   1538   73.7%   59.4%     0.26           [-4.3, +5.4]
+2026-09-06 18:54:30,937 INFO [model]      10%   1405   67.3%   58.9%    -0.32           [-5.1, +4.7]
+2026-09-06 18:54:30,937 INFO [model]      15%   1052   50.4%   57.8%    -0.94           [-6.6, +5.1]
+2026-09-06 18:54:30,979 INFO [model] 
+  Saved 2550 per-fight eval predictions to /Users/rafeburns/Downloads/ALocks/alocks-backend/models/ufc/h2h/eval_predictions.csv
+2026-09-06 18:54:30,988 INFO [model] 
+  Saved evaluation results to /Users/rafeburns/Downloads/ALocks/alocks-backend/models/ufc/h2h/eval_results.json
+2026-09-06 18:54:30,988 INFO [model] 
+============================================================
+2026-09-06 18:54:30,989 INFO [model] Walk-forward evaluation complete.
+2026-09-06 18:54:30,989 INFO [model] ============================================================

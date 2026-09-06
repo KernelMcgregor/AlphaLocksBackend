@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import Base, engine
 from app.models import *  # noqa: F401, F403 — ensure all models are registered
+from app.models.ufc import GLICKO_META_COLS
 from app.routers import admin, predictions, ufc
 
 scheduler = BackgroundScheduler()
@@ -47,6 +48,11 @@ def run_migrations():
         for col in derived_cols:
             if col not in existing:
                 conn.execute(f"ALTER TABLE ufc_fight_stats ADD COLUMN {col} REAL")
+        # 006: rating-confidence columns on ufc_glicko_snapshots (idempotent)
+        snap_existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_glicko_snapshots)").fetchall()}
+        for col in GLICKO_META_COLS:
+            if col not in snap_existing:
+                conn.execute(f"ALTER TABLE ufc_glicko_snapshots ADD COLUMN {col} REAL")
         conn.commit()
         conn.close()
     else:
@@ -102,6 +108,14 @@ def run_migrations():
                 for col in missing:
                     conn.execute(text(f"ALTER TABLE ufc.ufc_fight_stats ADD COLUMN {col} FLOAT"))
 
+        # 006: rating-confidence columns on ufc_glicko_snapshots
+        snap_existing = {c["name"] for c in insp.get_columns("ufc_glicko_snapshots", schema="ufc")}
+        snap_missing = [c for c in GLICKO_META_COLS if c not in snap_existing]
+        if snap_missing:
+            with engine.begin() as conn:
+                for col in snap_missing:
+                    conn.execute(text(f"ALTER TABLE ufc.ufc_glicko_snapshots ADD COLUMN {col} FLOAT"))
+
 
 def scheduled_scrape():
     import logging
@@ -134,20 +148,22 @@ def scheduled_scrape():
         log.error(f"Method prediction generation failed: {e}")
         record_run("Method Predictions", "error", str(e))
 
+    # One call, one transaction. These were two separately-guarded steps: the Glicko step
+    # wrote rank=0 placeholders and the Points step replaced them, so a failure in the
+    # second logged an error and left a table of zeros serving at the top of every
+    # division. publish_rankings computes both and commits once or not at all.
     try:
-        from app.services.ufc.ranking_service import generate_rankings
-        generate_rankings()
-        log.info("Glicko ratings computed (for prediction features + dimension profiles)")
-    except Exception as e:
-        log.error(f"Glicko rating computation failed: {e}")
-
-    try:
-        from app.services.ufc.points_ranking_service import generate_rankings as generate_points_rankings
-        generate_points_rankings()
-        log.info("Points + Elo fighter rankings generated")
+        from app.database import SessionLocal as RankingSession
+        from app.services.ufc.ranking_publisher import publish_rankings
+        _rank_db = RankingSession()
+        try:
+            publish_rankings(_rank_db)
+        finally:
+            _rank_db.close()
+        log.info("Glicko snapshots + fighter rankings published")
         record_run("Generate Rankings", "done")
     except Exception as e:
-        log.error(f"Points + Elo ranking generation failed: {e}")
+        log.error(f"Ranking publication failed: {e}")
         record_run("Generate Rankings", "error", str(e))
 
     try:

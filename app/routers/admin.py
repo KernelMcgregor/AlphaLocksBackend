@@ -285,12 +285,15 @@ def trigger_glicko(background_tasks: BackgroundTasks):
 
 @router.post("/generate-rankings", dependencies=[Depends(require_admin_key)])
 def trigger_rankings(background_tasks: BackgroundTasks):
-    from app.services.ufc.ranking_service import generate_rankings
-    from app.services.ufc.points_ranking_service import generate_rankings as generate_points_rankings
+    from app.database import SessionLocal
+    from app.services.ufc.ranking_publisher import publish_rankings
 
     def _run_all():
-        generate_rankings()
-        generate_points_rankings()
+        db = SessionLocal()
+        try:
+            publish_rankings(db)
+        finally:
+            db.close()
 
     return _start_task(background_tasks, "Generate Rankings", _run_all)
 

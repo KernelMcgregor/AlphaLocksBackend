@@ -24,12 +24,16 @@ from __future__ import annotations
 import json
 import logging
 import math
+from bisect import bisect_right
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date
 
 from app.database import SessionLocal
 from app.models.ufc import (
     UFCEvent, UFCFight, UFCFighter, UFCFighterRanking,
+)
+from app.services.ufc.fighter_registry import (
+    Eligibility, classify_weight_class, is_decided, is_rankable,
 )
 
 log = logging.getLogger("points_ranking")
@@ -37,9 +41,18 @@ log = logging.getLogger("points_ranking")
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-FIGHTS_WINDOW = 6           # last N UFC fights scored for points
-MIN_FIGHTS = 3              # minimum UFC fights to appear in rankings
-INACTIVITY_DAYS = 548       # 18 months — max days since last fight
+#: Bouts scored for points. Was 6, which compressed a 36-fight career into the same
+#: window as a 6-fight hot streak: Charles Oliveira's window held two losses while his
+#: defining wins fell outside it, so he scored 17.9 fight-points against Quillan
+#: Salkilld's 27.0 for a 6-0 run. Positions beyond RECENCY_WEIGHTS get the 0.3 tail
+#: weight, so the extra bouts contribute without dominating.
+FIGHTS_WINDOW = 10
+
+#: Eligibility lives in fighter_registry so Glicko and Points cannot disagree about who
+#: is rankable — that disagreement is what left rank=0 rows on the site. Re-exported here
+#: only for the `/ufc/rankings` payload.
+MIN_FIGHTS = Eligibility.min_decided_fights
+INACTIVITY_DAYS = Eligibility.max_days_inactive
 
 # Elo parameters
 ELO_START = 1500
@@ -68,16 +81,25 @@ WIN_POINTS = {
 }
 
 # Loss penalty: base * method_mult * opponent_factor * recency
-# Kept moderate — losing to elite opponents by decision barely hurts
-LOSS_PENALTY_BASE = -1.5
+LOSS_PENALTY_BASE = -3.0
 LOSS_METHOD_MULT = {
     "early_finish": 1.5,    # getting stopped early hurts most
     "late_finish": 1.2,
-    "ud": 0.8,
-    "majority": 0.6,
-    "split": 0.4,           # split-decision loss barely hurts
-    "decision": 0.7,
+    "ud": 0.9,
+    "majority": 0.8,
+    "split": 0.7,
+    "decision": 0.85,
 }
+
+#: Bounds on how much the opponent's quality can soften a loss.
+#: The old factor was `max(2.0 - opp_mult, 0.3)`, which INVERTED with quality: the better
+#: the opponent, the smaller the penalty, bottoming out at 0.3. Combined with a -1.5 base
+#: and a 0.4 split multiplier, a split-decision loss to an elite cost 0.18 points while a
+#: finish over one paid 9.50 — a 50:1 asymmetry that made fighting nearly risk-free and
+#: turned activity into a one-way ratchet. Losing to a great fighter should still hurt
+#: less, just not 50x less; test_points_scoring pins the ratio at <= 3.
+LOSS_OPP_FACTOR_MAX = 1.15   # vs the weakest opposition
+LOSS_OPP_FACTOR_MIN = 0.70   # vs the strongest
 
 # Recency multipliers by fight position (index 0 = most recent fight)
 RECENCY_WEIGHTS = [1.0, 0.9, 0.8, 0.7, 0.55, 0.4]
@@ -86,10 +108,23 @@ RECENCY_WEIGHTS = [1.0, 0.9, 0.8, 0.7, 0.55, 0.4]
 TITLE_MULT = 1.3
 FIVE_ROUND_MULT = 1.1
 
-# Elo strength bonus: established fighters get credit for career Elo
-# This prevents rising prospects from leap-frogging proven veterans
-# who happen to have a few decision wins recently
-ELO_BONUS_MAX = 35.0        # max additional points from Elo standing
+#: Career-strength bonus, added to the summed fight points.
+ELO_BONUS_MAX = 35.0
+
+#: Elo above ELO_START that earns the full bonus. This term used to be scaled by the
+#: fighter's Elo PERCENTILE among all eligible fighters, which saturates: with 563
+#: eligible, every contender sits between the 94th and 100th percentile, so the bonus was
+#: a near-constant 33-35 across an entire top 15 and could not separate anyone in it.
+#: Oliveira's 97-Elo lead over Salkilld converted to 1.93 points of score against a +9.1
+#: fight-points gap — so career quality was effectively absent and the ranking was decided
+#: by recent form alone. 400 is the Elo scale's 10:1 odds interval, so ~1900 earns the cap.
+ELO_LINEAR_SPREAD = 400.0
+
+#: Retained only so ranking_baselines can reconstruct the tried-and-reverted variants
+#: for comparison. Not used by the shipping scorer — see the note in PointsEloRanker.
+MIN_DIVISOR = sum(RECENCY_WEIGHTS[:5])   # 3.95
+PRIOR_STRENGTH = 3.0
+ELO_PRIOR_SCALE = 6.0
 
 WEIGHT_CLASS_ORDER = [
     "p4p_men",
@@ -117,30 +152,9 @@ WEIGHT_CLASS_LABELS = {
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _classify_weight_class(wc: str | None) -> str:
-    if not isinstance(wc, str):
-        return "unknown"
-    wc_lower = wc.lower()
-    is_womens = "women" in wc_lower
-    if "strawweight" in wc_lower:
-        return "w_strawweight" if is_womens else "strawweight"
-    if "flyweight" in wc_lower:
-        return "w_flyweight" if is_womens else "flyweight"
-    if "bantamweight" in wc_lower:
-        return "w_bantamweight" if is_womens else "bantamweight"
-    if "featherweight" in wc_lower:
-        return "w_bantamweight" if is_womens else "featherweight"
-    if "lightweight" in wc_lower:
-        return "lightweight"
-    if "welterweight" in wc_lower:
-        return "welterweight"
-    if "middleweight" in wc_lower:
-        return "middleweight"
-    if "light heavyweight" in wc_lower or "light_heavyweight" in wc_lower:
-        return "light_heavyweight"
-    if "heavyweight" in wc_lower:
-        return "heavyweight"
-    return "unknown"
+#: Kept as an alias so existing callers (preview_service) keep working. The registry is
+#: now the authority on divisions; this must not diverge from it again.
+_classify_weight_class = classify_weight_class
 
 
 def _classify_method(method: str, finish_round: int | None) -> str:
@@ -166,17 +180,32 @@ def _elo_expected(ra: float, rb: float) -> float:
     return 1.0 / (1.0 + 10.0 ** ((rb - ra) / 400.0))
 
 
-def _opponent_quality_mult(opp_elo: float, all_active_elos: list[float]) -> float:
+def _elo_percentile(target_elo: float, sorted_active_elos: list[float]) -> float:
+    """Fraction of active fighters at or below `target_elo`.
+
+    `sorted_active_elos` must be sorted; bisect replaces a linear scan that ran inside
+    the per-fight loop (~13M comparisons per full run).
     """
-    Map opponent Elo to a quality multiplier (0.3 – 2.0).
-    Top-heavy: beating elite opponents is worth much more than beating average ones.
-    50th-pct opponent -> ~0.9x.  95th-pct -> ~1.9x.  10th-pct -> ~0.35x.
-    """
-    if not all_active_elos:
-        return 1.0
-    below = sum(1 for e in all_active_elos if e <= opp_elo)
-    pct = below / len(all_active_elos)
+    if not sorted_active_elos:
+        return 0.5
+    return bisect_right(sorted_active_elos, target_elo) / len(sorted_active_elos)
+
+
+def _quality_from_percentile(pct: float) -> float:
+    """Opponent-quality multiplier (0.3 – 2.0), top-heavy."""
     return 0.3 + 1.7 * (pct ** 1.3)
+
+
+def _loss_opponent_factor(opp_mult: float) -> float:
+    """How much the opponent's quality softens a loss.
+
+    Monotone decreasing in quality — losing to a better fighter still hurts less — but
+    bounded, unlike the old `max(2.0 - opp_mult, 0.3)` which drove the penalty toward
+    zero exactly where the competition was hardest.
+    """
+    span = LOSS_OPP_FACTOR_MAX - LOSS_OPP_FACTOR_MIN
+    frac = (opp_mult - 0.3) / 1.7          # opp_mult is 0.3..2.0 -> 0..1
+    return LOSS_OPP_FACTOR_MAX - span * max(0.0, min(1.0, frac))
 
 
 def _inactivity_factor(days_since_last: int) -> float:
@@ -191,351 +220,169 @@ def _inactivity_factor(days_since_last: int) -> float:
 # Main
 # ---------------------------------------------------------------------------
 
-def generate_rankings(preview: bool = False):
-    """Run the Points + Elo ranking system."""
-    log.info("=" * 60)
-    log.info("GENERATING FIGHTER RANKINGS (Points + Elo)")
-    log.info("=" * 60)
+class PointsEloRanker:
+    """Elo backbone + points over a recent-fight window.
 
-    db = SessionLocal()
-    try:
-        # --- Load data -----------------------------------------------------------
-        log.info("  Loading fight data...")
+    Ordering only. It no longer loads its own fighter metadata or writes rows: division
+    and activity come from the registry so it cannot disagree with the Glicko profiles,
+    and ranking_publisher owns persistence.
+    """
+
+    name = "points_elo"
+
+    def rank(self, db, registry: dict, as_of: date,
+             crit: Eligibility | None = None) -> "RankingResult":
+        from app.services.ufc.ranking_publisher import RankingResult
+
+        crit = crit or Eligibility()
+        log.info("  Points+Elo: loading fights...")
         fights = (
             db.query(UFCFight)
             .join(UFCEvent, UFCFight.event_id == UFCEvent.id)
             .order_by(UFCFight.date, UFCFight.id)
             .all()
         )
-        fighters_q = db.query(UFCFighter).all()
-        fighter_info = {f.id: f for f in fighters_q}
-        log.info(f"  Loaded {len(fights)} fights, {len(fighter_info)} fighters")
 
-        today = date.today()
-        cutoff = today - timedelta(days=INACTIVITY_DAYS)
-
-        # =====================================================================
-        # PHASE 1: Elo over all UFC history
-        # =====================================================================
-        log.info("  Phase 1: Computing Elo ratings...")
+        # ---- Phase 1: Elo over all decided UFC history ----------------------
         elo: dict[int, float] = defaultdict(lambda: ELO_START)
         fight_count: dict[int, int] = defaultdict(int)
-        fighter_weight_class: dict[int, str] = {}
-        fighter_last_fight: dict[int, date] = {}
         fighter_fights: dict[int, list[dict]] = defaultdict(list)
 
         for f in fights:
-            if not f.date or not f.winner_id:
+            if not f.date or f.date > as_of:
                 continue
-            method = f.method or ""
-            if "No Contest" in method or "DQ" in method or "Draw" in method:
+            if not is_decided(f.method, f.winner_id):
                 continue
-            wc = _classify_weight_class(f.weight_class)
-            if wc == "unknown":
+            if classify_weight_class(f.weight_class) == "unknown":
                 continue
 
             red_id, blue_id = f.red_fighter_id, f.blue_fighter_id
             is_title = "title" in (f.weight_class or "").lower()
             is_5rd = bool(f.time_format and f.time_format.count("-") >= 4)
-            method_cat = _classify_method(method, f.finish_round)
+            method_cat = _classify_method(f.method or "", f.finish_round)
 
-            # Snapshot pre-fight Elo
-            red_elo_pre = elo[red_id]
-            blue_elo_pre = elo[blue_id]
-
-            # Elo update
+            red_elo_pre, blue_elo_pre = elo[red_id], elo[blue_id]
             exp_red = _elo_expected(red_elo_pre, blue_elo_pre)
-            K = (ELO_K_NEWCOMER if min(fight_count[red_id], fight_count[blue_id]) < ELO_NEWCOMER_FIGHTS
-                 else ELO_K_BASE)
-            K *= ELO_METHOD_K.get(method_cat, 1.0)
 
-            if f.winner_id == red_id:
-                elo[red_id] += K * (1.0 - exp_red)
-                elo[blue_id] += K * (exp_red - 1.0)
-            else:
-                elo[red_id] += K * (0.0 - exp_red)
-                elo[blue_id] += K * (1.0 - (1.0 - exp_red))
+            # K per fighter. Using min() over BOTH corners meant a 30-fight veteran
+            # facing a debutant also updated at the newcomer rate, so the prospect rose
+            # fast AND the veteran's rating was destabilised by the same bout.
+            method_k = ELO_METHOD_K.get(method_cat, 1.0)
+            k_red = (ELO_K_NEWCOMER if fight_count[red_id] < ELO_NEWCOMER_FIGHTS
+                     else ELO_K_BASE) * method_k
+            k_blue = (ELO_K_NEWCOMER if fight_count[blue_id] < ELO_NEWCOMER_FIGHTS
+                      else ELO_K_BASE) * method_k
 
-            # Track metadata
-            fighter_weight_class[red_id] = wc
-            fighter_weight_class[blue_id] = wc
-            fighter_last_fight[red_id] = f.date
-            fighter_last_fight[blue_id] = f.date
+            red_won = f.winner_id == red_id
+            elo[red_id] += k_red * ((1.0 if red_won else 0.0) - exp_red)
+            elo[blue_id] += k_blue * ((0.0 if red_won else 1.0) - (1.0 - exp_red))
+
             fight_count[red_id] += 1
             fight_count[blue_id] += 1
 
-            # Record fight for red
-            fighter_fights[red_id].append({
-                "date": f.date,
-                "opponent_id": blue_id,
-                "won": f.winner_id == red_id,
-                "method_cat": method_cat,
-                "opp_elo": blue_elo_pre,
-                "is_title": is_title,
-                "is_5rd": is_5rd,
-            })
-            # Record fight for blue
-            fighter_fights[blue_id].append({
-                "date": f.date,
-                "opponent_id": red_id,
-                "won": f.winner_id == blue_id,
-                "method_cat": method_cat,
-                "opp_elo": red_elo_pre,
-                "is_title": is_title,
-                "is_5rd": is_5rd,
-            })
+            for me, opp, opp_elo_pre in ((red_id, blue_id, blue_elo_pre),
+                                         (blue_id, red_id, red_elo_pre)):
+                fighter_fights[me].append({
+                    "date": f.date, "opponent_id": opp,
+                    "won": f.winner_id == me, "method_cat": method_cat,
+                    "opp_elo": opp_elo_pre, "is_title": is_title, "is_5rd": is_5rd,
+                })
 
-        log.info(f"  Elo computed for {len(elo)} fighters")
+        # ---- Phase 2: point scoring over the recent window ------------------
+        eligible = [fid for fid, st in registry.items()
+                    if is_rankable(st, as_of, crit) and fid in fighter_fights]
+        active_elos = sorted(elo[f] for f in eligible)
 
-        # Build global list of active-fighter Elos (for opponent quality percentiles)
-        all_active_elos = sorted([
-            elo[fid] for fid in fighter_weight_class
-            if fight_count[fid] >= MIN_FIGHTS
-            and fighter_last_fight.get(fid, date.min) >= cutoff
-        ])
+        scores: dict[int, float] = {}
+        extras: dict[int, dict] = {}
 
-        # =====================================================================
-        # PHASE 2: Point scoring on last N fights
-        # =====================================================================
-        log.info("  Phase 2: Computing point scores...")
-        fighter_scores: dict[int, float] = {}
-        fighter_sos: dict[int, int] = {}
-
-        for fid in fighter_weight_class:
-            if fight_count[fid] < MIN_FIGHTS:
-                continue
-            last = fighter_last_fight.get(fid)
-            if not last or last < cutoff:
-                continue
-
-            recent = sorted(fighter_fights[fid], key=lambda x: x["date"], reverse=True)[:FIGHTS_WINDOW]
+        for fid in eligible:
+            recent = sorted(fighter_fights[fid], key=lambda x: x["date"],
+                            reverse=True)[:FIGHTS_WINDOW]
             if not recent:
                 continue
 
-            total_points = 0.0
-            opp_elos = []
-
+            total, weight_sum, opp_pcts = 0.0, 0.0, []
             for i, fight in enumerate(recent):
                 recency = RECENCY_WEIGHTS[i] if i < len(RECENCY_WEIGHTS) else 0.3
-                opp_mult = _opponent_quality_mult(fight["opp_elo"], all_active_elos)
-                opp_elos.append(fight["opp_elo"])
+                opp_pct = _elo_percentile(elo[fight["opponent_id"]], active_elos)
+                opp_mult = _quality_from_percentile(opp_pct)
+                opp_pcts.append(opp_pct)
 
-                ctx = 1.0
-                if fight["is_title"]:
-                    ctx = TITLE_MULT
-                elif fight["is_5rd"]:
-                    ctx = FIVE_ROUND_MULT
+                ctx = TITLE_MULT if fight["is_title"] else (
+                    FIVE_ROUND_MULT if fight["is_5rd"] else 1.0)
 
                 if fight["won"]:
-                    base = WIN_POINTS.get(fight["method_cat"], 2.5)
-                    total_points += base * opp_mult * recency * ctx
+                    value = WIN_POINTS.get(fight["method_cat"], 2.5) * opp_mult * ctx
                 else:
-                    base = LOSS_PENALTY_BASE
-                    loss_m = LOSS_METHOD_MULT.get(fight["method_cat"], 1.0)
-                    # Losing to a strong opponent hurts less (inverted quality)
-                    opp_loss = max(2.0 - opp_mult, 0.3)
-                    total_points += base * loss_m * opp_loss * recency * ctx
+                    value = (LOSS_PENALTY_BASE
+                             * LOSS_METHOD_MULT.get(fight["method_cat"], 1.0)
+                             * _loss_opponent_factor(opp_mult) * ctx)
+                total += value * recency
+                weight_sum += recency
 
-            # Elo strength bonus: reward career strength
-            if all_active_elos:
-                below = sum(1 for e in all_active_elos if e <= elo[fid])
-                elo_pct = below / len(all_active_elos)
-                total_points += elo_pct * ELO_BONUS_MAX
+            # The OWGR-style divisor floor and the Bayesian shrinkage prior were both
+            # tried here and BOTH are reverted. ranking_eval measured each change
+            # against the shipped scoring on 1440 walk-forward bouts: paired accuracy
+            # deltas of -0.0069 (divisor) and -0.0056 (prior), CIs straddling zero, and
+            # `prior` had the worst Brier and log-loss of any variant. Neither earned
+            # its place, and the job they were meant to do — stop unproven fighters
+            # topping a division — is done properly by WHR's posterior uncertainty
+            # rather than by a constant tuned here. Sum, as it shipped.
+            form = total
+            elo_strength = max(0.0, min(1.0, (elo[fid] - ELO_START) / ELO_LINEAR_SPREAD))
+            blended = form + elo_strength * ELO_BONUS_MAX
 
-            # Inactivity decay
-            days_inactive = (today - fighter_last_fight[fid]).days
-            total_points *= _inactivity_factor(days_inactive)
+            # Smooth decay toward the hard cutoff, so ring rust is a gradient rather than
+            # a cliff at 548 days. Measured from last ACTIVITY, so a no-contest counts.
+            days_idle = (as_of - registry[fid].last_activity).days
+            scores[fid] = blended * _inactivity_factor(days_idle)
 
-            fighter_scores[fid] = total_points
+            extras[fid] = {
+                "sos": max(1, min(99, round((sum(opp_pcts) / len(opp_pcts)) * 99))),
+                "elo": round(elo[fid]),
+                "points": round(scores[fid], 2),
+            }
 
-            # SOS: average opponent Elo percentile -> 1-99 scale
-            if opp_elos and all_active_elos:
-                avg_pct = sum(
-                    sum(1 for e in all_active_elos if e <= oe) / len(all_active_elos)
-                    for oe in opp_elos
-                ) / len(opp_elos)
-                fighter_sos[fid] = max(1, min(99, round(avg_pct * 99)))
-            else:
-                fighter_sos[fid] = 50
+        # ---- Phase 3: division orderings ------------------------------------
+        order: dict[str, list[int]] = {}
+        for fid in scores:
+            order.setdefault(registry[fid].division, []).append(fid)
+        for division in order:
+            order[division].sort(key=lambda f: scores[f], reverse=True)
 
-        log.info(f"  Scored {len(fighter_scores)} eligible fighters")
-
-        # =====================================================================
-        # PHASE 3: Division rankings
-        # =====================================================================
-        log.info("  Phase 3: Generating division rankings...")
-
-        # Load existing Glicko profiles for radar charts (if available)
-        existing = db.query(UFCFighterRanking).all()
-        glicko_profiles = {(r.fighter_id, r.weight_class): r.feature_profile for r in existing}
-
-        db.query(UFCFighterRanking).delete()
-        db.commit()
-
-        total_ranked = 0
-        wc_ranked_scores: dict[str, dict[int, float]] = {}
-
-        for wc in WEIGHT_CLASS_ORDER:
-            if wc.startswith("p4p"):
-                continue
-
-            eligible = [
-                fid for fid in fighter_scores
-                if fighter_weight_class.get(fid) == wc and fid in fighter_info
-            ]
-            if len(eligible) < 2:
-                continue
-
-            ranked = sorted(eligible, key=lambda f: fighter_scores[f], reverse=True)
-            wc_ranked_scores[wc] = {fid: fighter_scores[fid] for fid in ranked}
-
-            # Normalize to 0-1000
-            s_max = fighter_scores[ranked[0]]
-            s_min = fighter_scores[ranked[-1]]
-            s_range = s_max - s_min if s_max > s_min else 1.0
-
-            if not preview:
-                for rank, fid in enumerate(ranked, 1):
-                    norm = round((fighter_scores[fid] - s_min) / s_range * 1000, 1)
-
-                    try:
-                        profile = json.loads(glicko_profiles.get((fid, wc), "{}") or "{}")
-                    except (json.JSONDecodeError, TypeError):
-                        profile = {}
-                    profile["sos"] = fighter_sos.get(fid, 50)
-                    profile["elo"] = round(elo.get(fid, ELO_START))
-                    profile["points"] = round(fighter_scores[fid], 1)
-
-                    db.add(UFCFighterRanking(
-                        fighter_id=int(fid),
-                        weight_class=wc,
-                        rank=rank,
-                        score=norm,
-                        expected_wins=norm,
-                        total_opponents=len(ranked) - 1,
-                        feature_profile=json.dumps(profile),
-                    ))
-                    total_ranked += 1
-                db.commit()
-
-            fi = fighter_info.get(ranked[0])
-            if fi:
-                log.info(
-                    f"    {WEIGHT_CLASS_LABELS.get(wc, wc)}: "
-                    f"#1 {fi.first_name} {fi.last_name} "
-                    f"(pts={fighter_scores[ranked[0]]:.1f}, "
-                    f"elo={elo[ranked[0]]:.0f}, "
-                    f"sos={fighter_sos.get(ranked[0], 0)})"
-                )
-
-            if preview:
-                print(f"\n=== {WEIGHT_CLASS_LABELS.get(wc, wc)} ===")
-                for rank, fid in enumerate(ranked[:30], 1):
-                    fi = fighter_info.get(fid)
-                    if fi:
-                        ufc_record = f"{fi.wins}-{fi.losses}"
-                        if fi.draws:
-                            ufc_record += f"-{fi.draws}"
-                        print(
-                            f"  #{rank:>2} {fi.first_name} {fi.last_name} "
-                            f"({ufc_record}) "
-                            f"pts={fighter_scores[fid]:>6.1f}  "
-                            f"elo={elo[fid]:>6.0f}  "
-                            f"sos={fighter_sos.get(fid, 0):>2}"
-                        )
-
-        # =====================================================================
-        # P4P rankings (z-score normalized across weight classes)
-        # =====================================================================
-        log.info("  Computing P4P rankings...")
-        mens_wcs = [w for w in WEIGHT_CLASS_ORDER
-                    if not w.startswith("w_") and not w.startswith("p4p")]
-        womens_wcs = [w for w in WEIGHT_CLASS_ORDER if w.startswith("w_")]
-
-        for p4p_key, wc_list, label in [
-            ("p4p_men", mens_wcs, "Men's P4P"),
-            ("p4p_women", womens_wcs, "Women's P4P"),
-        ]:
-            wc_stats: dict[str, tuple[float, float]] = {}
-            for wc in wc_list:
-                vals = list(wc_ranked_scores.get(wc, {}).values())
+        # ---- P4P: z-score within division, then pooled ----------------------
+        for p4p_key, member_of in (
+            ("p4p_men", lambda d: not d.startswith("w_")),
+            ("p4p_women", lambda d: d.startswith("w_")),
+        ):
+            divisions = [d for d in order if member_of(d)]
+            z: dict[int, float] = {}
+            for d in divisions:
+                vals = [scores[f] for f in order[d]]
                 if len(vals) < 2:
                     continue
                 mu = sum(vals) / len(vals)
-                std = max((sum((v - mu) ** 2 for v in vals) / len(vals)) ** 0.5, 0.1)
-                wc_stats[wc] = (mu, std)
+                sd = max((sum((v - mu) ** 2 for v in vals) / len(vals)) ** 0.5, 0.1)
+                for f in order[d]:
+                    z[f] = (scores[f] - mu) / sd
+            if len(z) >= 2:
+                pool = sorted(z, key=lambda f: z[f], reverse=True)[:25]
+                order[p4p_key] = pool
+                for f in pool:
+                    scores.setdefault(f, 0.0)
 
-            p4p_fids = [
-                fid for fid in fighter_scores
-                if fighter_weight_class.get(fid) in wc_list and fid in fighter_info
-            ]
-            if len(p4p_fids) < 2:
-                continue
+        log.info(f"  Points+Elo: scored {len(scores)} fighters in {len(order)} divisions")
+        return RankingResult(order=order, scores=scores, extras=extras)
 
-            p4p_z: dict[int, float] = {}
-            for fid in p4p_fids:
-                wc = fighter_weight_class[fid]
-                if wc in wc_stats:
-                    mu, std = wc_stats[wc]
-                    p4p_z[fid] = (fighter_scores[fid] - mu) / std
-                else:
-                    p4p_z[fid] = 0.0
 
-            p4p_ranked = sorted(p4p_fids, key=lambda f: p4p_z[f], reverse=True)[:25]
+def generate_rankings(preview: bool = False):
+    """Backwards-compatible entry point; publishing lives in ranking_publisher."""
+    from app.services.ufc.ranking_publisher import publish_rankings
 
-            if p4p_ranked:
-                z_max = max(p4p_z[f] for f in p4p_ranked)
-                z_min = min(p4p_z[f] for f in p4p_ranked)
-                z_range = z_max - z_min if z_max > z_min else 1.0
-                p4p_norm = {f: round((p4p_z[f] - z_min) / z_range * 1000, 1)
-                            for f in p4p_ranked}
-            else:
-                p4p_norm = {}
-
-            if not preview:
-                for rank, fid in enumerate(p4p_ranked, 1):
-                    wc = fighter_weight_class.get(fid, "unknown")
-                    try:
-                        profile = json.loads(
-                            glicko_profiles.get((fid, wc), "{}") or "{}")
-                    except (json.JSONDecodeError, TypeError):
-                        profile = {}
-                    profile["sos"] = fighter_sos.get(fid, 50)
-                    profile["elo"] = round(elo.get(fid, ELO_START))
-
-                    db.add(UFCFighterRanking(
-                        fighter_id=int(fid),
-                        weight_class=p4p_key,
-                        rank=rank,
-                        score=p4p_norm.get(fid, 0),
-                        expected_wins=p4p_norm.get(fid, 0),
-                        total_opponents=len(p4p_ranked) - 1,
-                        feature_profile=json.dumps(profile),
-                    ))
-                    total_ranked += 1
-                db.commit()
-
-            fi = fighter_info.get(p4p_ranked[0]) if p4p_ranked else None
-            if fi:
-                log.info(f"    {label}: #1 {fi.first_name} {fi.last_name} "
-                         f"(z={p4p_z[p4p_ranked[0]]:.2f})")
-
-            if preview and p4p_ranked:
-                print(f"\n=== {label} ===")
-                for rank, fid in enumerate(p4p_ranked[:15], 1):
-                    fi = fighter_info.get(fid)
-                    if fi:
-                        wc = fighter_weight_class.get(fid, "")
-                        print(
-                            f"  #{rank:>2} {fi.first_name} {fi.last_name} "
-                            f"({fi.wins}-{fi.losses}) "
-                            f"z={p4p_z[fid]:.2f} "
-                            f"[{WEIGHT_CLASS_LABELS.get(wc, wc)}]"
-                        )
-
-        log.info(f"  Ranked {total_ranked} fighters across all divisions")
-        log.info("  Points + Elo rankings complete")
-
+    db = SessionLocal()
+    try:
+        publish_rankings(db, ranker=PointsEloRanker(), preview=preview)
     finally:
         db.close()
 
@@ -559,6 +406,11 @@ def get_rankings() -> dict:
         rankings = (
             db.query(UFCFighterRanking, UFCFighter)
             .join(UFCFighter, UFCFighterRanking.fighter_id == UFCFighter.id)
+            # rank=0 is ranking_service's placeholder, written before this service
+            # assigns real ranks. If it fails, or ranks a different set of fighters
+            # than Glicko profiled, those rows survive — and 0 sorts ahead of 1, so
+            # they land at the TOP of every division. Never serve them.
+            .filter(UFCFighterRanking.rank > 0)
             .order_by(UFCFighterRanking.weight_class, UFCFighterRanking.rank)
             .all()
         )

@@ -199,20 +199,37 @@ def _get_glicko_data(db: Session, fight_id: int, fighter_id: int, weight_class: 
     if not snapshot:
         return None
 
+    # Filter on the division too. Fighters ranked in a p4p table have a second row, and
+    # .first() on fighter_id alone returned whichever the DB happened to yield — so a
+    # top-25 p4p rank could be shown as the divisional one. Also exclude rank=0
+    # placeholder rows, same reason as get_rankings().
+    from app.services.ufc.points_ranking_service import _classify_weight_class
+
+    wc_key = _classify_weight_class(weight_class) if weight_class else None
     ranking = (
         db.query(UFCFighterRanking)
-        .filter(UFCFighterRanking.fighter_id == fighter_id)
+        .filter(
+            UFCFighterRanking.fighter_id == fighter_id,
+            UFCFighterRanking.weight_class == wc_key,
+            UFCFighterRanking.rank > 0,
+        )
         .first()
-    ) if weight_class else None
+    ) if wc_key and wc_key != "unknown" else None
 
-    # Parse percentile profile from ranking
+    # feature_profile stores bare floats already normalised to 0-99 within the division.
+    # This previously expected {dim: {"percentile": n}}, which no writer has ever
+    # produced, so `percentiles` was always empty and every percentile/tier below was
+    # None — the whole block rendered blank.
     import json
     percentiles = {}
     if ranking and ranking.feature_profile:
         try:
             profile = json.loads(ranking.feature_profile)
-            percentiles = {k: v.get("percentile", 50) for k, v in profile.items() if isinstance(v, dict) and "percentile" in v}
-        except (json.JSONDecodeError, AttributeError):
+            percentiles = {
+                k: float(v) for k, v in profile.items()
+                if k in GLICKO_DIMS and isinstance(v, (int, float))
+            }
+        except (json.JSONDecodeError, AttributeError, TypeError, ValueError):
             pass
 
     ratings = {}
@@ -229,7 +246,9 @@ def _get_glicko_data(db: Session, fight_id: int, fighter_id: int, weight_class: 
     result = {"dimensions": ratings}
     if ranking:
         result["division_rank"] = ranking.rank
-        result["expected_win_rate"] = round(ranking.score * 100, 1)
+        # `score` is a 0-1000 division-normalised points score, NOT a win rate. The old
+        # `score * 100` label read as a percentage and rendered values up to 100000%.
+        result["division_score"] = round(ranking.score, 1)
 
     return result
 
@@ -336,7 +355,8 @@ def _glicko_block(label: str, glicko: dict | None) -> str:
     lines = [f"**{label} GLICKO COMPONENT RATINGS:**"]
 
     if "division_rank" in glicko:
-        lines.append(f"- Division Rank: #{glicko['division_rank']}, Expected Win Rate: {glicko['expected_win_rate']}%")
+        lines.append(f"- Division Rank: #{glicko['division_rank']}, "
+                     f"Division Score: {glicko['division_score']}/1000")
 
     dims = glicko["dimensions"]
     groups = {

@@ -1,121 +1,104 @@
-"""
-UFC Fighter Rankings — Glicko dimension profiles + radar chart data.
+"""Glicko dimension profiles for the radar chart.
 
-Delegates Glicko computation to glicko_service.py, then builds per-weight-class
-dimension profiles and saves them to UFCFighterRanking for frontend display.
+Owns `ufc_glicko_snapshots` (the ML feature table) and nothing else. It used to also
+write `ufc_fighter_rankings` with `rank=0` placeholders on the assumption that
+points_ranking_service would immediately overwrite every row — see ranking_publisher for
+why that assumption failed on the live site. Ranks now have exactly one writer, and this
+module returns profiles in memory instead of persisting them.
 
-Rank ordering is handled by points_ranking_service.py which runs after this.
-
-Run: python -m app.services.ranking_service
+Run: python -m app.services.ufc.ranking_publisher
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import math
-from datetime import date, timedelta
+from datetime import date
 
-from app.database import SessionLocal
-from app.models.ufc import UFCFighterRanking
+from app.services.ufc.fighter_registry import Eligibility, is_rankable
 from app.services.ufc.glicko_service import (
     DIMENSIONS,
-    WEIGHT_CLASS_ORDER,
-    WEIGHT_CLASS_LABELS,
-    MIN_ROUNDS,
     GlickoParams,
     compute_and_save_snapshots,
 )
 
-# Re-exported for model.py and points_ranking_service.py
-__all__ = ["DIMENSIONS", "generate_rankings"]
+__all__ = ["DIMENSIONS", "compute_dimension_profiles"]
 
 log = logging.getLogger("ranking_service")
 
 
-def generate_rankings():
-    """Compute Glicko dimension ratings, save snapshots (for ML) and
-    dimension profiles to UFCFighterRanking (for radar chart display).
+def _percentile_profile(values: dict[int, float]) -> dict[int, float]:
+    """Ordinal percentile rank within the division, 0-99.
 
-    Rank ordering is handled by points_ranking_service.py which runs after this.
+    Was min-max normalisation, which the UI has always labelled "percentile" and which is
+    outlier-dominated: one Charles Oliveira at the top of SUB compresses the entire rest
+    of the division toward 0, so the radar chart showed a division of non-grapplers.
     """
-    log.info("=" * 60)
-    log.info("COMPUTING GLICKO DIMENSION RATINGS")
-    log.info("=" * 60)
+    if not values:
+        return {}
+    ordered = sorted(values.items(), key=lambda kv: kv[1])
+    n = len(ordered)
+    if n == 1:
+        return {ordered[0][0]: 50.0}
+    out: dict[int, float] = {}
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and ordered[j + 1][1] == ordered[i][1]:
+            j += 1
+        # Ties share the midpoint of the positions they span.
+        pct = ((i + j) / 2) / (n - 1) * 99
+        for k in range(i, j + 1):
+            out[ordered[k][0]] = round(pct, 1)
+        i = j + 1
+    return out
 
-    db = SessionLocal()
 
-    try:
-        ratings, fighter_round_count, fighter_fight_count, \
-            fighter_last_fight_date, fighter_weight_class, sorted_fight_ids = \
-            compute_and_save_snapshots(db)
+def compute_dimension_profiles(
+    db,
+    registry: dict,
+    as_of: date | None = None,
+    crit: Eligibility | None = None,
+    params: GlickoParams | None = None,
+) -> dict[tuple[int, str], dict]:
+    """Compute Glicko ratings, persist ML snapshots, and return radar profiles.
 
-        # --- Save dimension profiles to UFCFighterRanking ---
-        # These are temporary rows; points_ranking_service.py will read the
-        # feature_profile JSON, delete these rows, and re-create them with
-        # the correct Points+Elo rank ordering.
-        log.info("  Saving Glicko dimension profiles...")
-        today = date.today()
-        cutoff = today - timedelta(days=548)
+    Returns {(fighter_id, division): {dim: percentile, ..., "uncertainty": sigma}}.
+    """
+    today = as_of or date.today()
+    crit = crit or Eligibility()
 
-        db.query(UFCFighterRanking).delete()
-        db.commit()
+    log.info("  Computing Glicko dimension ratings...")
+    ratings, _round_count, _fight_count, _last_date, _wc, _fids = \
+        compute_and_save_snapshots(db, params)
 
-        total_saved = 0
-        for wc in WEIGHT_CLASS_ORDER:
-            if wc.startswith("p4p"):
-                continue
+    # Division and eligibility come from the registry, never re-derived here. That
+    # divergence is exactly what produced rank=0 rows.
+    by_division: dict[str, list[int]] = {}
+    for fid, st in registry.items():
+        if fid in ratings and is_rankable(st, today, crit):
+            by_division.setdefault(st.division, []).append(fid)
 
-            wc_fids = [
-                fid for fid, w in fighter_weight_class.items()
-                if w == wc
-                and fighter_round_count.get(fid, 0) >= MIN_ROUNDS
-                and fighter_last_fight_date.get(fid, date.min) >= cutoff
-                and fid in ratings
-            ]
-            if not wc_fids:
-                continue
+    profiles: dict[tuple[int, str], dict] = {}
+    for division, fids in by_division.items():
+        for dim in DIMENSIONS:
+            pct = _percentile_profile({f: ratings[f][dim][0] for f in fids})
+            for f, v in pct.items():
+                profiles.setdefault((f, division), {})[dim] = v
+        for f in fids:
+            sigmas = [ratings[f][d][1] for d in DIMENSIONS]
+            profiles[(f, division)]["uncertainty"] = round(sum(sigmas) / len(sigmas), 1)
 
-            # Compute per-dimension min/max for percentile normalization (0-99)
-            dim_mins = {}
-            dim_maxs = {}
-            for d in DIMENSIONS:
-                vals = [ratings[fid][d][0] for fid in wc_fids]
-                dim_mins[d] = min(vals)
-                dim_maxs[d] = max(vals)
-
-            for fid in wc_fids:
-                profile = {}
-                for d in DIMENSIONS:
-                    raw = ratings[fid][d][0]
-                    rng = dim_maxs[d] - dim_mins[d]
-                    if rng > 0:
-                        profile[d] = round((raw - dim_mins[d]) / rng * 99, 1)
-                    else:
-                        profile[d] = 50.0
-                avg_sigma = sum(ratings[fid][d][1] for d in DIMENSIONS) / len(DIMENSIONS)
-                profile["uncertainty"] = round(avg_sigma, 1)
-
-                db.add(UFCFighterRanking(
-                    fighter_id=int(fid),
-                    weight_class=wc,
-                    rank=0,  # placeholder — points_ranking_service sets real ranks
-                    score=0.0,
-                    expected_wins=0.0,
-                    total_opponents=len(wc_fids) - 1,
-                    feature_profile=json.dumps(profile),
-                ))
-                total_saved += 1
-
-            db.commit()
-
-        log.info(f"  Saved {total_saved} dimension profiles")
-        log.info("  Glicko computation complete")
-
-    finally:
-        db.close()
+    log.info(f"  Built {len(profiles)} dimension profiles across {len(by_division)} divisions")
+    return profiles
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    generate_rankings()
+    from app.database import SessionLocal
+    from app.services.ufc.ranking_publisher import publish_rankings
+
+    _db = SessionLocal()
+    try:
+        publish_rankings(_db)
+    finally:
+        _db.close()

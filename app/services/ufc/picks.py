@@ -62,7 +62,25 @@ PICKS_MODEL_PATH = MODEL_DIR / "picks_noodds_gbt_v1.pkl"
 # ===========================================================================
 # THE RULE -- FROZEN 2026-09-06. Do not tune. See PREREGISTRATION.md.
 # ===========================================================================
-RULE_VERSION = "v1.0-2026-09-06"
+#: v1.2. Two resets on 2026-09-06, both with zero settled picks, both forced by defects
+#: found the same day the rule was first registered:
+#:
+#:   v1.0 -> v1.1  Serving fix. ufc_glicko_snapshots had no columns for the four Glicko
+#:                 confidence features, so build_features fell back to sentinels and this
+#:                 model received 3 of its 39 features as constants that never appeared
+#:                 in training. Migration 006 persists them. No model was retrained.
+#:   v1.1 -> v1.2  Model change. The Glicko dimension semantics were corrected (the
+#:                 finish bonus was creating the entire offence/defence antisymmetry;
+#:                 str_acc and str_def were algebraic duplicates at r=+0.93; the td rate
+#:                 branch was centred on the wrong baseline). That redefines this model's
+#:                 inputs, so leaving the frozen artifact in place would have recreated
+#:                 the v1.0 skew. Retrained on the corrected features.
+#:
+#: The RULE itself -- both thresholds, the staking scheme, the book set -- has never been
+#: touched. All model-affecting work is now complete; this is intended to be the last
+#: reset. Prior entries live in git history and are not carried forward, because they
+#: were priced by pipelines that no longer exist.
+RULE_VERSION = "v1.2-2026-09-06"
 
 #: How near 50/50 the de-vigged market price must be for a fight to qualify.
 #: 0.08 admits roughly the middle 24% of priced fights (~70/year).

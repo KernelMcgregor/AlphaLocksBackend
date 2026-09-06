@@ -367,6 +367,12 @@ class UFCFighterRanking(TimestampMixin, Base):
     fighter: Mapped["UFCFighter"] = relationship()
 
 
+# Canonical names of the rating-confidence columns. glicko_service stores the same
+# quantities in its in-memory snapshot dict under a leading underscore ("_meta_sigma"),
+# so the dict key is always "_" + the column name.
+GLICKO_META_COLS = ["meta_sigma", "meta_rounds_seen", "meta_fights_seen", "meta_days_since"]
+
+
 class UFCGlickoSnapshot(Base):
     """Pre-fight Glicko dimension ratings for each fighter in each fight.
     Captured BEFORE the fight is processed — used as ML prediction features."""
@@ -395,6 +401,14 @@ class UFCGlickoSnapshot(Base):
     clinch: Mapped[float | None] = mapped_column(Float, nullable=True)
     gnd: Mapped[float | None] = mapped_column(Float, nullable=True)
     durability: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Rating CONFIDENCE, not the rating itself. The model selects on these, so if they
+    # are absent here the DB serving path silently feeds it constants that never appeared
+    # in training. Nullable because rows written before 006 have no values.
+    meta_sigma: Mapped[float | None] = mapped_column(Float, nullable=True)
+    meta_rounds_seen: Mapped[float | None] = mapped_column(Float, nullable=True)
+    meta_fights_seen: Mapped[float | None] = mapped_column(Float, nullable=True)
+    meta_days_since: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class UFCMatchupPrediction(TimestampMixin, Base):

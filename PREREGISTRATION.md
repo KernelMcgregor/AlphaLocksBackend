@@ -1,7 +1,50 @@
-# Pre-registration: UFC moneyline picks rule v1.0
+# Pre-registration: UFC moneyline picks rule v1.2
 
 **Registered 2026-09-06, before any fight it applies to.**
 **First card under this rule: Noche UFC: Silva vs. Delgado, 2026-09-12.**
+**Settled picks under v1.2: 0. The count starts here.**
+
+> ### Two resets on 2026-09-06, both at zero settled picks
+>
+> The rule was registered and four picks logged before an audit of the ranking system
+> found two defects in the pipeline underneath it. Both resets happened the same day,
+> before any pick could settle, so both were free.
+>
+> **v1.0 → v1.1 — serving fix, no model change.** `ufc_glicko_snapshots` had no columns
+> for the four Glicko confidence features, so `build_features` fell back to sentinels and
+> the picks model received **3 of its 39 features as constants that never appeared in
+> training** (the served MLP: 3 of 46). Measured on the training artifact,
+> `blue_glicko_meta_rounds_seen` was standardised with mu=12.5, sd=15.1 — a constant 0.0
+> fed **−0.83σ into every fight** regardless of who was competing. Migration 006 persists
+> the columns; the stored snapshots were then verified byte-identical to the in-memory
+> ones training uses (21,312 rows, 0 mismatches). The weights were never wrong.
+>
+> **v1.1 → v1.2 — model change.** The Glicko dimension semantics were corrected. The
+> finish bonus was creating the entire offence/defence antisymmetry (it transferred
+> between *different* dimensions, so `ko` inflated while `kod` deflated even after being
+> made zero-sum); `str_acc` and `str_def` were algebraic duplicates at r=+0.93; the `td`
+> rate branch was centred on the mean of a different observable. Correlation of each
+> dimension with a fighter's fight count, before → after:
+> `ko +0.735 → +0.335`, `kod −0.590 → +0.163`, `td +0.505 → +0.135`,
+> `tdd −0.496 → −0.011`, `corr(str_acc, str_def) +0.93 → +0.165`.
+> That redefines this model's inputs, so leaving the frozen artifact in place would have
+> recreated the v1.0 skew exactly. Both models were retrained on the corrected features.
+> Walk-forward over 8 folds showed the change is performance-neutral (all arm deltas
+> within the ±0.006 fold-noise floor, measured from the arm that uses no Glicko at all)
+> with slightly better Brier in every Glicko-using arm.
+>
+> **The rule itself has never been touched** — both thresholds, the staking scheme and the
+> book set are as first registered. Only the pipeline beneath it was repaired.
+>
+> Per "Audit trail" below, rewriting the log voids the experiment and restarts it. The log
+> was rewritten rather than annotated on both occasions, so that clause is invoked
+> deliberately and the count resets to zero. Nothing was lost: no pick had settled. Prior
+> entries remain in git history (v1.0 at commit `155c612`) and are **not** carried
+> forward, because they were priced by pipelines that no longer exist.
+>
+> All model-affecting work identified in the audit is now complete. This is intended to be
+> the last reset; any further one after a pick has settled must open a new log alongside
+> the old rather than replace it.
 
 This document exists because the rule below was found by searching a backtest, and a rule
 found that way is worth nothing until it survives data it was not chosen on. Writing the
@@ -157,3 +200,10 @@ recorded opinion is the one that counts.
 
 The git history of that file is the actual evidence. If it is ever rewritten, the
 experiment is void and must restart.
+
+This clause has been invoked twice, both on 2026-09-06 (v1.0 → v1.1 → v1.2) — see the note
+at the top. Both invocations were at zero settled picks, which is the only situation in
+which a restart costs nothing. It is not a precedent for editing the log once results
+exist: after a pick settles, a rewrite destroys the evidence rather than correcting an
+input, and the correct response to a defect found then is a new rule version logged
+alongside the old one, not in place of it.

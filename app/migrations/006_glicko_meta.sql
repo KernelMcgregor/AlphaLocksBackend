@@ -1,0 +1,14 @@
+-- Add rating-confidence columns to ufc_glicko_snapshots.
+--
+-- glicko_service captures _meta_sigma/_meta_rounds_seen/_meta_fights_seen/_meta_days_since
+-- alongside the 15 dimensions, but compute_and_save_snapshots only ever wrote DIMENSIONS,
+-- so they never reached the database. Training reads in-memory snapshots (real values);
+-- generate_predictions reads the DB (sentinels). The served mlp_v1 selects 3 of its 46
+-- features from that set, so every DB-path prediction ran on constants the model was
+-- never trained against.
+--
+-- Additive and nullable: rows written before this migration keep the sentinel fallback
+-- in model.build_features until the next Glicko run backfills them.
+--
+-- SQLite doesn't support IF NOT EXISTS on ALTER TABLE, so the columns are added by
+-- run_migrations() in main.py rather than by executescript. This file is documentation.

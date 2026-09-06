@@ -743,3 +743,84 @@ class TestServingDependencies:
         req = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text()
         assert any(line.strip().startswith("torch") for line in req.splitlines()), \
             "torch missing from requirements.txt — mlp_v1.pkl cannot be served"
+
+
+class TestGlickoConfidenceFeaturesReachServing:
+    """The Glicko confidence features were computed, consumed by the model, and never
+    stored — so the DB serving path fed the model four constants it never saw in
+    training. A dead feature raises nothing and degrades silently, which is why this
+    survived: only variance checks catch it.
+
+    These assert the three sides agree: what glicko_service emits, what the snapshot
+    table can store, and what build_features reads back.
+    """
+
+    def test_every_meta_column_exists_on_the_snapshot_model(self):
+        """The original defect exactly: model.py read `_meta_*` and glicko_service wrote
+        `_meta_*`, but UFCGlickoSnapshot had nowhere to put them."""
+        from app.models.ufc import GLICKO_META_COLS, UFCGlickoSnapshot
+
+        columns = {c.name for c in UFCGlickoSnapshot.__table__.columns}
+        missing = [c for c in GLICKO_META_COLS if c not in columns]
+        assert not missing, (
+            f"UFCGlickoSnapshot cannot store {missing}. build_features will fall back to "
+            "sentinels for every row, so any model selecting these serves on constants."
+        )
+
+    def test_sentinel_keys_match_the_stored_columns(self):
+        """`_meta_x` in the in-memory dict must correspond to column `meta_x`. If these
+        drift, the DB values are written but never read back."""
+        import inspect
+
+        from app.models.ufc import GLICKO_META_COLS
+        from app.services.ufc import model as model_mod
+
+        src = inspect.getsource(model_mod.build_features)
+        for col in GLICKO_META_COLS:
+            assert f'"_{col}"' in src, (
+                f"build_features never references _{col}; the column is written but "
+                "unused, which is the same skew in the other direction."
+            )
+
+    def test_served_artifacts_do_not_select_unstorable_meta_features(self):
+        """Guards the specific failure that shipped: mlp_v1 selected 3 of 46 features
+        from a set the serving path could only render as constants."""
+        import pickle
+        from pathlib import Path
+
+        import joblib
+
+        from app.models.ufc import GLICKO_META_COLS, UFCGlickoSnapshot
+
+        model_dir = Path(__file__).resolve().parents[1] / "models" / "ufc" / "h2h"
+        artifacts = sorted(model_dir.glob("*.pkl"))
+        if not artifacts:
+            pytest.skip("no trained artifacts present")
+
+        storable = {c.name for c in UFCGlickoSnapshot.__table__.columns}
+        known = set(GLICKO_META_COLS)
+        checked = 0
+        for path in artifacts:
+            try:
+                obj = joblib.load(path)
+            except Exception:
+                try:
+                    with open(path, "rb") as fh:
+                        obj = pickle.load(fh)
+                except Exception:
+                    continue
+            feats = obj.get("features") if isinstance(obj, dict) else \
+                getattr(obj, "feature_names_in_", None)
+            if feats is None:
+                continue
+            checked += 1
+            for name in feats:
+                if "glicko_meta_" not in name:
+                    continue
+                base = "meta_" + name.split("glicko_meta_", 1)[1]
+                assert base in known and base in storable, (
+                    f"{path.name} selects {name!r}, which the snapshot table cannot "
+                    "store — every served prediction would use a constant here."
+                )
+        if checked == 0:
+            pytest.skip("no artifact exposed a feature list")
