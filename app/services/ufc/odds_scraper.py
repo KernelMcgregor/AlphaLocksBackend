@@ -14,14 +14,16 @@ from __future__ import annotations
 import argparse
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import func
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models.ufc import UFCEvent, UFCFight, UFCFighter, UFCFightOdds
+from app.models.ufc import (
+    UFCEvent, UFCFight, UFCFighter, UFCFightOdds, UFCFightOddsHistory,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("odds_scraper")
@@ -296,6 +298,13 @@ def run_live_odds_scrape():
     fights_tuples = [(f.id, f.red_fighter_id, f.blue_fighter_id) for f in upcoming_fights]
     log.info(f"  {len(fights_tuples)} upcoming fights in DB")
 
+    # One timestamp for the whole scrape, so every row from this run shares a capture
+    # time and a single observation is one queryable group. Naive UTC to match the rest
+    # of the schema, whose timestamps are DateTime without timezone.
+    captured_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    fight_dates = {f.id: (f.event.date if f.event else None) for f in upcoming_fights}
+    history_rows: list[dict] = []
+
     odds_events = fetch_live_odds(api_key)
     if not odds_events:
         log.info("No odds data returned from API")
@@ -371,11 +380,59 @@ def run_live_odds_scrape():
                     ))
                 total_upserted += 1
 
+                # Append-only history. The upsert above destroys the previous price;
+                # this keeps it. See UFCFightOddsHistory for why that matters.
+                fd = fight_dates.get(fight_id)
+                history_rows.append({
+                    "fight_id": fight_id,
+                    "bookmaker": bm["title"],
+                    "red_odds": red_odds,
+                    "blue_odds": blue_odds,
+                    "red_implied_prob": red_prob_clean,
+                    "blue_implied_prob": blue_prob_clean,
+                    "captured_at": captured_at,
+                    "days_to_fight": ((fd - captured_at.date()).days if fd else None),
+                })
+
             break  # matched this odds_event, next
 
     db.commit()
     log.info(f"  Upserted {total_upserted} odds rows across all bookmakers")
+
+    _record_odds_history(db, history_rows)
     db.close()
+
+
+def _record_odds_history(db, rows: list[dict]) -> None:
+    """Append this scrape's observations to the price history.
+
+    Isolated and defensive on purpose: the history table is a new side effect on a job
+    that already does the useful work of refreshing current odds. A failure here -- a
+    missing table on a database that has not run create_all yet, a constraint collision
+    -- must not roll back or abort the odds refresh the site actually depends on.
+
+    ON CONFLICT DO NOTHING makes re-running a scrape within the same second idempotent
+    rather than an error, while genuinely new observations still append.
+    """
+    if not rows:
+        return
+    try:
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        table = UFCFightOddsHistory.__table__
+        if db.bind.dialect.name == "postgresql":
+            stmt = pg_insert(table).values(rows).on_conflict_do_nothing(
+                index_elements=["fight_id", "bookmaker", "captured_at"]
+            )
+            db.execute(stmt)
+        else:
+            db.execute(table.insert(), rows)
+        db.commit()
+        log.info(f"  Recorded {len(rows)} odds-history snapshots")
+    except Exception as e:
+        db.rollback()
+        log.warning(f"  Odds history not recorded ({e.__class__.__name__}: {e}). "
+                    "Current odds were saved; only the history append failed.")
 
 
 from pathlib import Path

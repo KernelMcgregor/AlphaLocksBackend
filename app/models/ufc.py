@@ -259,6 +259,54 @@ class UFCFightOdds(TimestampMixin, Base):
     fight: Mapped["UFCFight"] = relationship()
 
 
+class UFCFightOddsHistory(Base):
+    """Append-only snapshots of every odds observation, keyed by capture time.
+
+    `UFCFightOdds` is unique on (fight_id, bookmaker) and is UPDATED in place on each
+    scrape, so it holds only the most recent price -- effectively the closing line once
+    a fight is over. Every intermediate observation is overwritten and lost.
+
+    That loss is the binding constraint on this project's ability to measure anything.
+    Without a price history there is no opening line and no line movement, so closing
+    line value cannot be computed, and CLV is the only metric that converges fast enough
+    to evaluate a betting model on a realistic timescale. Its absence is why the
+    pre-registered picks rule needs ~150 settled bets and two seasons to reach a verdict
+    (see PREREGISTRATION.md).
+
+    This table therefore never updates and never deletes: one row per observation. The
+    unique constraint is on the capture time as well, so re-running a scrape within the
+    same second is idempotent while genuinely new observations always append.
+
+    Nothing reads it yet, and that is expected -- the value is entirely in starting the
+    record now, since history cannot be backfilled.
+    """
+
+    __tablename__ = "ufc_fight_odds_history"
+    __table_args__ = (
+        UniqueConstraint("fight_id", "bookmaker", "captured_at"),
+        Index("ix_odds_history_fight_captured", "fight_id", "captured_at"),
+        {"schema": UFC_SCHEMA},
+    )
+
+    # Declared explicitly rather than inherited from TimestampMixin: that mixin brings
+    # an `updated_at` with onupdate=now(), and a column that tracks mutation has no
+    # business on a table whose entire contract is that rows are never mutated.
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, index=True)
+
+    fight_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_fights.id")), index=True)
+    bookmaker: Mapped[str] = mapped_column(String(100))
+    red_odds: Mapped[int] = mapped_column(Integer)
+    blue_odds: Mapped[int] = mapped_column(Integer)
+    red_implied_prob: Mapped[float] = mapped_column(Float)   # normalised, vig removed
+    blue_implied_prob: Mapped[float] = mapped_column(Float)
+    captured_at: Mapped[dt.datetime] = mapped_column(DateTime, index=True)
+
+    #: Days between capture and the fight date, denormalised at write time. The whole
+    #: point of this table is analysing prices as a function of time-to-event, and the
+    #: event date can change after the fact when a bout is rebooked.
+    days_to_fight: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
 class UFCMethodOdds(TimestampMixin, Base):
     __tablename__ = "ufc_method_odds"
     __table_args__ = (
