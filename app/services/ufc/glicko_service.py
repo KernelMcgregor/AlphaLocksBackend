@@ -91,10 +91,10 @@ class GlickoParams:
     sigma_min: float = 60.0
     tau: float = 116.36
     sigma_growth_c: float = 3.0
-    recency_decay: float = 0.461
     inactivity_decay_rate: float = 0.001
-    num_passes: int = 4
-    convergence_threshold: float = 0.5
+    # REMOVED: recency_decay (anti-causal global clock -- see _effective_k),
+    # num_passes and convergence_threshold (never read by _run_glicko, so
+    # tuner.reevaluate_top_trials' "re-evaluate with num_passes=4" was a silent no-op).
     sos_transfer_pct: float = 0.022
     loser_penalty_pct: float = 0.020
     title_mult: float = 1.5
@@ -226,16 +226,6 @@ def _parse_finish_time_seconds(finish_time_str: str | None) -> int:
         return 0
 
 
-def _round_duration_factor(is_finish_round: bool, finish_time_seconds: int,
-                           round_minutes: int) -> float:
-    """
-    Scale K by how much of the round elapsed.
-    Finish rounds get full credit (1.0) — finishing IS the complete round.
-    Non-finish rounds always = 1.0.
-    """
-    return 1.0
-
-
 def _glicko_update_sigma(sigma: float, params: GlickoParams) -> float:
     """Shrink sigma after observing a round."""
     return max(1.0 / math.sqrt(1.0 / (sigma ** 2) + 1.0 / (params.tau ** 2)), params.sigma_min)
@@ -246,18 +236,34 @@ def _glicko_inflate_sigma(sigma: float, days_inactive: float, params: GlickoPara
     return min(math.sqrt(sigma ** 2 + (params.sigma_growth_c ** 2) * days_inactive), params.sigma_init)
 
 
-def _effective_k(k_base: float, sigma: float, recency_years: float,
-                 round_dur_factor: float, params: GlickoParams) -> float:
+def _effective_k(k_base: float, sigma: float, params: GlickoParams) -> float:
     """
-    Combine all K-factor modifiers:
+    Combine K-factor modifiers:
     - Glicko sigma scaling (high uncertainty = bigger moves)
-    - Recency decay (older rounds matter less)
-    - Round duration (finish rounds scale by elapsed time)
+
+    (A `round_dur_factor` argument used to be threaded through here from
+    `_round_duration_factor()`, which unconditionally returned 1.0. Both removed.)
+
+    NO GLOBAL RECENCY TERM. There used to be one:
+
+        recency_scale = exp(-recency_decay * (dataset_last_date - fight_date) / 365.25)
+
+    which is anti-causal — a 2012 fight's update depended on how recent the newest row in
+    the database happened to be, so every rescrape silently changed all historical
+    features. With recency_decay=0.461 a 2012 fight updated at exp(-6.45) ≈ 0.0016 of K
+    while a 2026 fight updated at full K. Ratings therefore sat near zero for a decade and
+    then inflated ~5x (mean `durability` 11.1 in 2012 -> 52.7 in 2026), producing severe
+    artificial covariate shift between the walk-forward training and test windows.
+
+    The legitimate version of "recent form matters more" is per-fighter inactivity, and it
+    runs through sigma, not through a global clock: a fighter returning from a long layoff
+    has a MORE uncertain rating, so their update should be LARGER, not smaller. That is
+    handled by inflating sigma inside the pass (see `_glicko_inflate_sigma` at the top of
+    the fight loop), which then raises K through `glicko_scale` below.
     """
     # Floor at 0.5 so veterans still get at least half of K_BASE
     glicko_scale = 0.5 + 0.5 * (sigma / params.sigma_init)
-    recency_scale = math.exp(-params.recency_decay * recency_years)
-    return k_base * glicko_scale * recency_scale * round_dur_factor
+    return k_base * glicko_scale
 
 
 def _init_ratings(params: GlickoParams):
@@ -485,11 +491,6 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
         key=lambda fid: (fight_map[fid]["date"] or date.min, fid)
     )
 
-    most_recent_date = max(
-        (fight_map[fid]["date"] for fid in sorted_fight_ids if fight_map[fid]["date"]),
-        default=date.today()
-    )
-
     ratings = _init_ratings(params)
 
     fighter_round_count = defaultdict(int)
@@ -534,6 +535,23 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
 
         fighter_weight_class[red_id] = wc
         fighter_weight_class[blue_id] = wc
+
+        # --- INACTIVITY: inflate uncertainty before this fight is scored ---
+        # Read the PREVIOUS fight date before overwriting it. Layoff makes a rating
+        # staler, i.e. more uncertain, which raises K via glicko_scale — the causal
+        # replacement for the global recency term removed from _effective_k().
+        layoff_days = {}
+        for fid in (red_id, blue_id):
+            prev = fighter_last_fight_date.get(fid)
+            layoff_days[fid] = (fight_date - prev).days if (prev and fight_date) else -1
+            if prev and fight_date:
+                days_out = (fight_date - prev).days
+                if days_out > 90:
+                    for dim in DIMENSIONS:
+                        ratings[fid][dim][1] = _glicko_inflate_sigma(
+                            ratings[fid][dim][1], days_out - 90, params
+                        )
+
         fighter_last_fight_date[red_id] = fight_date
         fighter_last_fight_date[blue_id] = fight_date
 
@@ -552,9 +570,20 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
 
         # --- Snapshot pre-fight ratings for ML features ---
         for fid in [red_id, blue_id]:
-            fight_rating_snapshots[(fight_id, fid)] = {
-                d: ratings[fid][d][0] for d in DIMENSIONS
-            }
+            snap = {d: ratings[fid][d][0] for d in DIMENSIONS}
+            # Confidence metadata. Without it the model cannot tell a rating built on 40
+            # rounds from one built on 2, despite 17.8% of fighter-fight rows being debuts
+            # and 53.6% of fighters having 3 or fewer career fights. `_meta_` prefixed so
+            # the DIMENSIONS loop that consumes this dict elsewhere is unaffected.
+            snap["_meta_sigma"] = sum(
+                ratings[fid][d][1] for d in DIMENSIONS
+            ) / len(DIMENSIONS)
+            snap["_meta_rounds_seen"] = float(fighter_round_count.get(fid, 0))
+            snap["_meta_fights_seen"] = float(fighter_fight_count.get(fid, 0))
+            # Captured before fighter_last_fight_date was overwritten above; reading it
+            # here would always yield 0. -1 marks a debut.
+            snap["_meta_days_since"] = float(layoff_days.get(fid, -1))
+            fight_rating_snapshots[(fight_id, fid)] = snap
 
         # --- COMBAT AGE factors ---
         red_fi = fighter_info.get(red_id)
@@ -570,11 +599,6 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
         red_composite = sum(_get_mu(ratings, red_id, d) for d in DIMENSIONS)
         blue_composite = sum(_get_mu(ratings, blue_id, d) for d in DIMENSIONS)
 
-        # --- RECENCY ---
-        recency_years = 0.0
-        if fight_date and most_recent_date:
-            recency_years = max((most_recent_date - fight_date).days / 365.25, 0.0)
-
         for rnd_num in sorted(round_data.keys()):
             stats = round_data[rnd_num]
             if red_id not in stats or blue_id not in stats:
@@ -588,16 +612,11 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
             is_sub_finish = is_finish_round and "Sub" in method
             is_last_round = is_finish_round or (rnd_num == max(round_data.keys()))
 
-            rdf = _round_duration_factor(
-                is_finish_round, fight["finish_time_seconds"],
-                fight["round_minutes"]
-            )
-
             red_avg_sigma = sum(_get_sigma(ratings, red_id, d) for d in DIMENSIONS) / len(DIMENSIONS)
             blue_avg_sigma = sum(_get_sigma(ratings, blue_id, d) for d in DIMENSIONS) / len(DIMENSIONS)
 
-            K_red = _effective_k(params.k_base, red_avg_sigma, recency_years, rdf, params)
-            K_blue = _effective_k(params.k_base, blue_avg_sigma, recency_years, rdf, params)
+            K_red = _effective_k(params.k_base, red_avg_sigma, params)
+            K_blue = _effective_k(params.k_base, blue_avg_sigma, params)
 
             r_mu = lambda d: _get_mu(ratings, red_id, d)
             b_mu = lambda d: _get_mu(ratings, blue_id, d)
@@ -761,43 +780,42 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
                 _update_rating(ratings, red_id, "str_vol", sv_r, red_age_factor, params)
                 _update_rating(ratings, blue_id, "str_vol", sv_b, blue_age_factor, params)
 
-            # --- STR_ACC (opponent-relative) ---
+            # --- STR_ACC / STR_DEF (pair-relative shares) ---
+            # These compared an ABSOLUTE quantity against an expectation centred at 0.5:
+            # accuracy averages ~0.45 league-wide (so every fighter drifted down) and
+            # `1 - opp_acc` ~0.55 (drifted up), at a rate set purely by how often they
+            # fought. DURABILITY below was the worst case (~1.0 vs 0.5). Once the recency
+            # fix removed the K damping that had been hiding this, `durability` correlated
+            # +0.92 with a fighter's number of prior fights -- a fight counter, not a skill.
+            #
+            # Fix: use the pair-relative SHARE, exactly as STR_VOL/DIST/CLINCH/GND already
+            # do. A share is 0.5 when the two fighters are equal, so it centres on the
+            # expectation and the paired updates are zero-sum.
             if r["sig_str_attempted"] > 0 and b["sig_str_attempted"] > 0:
                 red_acc = r["sig_str_landed"] / r["sig_str_attempted"]
                 blue_acc = b["sig_str_landed"] / b["sig_str_attempted"]
-                exp_acc_r = _elo_expected(r_mu("str_acc"), b_mu("str_acc"))
-                exp_acc_b = _elo_expected(b_mu("str_acc"), r_mu("str_acc"))
-                sa_r = K_red * (red_acc - exp_acc_r)
-                sa_b = K_blue * (blue_acc - exp_acc_b)
-                _update_rating(ratings, red_id, "str_acc", sa_r, red_age_factor, params)
-                _update_rating(ratings, blue_id, "str_acc", sa_b, blue_age_factor, params)
-            elif r["sig_str_attempted"] > 0:
-                red_acc = r["sig_str_landed"] / r["sig_str_attempted"]
-                exp_acc_r = _elo_expected(r_mu("str_acc"), b_mu("str_acc"))
-                sa_r = K_red * (red_acc - exp_acc_r)
-                _update_rating(ratings, red_id, "str_acc", sa_r, red_age_factor, params)
-            elif b["sig_str_attempted"] > 0:
-                blue_acc = b["sig_str_landed"] / b["sig_str_attempted"]
-                exp_acc_b = _elo_expected(b_mu("str_acc"), r_mu("str_acc"))
-                sa_b = K_blue * (blue_acc - exp_acc_b)
-                _update_rating(ratings, blue_id, "str_acc", sa_b, blue_age_factor, params)
 
-            # --- STR_DEF (striking defense — opponent-relative, mirrors str_acc) ---
-            if b["sig_str_attempted"] > 0 and r["sig_str_attempted"] > 0:
-                red_def = 1.0 - (b["sig_str_landed"] / b["sig_str_attempted"])
-                blue_def = 1.0 - (r["sig_str_landed"] / r["sig_str_attempted"])
-                exp_def_r = _elo_expected(r_mu("str_def"), b_mu("str_def"))
-                exp_def_b = _elo_expected(b_mu("str_def"), r_mu("str_def"))
-                _update_rating(ratings, red_id, "str_def", K_red * (red_def - exp_def_r), red_age_factor, params)
-                _update_rating(ratings, blue_id, "str_def", K_blue * (blue_def - exp_def_b), blue_age_factor, params)
-            elif b["sig_str_attempted"] > 0:
-                red_def = 1.0 - (b["sig_str_landed"] / b["sig_str_attempted"])
-                exp_def_r = _elo_expected(r_mu("str_def"), b_mu("str_def"))
-                _update_rating(ratings, red_id, "str_def", K_red * (red_def - exp_def_r), red_age_factor, params)
-            elif r["sig_str_attempted"] > 0:
-                blue_def = 1.0 - (r["sig_str_landed"] / r["sig_str_attempted"])
-                exp_def_b = _elo_expected(b_mu("str_def"), r_mu("str_def"))
-                _update_rating(ratings, blue_id, "str_def", K_blue * (blue_def - exp_def_b), blue_age_factor, params)
+                denom = red_acc + blue_acc
+                if denom > 0:
+                    red_acc_share = red_acc / denom
+                    exp_acc = _elo_expected(r_mu("str_acc"), b_mu("str_acc"))
+                    _update_rating(ratings, red_id, "str_acc",
+                                   K_red * (red_acc_share - exp_acc), red_age_factor, params)
+                    _update_rating(ratings, blue_id, "str_acc",
+                                   K_blue * ((1 - red_acc_share) - (1 - exp_acc)),
+                                   blue_age_factor, params)
+
+                # Defence is the complement of the opponent's accuracy.
+                red_def, blue_def = 1.0 - blue_acc, 1.0 - red_acc
+                denom = red_def + blue_def
+                if denom > 0:
+                    red_def_share = red_def / denom
+                    exp_def = _elo_expected(r_mu("str_def"), b_mu("str_def"))
+                    _update_rating(ratings, red_id, "str_def",
+                                   K_red * (red_def_share - exp_def), red_age_factor, params)
+                    _update_rating(ratings, blue_id, "str_def",
+                                   K_blue * ((1 - red_def_share) - (1 - exp_def)),
+                                   blue_age_factor, params)
 
             # --- DIST ---
             total_dist = r["distance_landed"] + b["distance_landed"]
@@ -835,17 +853,23 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
                 _update_rating(ratings, red_id, "gnd", K_gnd * (red_gnd_share - exp_gnd), red_age_factor, params)
                 _update_rating(ratings, blue_id, "gnd", K_gnd_b * ((1 - red_gnd_share) - (1 - exp_gnd)), blue_age_factor, params)
 
-            # --- DURABILITY (absorption resilience) ---
+            # --- DURABILITY (pair-relative share of absorption resilience) ---
+            # `1 - kd_absorbed/opp_strikes` is ~1.0 in nearly every round, so against an
+            # expectation centred at 0.5 BOTH fighters gained ~+0.5*K every round forever.
             K_dur = K_red * params.k_mult_dur
             K_dur_b = K_blue * params.k_mult_dur
-            if b["sig_str_landed"] > 0:
+            if b["sig_str_landed"] > 0 and r["sig_str_landed"] > 0:
                 red_durability = 1.0 - min(b["kd"], 3) / max(b["sig_str_landed"], 1)
-                exp_dur_r = _elo_expected(r_mu("durability"), b_mu("durability"))
-                _update_rating(ratings, red_id, "durability", K_dur * (red_durability - exp_dur_r), red_age_factor, params)
-            if r["sig_str_landed"] > 0:
                 blue_durability = 1.0 - min(r["kd"], 3) / max(r["sig_str_landed"], 1)
-                exp_dur_b = _elo_expected(b_mu("durability"), r_mu("durability"))
-                _update_rating(ratings, blue_id, "durability", K_dur_b * (blue_durability - exp_dur_b), blue_age_factor, params)
+                denom = red_durability + blue_durability
+                if denom > 0:
+                    red_dur_share = red_durability / denom
+                    exp_dur = _elo_expected(r_mu("durability"), b_mu("durability"))
+                    _update_rating(ratings, red_id, "durability",
+                                   K_dur * (red_dur_share - exp_dur), red_age_factor, params)
+                    _update_rating(ratings, blue_id, "durability",
+                                   K_dur_b * ((1 - red_dur_share) - (1 - exp_dur)),
+                                   blue_age_factor, params)
 
             fighter_round_count[red_id] += 1
             fighter_round_count[blue_id] += 1

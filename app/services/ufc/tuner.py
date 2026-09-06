@@ -153,12 +153,14 @@ def create_objective(cached: CachedData, tune_glicko: bool = True,
         if tune_glicko:
             glicko_kwargs = {
                 "k_base": trial.suggest_float("k_base", 20, 60),
-                "recency_decay": trial.suggest_float("recency_decay", 0.1, 0.5),
                 "sigma_init": trial.suggest_float("sigma_init", 250, 450),
-                "tau": trial.suggest_float("tau", 100, 250),
+                "tau": trial.suggest_float("tau", 100, 400),
+                # sigma used to floor after ~4 updates (i.e. inside a fighter's debut),
+                # making it a one-fight warm-up rather than an uncertainty model. Now
+                # that inactivity re-inflates it, the floor is a real knob.
+                "sigma_min": trial.suggest_float("sigma_min", 20, 200),
                 "sos_transfer_pct": trial.suggest_float("sos_transfer_pct", 0.02, 0.15),
                 "loser_penalty_pct": trial.suggest_float("loser_penalty_pct", 0.01, 0.10),
-                "num_passes": 2,  # speed: 2 passes during tuning
             }
             # Tier 2 params after trial 80
             if trial.number >= 80:
@@ -169,7 +171,7 @@ def create_objective(cached: CachedData, tune_glicko: bool = True,
                 glicko_kwargs["decision_ud"] = trial.suggest_float("decision_ud", 0.75, 1.0)
             params = GlickoParams(**glicko_kwargs)
         else:
-            params = GlickoParams(num_passes=2)
+            params = GlickoParams()
 
         # --- Sample GBT params ---
         if tune_gbt:
@@ -230,7 +232,6 @@ def create_objective(cached: CachedData, tune_glicko: bool = True,
                 glicko_str = ""
                 if tune_glicko:
                     glicko_str = (f"k={p.get('k_base', 40):.0f} "
-                                  f"decay={p.get('recency_decay', 0.3):.2f} "
                                   f"sigma={p.get('sigma_init', 350):.0f} "
                                   f"tau={p.get('tau', 180):.0f} "
                                   f"sos={p.get('sos_transfer_pct', 0.08):.3f}")
@@ -276,10 +277,9 @@ def reevaluate_top_trials(study: optuna.Study, cached: CachedData,
         # Reconstruct params with 4 passes
         if tune_glicko:
             glicko_kwargs = {k: v for k, v in p.items() if not k.startswith("gbt_")}
-            glicko_kwargs["num_passes"] = 4
             params = GlickoParams(**glicko_kwargs)
         else:
-            params = GlickoParams(num_passes=4)
+            params = GlickoParams()
 
         if tune_gbt:
             gbt_params = {

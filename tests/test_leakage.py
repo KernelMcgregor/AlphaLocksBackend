@@ -575,3 +575,100 @@ class TestDamageAndMovementSemantics:
         assert out[2] != 0.0, "the KO fight itself must not see its own result"
         assert out[3] == 0.0, "the next fight is 0 fights since the KO loss"
         assert out[4] == 1.0
+
+
+class TestGlickoRecencyCausality:
+    """The anti-causal recency decay, and the drift it caused.
+
+    `recency_years` was measured from the LAST DATE IN THE DATASET, so a 2012 fight's
+    rating update depended on how recent the newest row happened to be. Every rescrape
+    silently changed all historical features, and because decay was exp(-0.461*years),
+    a 2012 fight updated at ~0.0016 of K while a 2026 fight updated at full K. Ratings
+    sat near zero for a decade then inflated ~5x (mean durability 11.1 -> 52.7),
+    creating artificial covariate shift between training and test folds.
+    """
+
+    def test_effective_k_has_no_global_clock_term(self):
+        """_effective_k must depend only on the rating's own uncertainty."""
+        import inspect
+        from app.services.ufc.glicko_service import _effective_k
+
+        sig = inspect.signature(_effective_k)
+        assert "recency_years" not in sig.parameters, (
+            "a global recency term is back in _effective_k; it is anti-causal"
+        )
+
+    def test_k_rises_with_uncertainty(self):
+        """Glicko's actual rule: a more uncertain rating should move MORE, not less.
+
+        The removed recency term had the opposite sign for returning fighters.
+        """
+        from app.services.ufc.glicko_service import GlickoParams, _effective_k
+
+        p = GlickoParams()
+        k_certain = _effective_k(p.k_base, p.sigma_min, p)
+        k_uncertain = _effective_k(p.k_base, p.sigma_init, p)
+        assert k_uncertain > k_certain
+
+    def test_dead_parameters_are_gone(self):
+        """num_passes/convergence_threshold were never read, which made
+        tuner.reevaluate_top_trials' 'now with num_passes=4' a silent no-op."""
+        from app.services.ufc.glicko_service import GlickoParams
+
+        fields = GlickoParams().__dict__
+        for dead in ("recency_decay", "num_passes", "convergence_threshold"):
+            assert dead not in fields, f"{dead} is dead but still declared"
+
+
+class TestDecorrelationLoss:
+    """Hubacek & Sir Equation 59, and why it is not a correlation penalty."""
+
+    def test_equation_59_optimum_pushes_away_from_the_market(self):
+        """d/dt[(t-r)^2 + g(t-r)(m-r)] = 0  =>  t = r - g(m-r)/2.
+
+        The optimum is the TRUTH, displaced away from the market in proportion to the
+        market's own error — which is what makes the objective convex and anchored.
+        """
+        r, m, g = 1.0, 0.7, 0.4
+        loss = lambda t: (t - r) ** 2 + g * (t - r) * (m - r)
+        analytic = r - g * (m - r) / 2
+        grid = np.linspace(-1, 3, 40001)
+        assert grid[np.argmin([loss(t) for t in grid])] == pytest.approx(analytic, abs=1e-3)
+        assert analytic > r, "penalty should push past the truth, away from the market"
+
+    def test_gamma_zero_is_plain_squared_error(self):
+        from app.services.ufc.decorrelated import DecorrelatedModel
+
+        rng = np.random.default_rng(0)
+        X = rng.normal(size=(400, 6))
+        y = (rng.random(400) < 0.5).astype(float)
+        mkt = rng.uniform(0.2, 0.8, 400)
+        a = DecorrelatedModel(gamma=0.0, epochs=8, seed=7).fit(X, y, mkt)
+        b = DecorrelatedModel(gamma=0.0, epochs=8, seed=7).fit(X, y, np.full(400, 0.9))
+        # With gamma=0 the market is ignored entirely, so a different market must not
+        # change a single prediction.
+        np.testing.assert_allclose(a.predict_proba(X), b.predict_proba(X), atol=1e-6)
+
+    def test_penalty_needs_the_realised_outcome(self):
+        """Eq. 59 uses (t-r)(m-r), so it is a TRAINING-time term only. Inference must
+        not require the market or the outcome."""
+        from app.services.ufc.decorrelated import DecorrelatedModel
+
+        rng = np.random.default_rng(1)
+        X = rng.normal(size=(300, 5))
+        m = DecorrelatedModel(gamma=0.5, epochs=5, seed=3).fit(
+            X, (rng.random(300) < 0.5).astype(float), rng.uniform(0.3, 0.7, 300))
+        p = m.predict_proba(rng.normal(size=(10, 5)))   # no market, no outcome
+        assert p.shape == (10,) and np.all((p >= 0) & (p <= 1))
+
+    def test_unpriced_rows_do_not_break_training(self):
+        from app.services.ufc.decorrelated import DecorrelatedModel
+
+        rng = np.random.default_rng(2)
+        X = rng.normal(size=(400, 5))
+        y = (rng.random(400) < 0.5).astype(float)
+        mkt = rng.uniform(0.2, 0.8, 400)
+        mkt[:300] = np.nan            # most fights unpriced, as in the real data
+        p = DecorrelatedModel(gamma=1.0, epochs=8, seed=4).fit(
+            X, y, mkt).predict_proba(X)
+        assert np.all(np.isfinite(p))

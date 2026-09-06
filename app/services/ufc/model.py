@@ -42,7 +42,9 @@ from sklearn.metrics import (
 from sklearn.preprocessing import StandardScaler
 
 from app.database import SessionLocal
-from app.services.ufc.market_anchor import MarketAnchor, devig
+from app.services.ufc.market_anchor import MarketAnchor, devig, logit
+from app.services.ufc.decorrelated import DecorrelatedModel
+from app.services.ufc.glicko_service import run_glicko_inmemory
 from app.services.ufc.simulator import (
     HazardRateModel, attach_fit_targets, build_simulator_frame, simulate,
 )
@@ -673,12 +675,33 @@ def build_features(
                 ).get(d, 0.0),
                 axis=1,
             )
-        log.info(f"  Added {len(GLICKO_DIMS)} Glicko features")
+
+        # Rating CONFIDENCE, not just the rating. Without these the model treats a
+        # rating built on 40 rounds identically to one built on 2, even though 17.8% of
+        # fighter-fight rows are debuts and 53.6% of fighters have <=3 career fights.
+        # Present only when snapshots come from run_glicko_inmemory(); stored DB rows
+        # predate them, so default to a "no information" sentinel.
+        meta_defaults = {"_meta_sigma": 0.0, "_meta_rounds_seen": 0.0,
+                         "_meta_fights_seen": 0.0, "_meta_days_since": -1.0}
+        any_meta = any("_meta_sigma" in v for v in glicko_snapshots.values())
+        for key, default in meta_defaults.items():
+            df[f"glicko{key}"] = df.apply(
+                lambda r, k=key, dflt=default: glicko_snapshots.get(
+                    (r["fight_id"], r["stats_fighter_id"]), {}
+                ).get(k, dflt),
+                axis=1,
+            )
+        log.info(f"  Added {len(GLICKO_DIMS)} Glicko features"
+                 + ("  + 4 confidence features" if any_meta
+                    else "  (no confidence metadata in these snapshots)"))
     except Exception as e:
         log.warning(f"  Could not load Glicko features: {e}")
         from app.services.ufc.glicko_service import DIMENSIONS as GLICKO_DIMS
         for dim in GLICKO_DIMS:
             df[f"glicko_{dim}"] = 0.0
+        for k, dflt in (("_meta_sigma", 0.0), ("_meta_rounds_seen", 0.0),
+                        ("_meta_fights_seen", 0.0), ("_meta_days_since", -1.0)):
+            df[f"glicko{k}"] = dflt
 
     # --- Elo-adjusted stats: multiply per-5 rates by (opp_elo / 1500) ---
     log.info("  Computing Elo-adjusted stats...")
@@ -2127,12 +2150,41 @@ def betting_simulation(cal_results: dict) -> None:
 # Frozen BEFORE scoring. Report every rung; never quote the best cell as the headline.
 FROZEN_EDGE_THRESHOLDS = (0.03, 0.05, 0.08, 0.10, 0.15)
 # Weakest feature set first, so the floor is read before the headline.
-ARM_ORDER = ("no_odds_no_glicko", "no_odds", "simulator", "with_odds", "market_anchored")
+ARM_ORDER = ("no_odds_no_glicko", "no_odds", "simulator", "with_odds",
+             "market_anchored", "decorrelated")
+
+# Frozen BEFORE running. gamma=0 is the undecorrelated control, so the sweep contains
+# its own baseline. Selected per fold on INNER-window ROI, never on the reported eval.
+DECORR_GAMMAS = (0.0, 0.1, 0.25, 0.5, 1.0, 2.0)
 # The anchored arm corrects this arm's predictions toward/away from the line. It must
 # be a NO-ODDS arm: anchoring a model that already contains the market price would
 # double-count the line.
 ANCHOR_BASE_ARM = "no_odds"
 FLAT_STAKE = 100.0
+
+
+def market_correlation(model_p: np.ndarray, market_p: np.ndarray,
+                      y: np.ndarray | None = None) -> tuple[float, float]:
+    """Correlation between a model's log-odds and the market's, raw and partialled on
+    the realised outcome.
+
+    Hubacek & Sir (Int. J. Forecasting 2022) prove that a bettor whose estimates coincide
+    with the market's has EXACTLY ZERO profitability regardless of how accurate either is
+    — their Example 3.3. Profit requires the market to err and the model to err in the
+    opposite direction, which is impossible when the two agree. So this number, not
+    accuracy, is what determines whether an edge can exist at all.
+
+    The partial correlation conditions on the outcome, isolating agreement that is NOT
+    explained by both simply being right.
+    """
+    lt, lm = logit(model_p), logit(market_p)
+    raw = float(np.corrcoef(lt, lm)[0, 1])
+    if y is None or len(np.unique(y)) < 2:
+        return raw, float("nan")
+    yy = np.asarray(y, dtype=float)
+    rt = lt - np.polyval(np.polyfit(yy, lt, 1), yy)
+    rm = lm - np.polyval(np.polyfit(yy, lm, 1), yy)
+    return raw, float(np.corrcoef(rt, rm)[0, 1])
 
 
 def _bootstrap_ci(values: np.ndarray, stat=np.mean, n_boot: int = 2000,
@@ -2438,6 +2490,87 @@ def walk_forward_eval(
         log.info(f"    predicted mix {np.round(method_block['predicted_mix'], 3)}  "
                  f"actual {np.round(method_block['actual_mix'], 3)}")
 
+    # --- Decorrelated arm (Hubacek & Sir Eq. 59) ---
+    # Trained on the full feature set INCLUDING odds: the controlled trade needs a
+    # high-accuracy starting point. gamma is chosen per fold by flat-stake ROI on an
+    # inner validation window carved from training, so the reported eval never
+    # participates in selection.
+    log.info("\n" + "-" * 60)
+    log.info("ARM: decorrelated (market-decorrelation penalty)")
+    log.info("-" * 60)
+
+    dec_proba, dec_gammas = [], []
+    arm_features = arms["with_odds"]
+
+    for k in range(n_folds):
+        lo, hi = bounds[k], bounds[k + 1]
+        if hi <= lo:
+            continue
+        train_mask = np.zeros(n, dtype=bool)
+        train_mask[:lo] = True
+        fold_df, _ = _fillna_from_train(matchup, arm_features, train_mask)
+        selected = select_winner_features(fold_df, arm_features, train_mask,
+                                          top_n=top_n, include_odds=True, verbose=False)
+
+        train_df, test_df = fold_df.iloc[:lo], fold_df.iloc[lo:hi]
+        inner = int(len(train_df) * 0.8)
+        itr, iva = train_df.iloc[:inner], train_df.iloc[inner:]
+
+        def _mkt(d):
+            m = devig(d["odds_red_prob"].values, d["odds_blue_prob"].values)
+            return np.where(d["odds_red_prob"].notna().values, m, np.nan)
+
+        best_g, best_roi = 0.0, -np.inf
+        for g in DECORR_GAMMAS:
+            mdl = DecorrelatedModel(gamma=g, seed=42).fit(
+                itr[selected].values, itr["red_wins"].values, _mkt(itr),
+                iva[selected].values, iva["red_wins"].values, _mkt(iva),
+            )
+            pv = mdl.predict_proba(iva[selected].values)
+            mv = _mkt(iva)
+            ok = np.isfinite(mv)
+            if ok.sum() < 50:
+                continue
+            # Flat stakes: the decorrelation result exists only under uniform staking.
+            ladder = _betting_ladder(
+                pv[ok], iva["red_wins"].values[ok],
+                np.array([_american_to_decimal(o) for o in iva["odds_red_american"].values[ok]]),
+                np.array([_american_to_decimal(o) for o in iva["odds_blue_american"].values[ok]]),
+                mv[ok], 1 - mv[ok],
+            )
+            rois = [r["roi_pct"] for r in ladder if r["bets"] >= 25 and np.isfinite(r["roi_pct"])]
+            roi = float(np.mean(rois)) if rois else -np.inf
+            if roi > best_roi:
+                best_roi, best_g = roi, g
+
+        mdl = DecorrelatedModel(gamma=best_g, seed=42).fit(
+            train_df[selected].values, train_df["red_wins"].values, _mkt(train_df),
+            iva[selected].values, iva["red_wins"].values, _mkt(iva),
+        )
+        dec_proba.append(mdl.predict_proba(test_df[selected].values))
+        dec_gammas.append(best_g)
+        log.info(f"  Fold {k+1}/{n_folds}  train={lo:>5}  test={hi-lo:>4}  "
+                 f"gamma={best_g:<4} inner_roi={best_roi:+.2f}%")
+
+    if dec_proba:
+        dp = np.concatenate(dec_proba)
+        dy = results[ANCHOR_BASE_ARM]["_y"]
+        correct = (dp >= 0.5).astype(int) == dy
+        d_lo, d_hi = _bootstrap_ci(correct.astype(float))
+        results["decorrelated"] = {
+            "gammas_by_fold": dec_gammas,
+            "n_eval": int(len(dy)),
+            "accuracy": float(correct.mean()),
+            "accuracy_ci95": [d_lo, d_hi],
+            "auc": float(roc_auc_score(dy, dp)),
+            "log_loss": float(log_loss(dy, np.clip(dp, 1e-6, 1 - 1e-6), labels=[0, 1])),
+            "brier": float(brier_score_loss(dy, dp)),
+            "brier_calibrated": float(brier_score_loss(dy, dp)),
+            "_proba": dp, "_cal_proba": dp,
+            "_y": dy, "_idx": results[ANCHOR_BASE_ARM]["_idx"],
+        }
+        log.info(f"  gamma per fold: {dec_gammas}")
+
     # --- Market-anchored arm, assembled from the per-fold anchors above ---
     if all_anchored:
         base = results[ANCHOR_BASE_ARM]
@@ -2510,11 +2643,12 @@ def walk_forward_eval(
         log.info(f"  Eval fights with odds: {has_odds.sum()} "
                  f"({odds_df['date'].min()} → {odds_df['date'].max()})")
         log.info(f"  Average vig: {market_block['avg_vig']:.3f}")
-        log.info(f"\n  {'Arm':<20s} {'Acc':>8s} {'95% CI':>18s} {'AUC':>8s} {'Brier':>8s}")
-        log.info(f"  {'-'*66}")
+        log.info(f"\n  {'Arm':<20s} {'Acc':>8s} {'95% CI':>18s} {'AUC':>8s} "
+                 f"{'Brier':>8s} {'corr(mkt)':>10s} {'partial':>9s}")
+        log.info(f"  {'-'*88}")
         log.info(f"  {'market only':<20s} {market_block['accuracy']:>8.4f} "
                  f"{f'[{m_lo:.3f}, {m_hi:.3f}]':>18s} {'—':>8s} "
-                 f"{market_block['brier']:>8.4f}")
+                 f"{market_block['brier']:>8.4f} {'1.000':>10s} {'1.000':>9s}")
 
         for arm_name in [a for a in ARM_ORDER if a in results]:
             arm = results[arm_name]
@@ -2522,6 +2656,7 @@ def walk_forward_eval(
             pc = arm["_cal_proba"][has_odds]
             c = (p >= 0.5).astype(int) == y_odds
             lo_, hi_ = _bootstrap_ci(c.astype(float))
+            corr_raw, corr_par = market_correlation(pc, market_red_fair, y_odds)
 
             # Paired bootstrap on the accuracy DIFFERENCE vs the market, same fights.
             diff = c.astype(float) - market_correct.astype(float)
@@ -2532,6 +2667,8 @@ def walk_forward_eval(
                 "accuracy": float(c.mean()),
                 "accuracy_ci95": [lo_, hi_],
                 "auc": float(roc_auc_score(y_odds, p)),
+                "corr_market": corr_raw,
+                "corr_market_partial": corr_par,
                 "brier": float(brier_score_loss(y_odds, p)),
                 "brier_calibrated": float(brier_score_loss(y_odds, pc)),
                 "acc_minus_market": float(diff.mean()),
@@ -2543,7 +2680,8 @@ def walk_forward_eval(
             }
             log.info(f"  {arm_name:<20s} {c.mean():>8.4f} "
                      f"{f'[{lo_:.3f}, {hi_:.3f}]':>18s} "
-                     f"{arm['odds_subset']['auc']:>8.4f} {arm['odds_subset']['brier']:>8.4f}")
+                     f"{arm['odds_subset']['auc']:>8.4f} {arm['odds_subset']['brier']:>8.4f} "
+                     f"{corr_raw:>10.3f} {corr_par:>9.3f}")
 
         log.info(f"\n  {'Arm':<20s} {'Acc − market':>14s} {'95% CI of diff':>22s} {'Beats mkt?':>12s}")
         log.info(f"  {'-'*72}")
@@ -2700,22 +2838,109 @@ def run(phases=None, walk_forward=False, n_folds=8, fresh_glicko=False):
     log.info("=" * 60)
 
 
+def train_mlp(fresh_glicko: bool = True, gamma: float = 0.0,
+              val_frac: float = 0.15) -> dict:
+    """Fit the MLP on ALL available fights and persist it for serving.
+
+    The ablation (scripts/ablate_decorrelation.py, 5 seeds) found gamma=0 best on every
+    metric -- accuracy, Brier and ROI all degrade monotonically as gamma rises -- so the
+    decorrelation penalty is off by default. What survived is the LEARNER: a small MLP
+    minimising squared error rather than a GBT minimising log loss. It is slightly less
+    accurate than the GBT (66.2% vs 67.9%) but agrees with the market less (0.76 vs 0.82),
+    and it is the only configuration with a positive backtested ROI.
+
+    Trained on everything up to today. The last `val_frac` of fights (chronologically) is
+    held out purely for early stopping -- it is NOT a performance estimate. For that, use
+    `--walk-forward`.
+    """
+    log.info("=" * 60)
+    log.info(f"TRAINING MLP FOR SERVING (gamma={gamma})")
+    log.info("=" * 60)
+
+    snaps = run_glicko_inmemory() if fresh_glicko else None
+    if fresh_glicko:
+        log.info(f"  Recomputed {len(snaps)} Glicko snapshots (fixed newcomer seed)")
+
+    df, round_data = load_fight_data()
+    probe = build_matchup_df(build_features(df.copy(), round_data.copy(),
+                                            glicko_snapshots=snaps))[0]
+    cutoff = probe.sort_values("date")["date"].iloc[int(len(probe) * 0.6)]
+    df = build_features(df, round_data, style_cutoff_date=cutoff, glicko_snapshots=snaps)
+    matchup, features = build_matchup_df(df)
+    matchup = matchup.sort_values("date").reset_index()
+
+    # Only decided fights can train
+    matchup = matchup[matchup["red_wins"].notna()].reset_index(drop=True)
+    n = len(matchup)
+    cut = int(n * (1 - val_frac))
+    train_mask = np.zeros(n, dtype=bool)
+    train_mask[:cut] = True
+
+    matchup, train_means = _fillna_from_train(matchup, features, train_mask)
+    selected = select_winner_features(matchup, features, train_mask,
+                                      top_n=39, include_odds=True)
+
+    tr, va = matchup.iloc[:cut], matchup.iloc[cut:]
+
+    def _mkt(d):
+        m = devig(d["odds_red_prob"].values, d["odds_blue_prob"].values)
+        return np.where(d["odds_red_prob"].notna().values, m, np.nan)
+
+    log.info(f"  Train {len(tr)} ({tr['date'].min()} to {tr['date'].max()})")
+    log.info(f"  Early-stopping holdout {len(va)} (NOT a performance estimate)")
+    log.info(f"  Features: {len(selected)}")
+
+    mdl = DecorrelatedModel(gamma=gamma, seed=42).fit(
+        tr[selected].values, tr["red_wins"].values, _mkt(tr),
+        va[selected].values, va["red_wins"].values, _mkt(va),
+    )
+
+    pv = mdl.predict_proba(va[selected].values)
+    yv = va["red_wins"].values
+    log.info(f"  Holdout acc={accuracy_score(yv, (pv >= 0.5).astype(int)):.4f} "
+             f"brier={brier_score_loss(yv, pv):.4f} (early-stopping set; optimistic)")
+
+    path = MODEL_DIR / "mlp_v1.pkl"
+    mdl.save(path, selected, train_means)
+    log.info(f"  Saved to {path}")
+    return {"model": mdl, "features": selected, "path": path}
+
+
 def generate_predictions():
     """Run the calibrated model on all fights and store predictions in DB."""
     log.info("=" * 60)
     log.info("GENERATING PREDICTIONS FOR ALL FIGHTS")
     log.info("=" * 60)
 
-    # Load calibrated model
+    # Prefer the MLP if it has been trained. The ablation (5 seeds, identical folds)
+    # found it the only configuration with a positive backtested ROI (+2.5% at the 15%
+    # edge rung vs -7% for the GBT), despite being slightly LESS accurate (66.2% vs
+    # 67.9%). It agrees with the market less (corr 0.76 vs 0.82), and agreeing with the
+    # market is worth exactly zero.
+    mlp_path = MODEL_DIR / "mlp_v1.pkl"
     cal_path = MODEL_DIR / "calibrated_model.pkl"
-    if not cal_path.exists():
-        raise FileNotFoundError(f"No calibrated model at {cal_path}. Run training first.")
 
-    with open(cal_path, "rb") as f:
-        cal = pickle.load(f)
-
-    base_model = cal["base_model"]
-    features = cal["features"]
+    if mlp_path.exists():
+        base_model, meta = DecorrelatedModel.load(mlp_path)
+        features = meta["features"]
+        train_means = meta["train_means"]
+        model_kind = "mlp"
+        log.info(f"  Loaded MLP from {mlp_path} ({len(features)} features, "
+                 f"gamma={meta['gamma']})")
+    elif cal_path.exists():
+        with open(cal_path, "rb") as f:
+            cal = pickle.load(f)
+        base_model = cal["base_model"]
+        features = cal["features"]
+        train_means = cal.get("train_means")
+        model_kind = "gbt"
+        log.info(f"  Loaded GBT from {cal_path} ({len(features)} features)")
+        log.warning("  No mlp_v1.pkl found — serving the GBT. Run --train-mlp for the "
+                    "model the ablation selected.")
+    else:
+        raise FileNotFoundError(
+            f"No model found. Run `--train-mlp` (preferred) or `--phase 1`."
+        )
 
     # Build features for all fights
     df, round_data = load_fight_data()
@@ -2889,10 +3114,9 @@ def generate_predictions():
         if feat not in matchup.columns:
             matchup[feat] = np.nan
 
-    # Impute with the SAME constants training used. `train_means` is persisted by
-    # train_gbt(); older artifacts predate it, so fall back with a loud warning rather
-    # than silently serving on a different imputation basis than the model was fit on.
-    train_means = cal.get("train_means")
+    # Impute with the SAME constants training used. `train_means` was read from
+    # whichever artifact was loaded above (MLP or GBT) — do NOT re-read `cal` here, it
+    # does not exist on the MLP path.
     if train_means is None:
         log.warning(
             "  Model artifact has no persisted train_means (pre-v4). Falling back to "
@@ -2903,24 +3127,60 @@ def generate_predictions():
         matchup[features] = matchup[features].fillna(train_means).fillna(0.0)
 
     X = matchup[features].values
-    raw_proba = base_model.predict_proba(X)[:, 1]
+    if model_kind == "mlp":
+        raw_proba = base_model.predict_proba(X)
+    else:
+        raw_proba = base_model.predict_proba(X)[:, 1]
 
     # Use raw GBT probabilities for all-fights predictions (frontend display).
     # Calibrated model (VA) is saved separately for future picks/betting page.
     cal_proba = raw_proba
     va_low = None
     va_high = None
-    log.info(f"  Using raw GBT probabilities for {len(raw_proba)} predictions")
-    log.info(f"  (Calibrated model saved separately for future picks page)")
+    log.info(f"  Using raw {model_kind.upper()} probabilities for {len(raw_proba)} "
+             f"predictions (uncalibrated)")
 
     # Compute SHAP values for the GBT model
     import shap
     log.info("Computing SHAP values...")
-    explainer = shap.TreeExplainer(base_model)
-    shap_values_arr = explainer.shap_values(X)
-    # For binary classification, shap_values may be a list of 2 arrays; take class 1 (red wins)
-    if isinstance(shap_values_arr, list):
-        shap_values_arr = shap_values_arr[1]
+
+    if model_kind == "mlp":
+        # TreeExplainer only handles tree ensembles. For the network SHAP offers two
+        # deep methods; DeepExplainer fails its own additivity check against this torch
+        # build, so use GradientExplainer (expected gradients), which verifies clean.
+        import torch
+        import torch.nn as nn
+
+        class _ShapWrap(nn.Module):
+            """SHAP's deep explainers require a 2-D (batch, outputs) output, but _MLP
+            squeezes to 1-D. Also apply the sigmoid here so attributions explain the
+            PROBABILITY the site displays, not the raw logit."""
+
+            def __init__(self, net):
+                super().__init__()
+                self.net = net
+
+            def forward(self, t):
+                return torch.sigmoid(self.net(t)).unsqueeze(-1)
+
+        wrapped = _ShapWrap(base_model.model_).eval()
+        Xs = base_model._prep(X)          # same scaling the model was fitted with
+        # Background must be REAL rows, not noise: SHAP values are relative to the mean
+        # prediction over this set, so it defines what "average fight" means.
+        rng = np.random.default_rng(42)
+        bg_idx = rng.choice(len(Xs), size=min(200, len(Xs)), replace=False)
+        explainer = shap.GradientExplainer(wrapped, Xs[bg_idx])
+        sv = explainer.shap_values(Xs)
+        shap_values_arr = np.asarray(sv[0] if isinstance(sv, list) else sv)
+        if shap_values_arr.ndim == 3:      # (rows, features, 1) -> (rows, features)
+            shap_values_arr = shap_values_arr[:, :, 0]
+    else:
+        explainer = shap.TreeExplainer(base_model)
+        shap_values_arr = explainer.shap_values(X)
+        # For binary classification shap_values may be a list of 2 arrays; take class 1
+        if isinstance(shap_values_arr, list):
+            shap_values_arr = shap_values_arr[1]
+
     log.info(f"  SHAP values shape: {shap_values_arr.shape}")
 
     # Store predictions and SHAP values in DB
@@ -2980,11 +3240,17 @@ if __name__ == "__main__":
     parser.add_argument("--walk-forward", action="store_true",
                         help="Leak-free walk-forward evaluation (with-odds vs no-odds vs market)")
     parser.add_argument("--folds", type=int, default=8, help="Walk-forward fold count")
+    parser.add_argument("--train-mlp", action="store_true",
+                        help="Train the MLP on all fights and save models/ufc/h2h/mlp_v1.pkl")
+    parser.add_argument("--gamma", type=float, default=0.0,
+                        help="Decorrelation weight for --train-mlp (ablation says 0 is best)")
     parser.add_argument("--fresh-glicko", action="store_true",
                         help="Recompute Glicko in memory with the fixed pre-UFC newcomer "
                              "seed instead of using stored (leaked) snapshots")
     args = parser.parse_args()
-    if args.predict:
+    if args.train_mlp:
+        train_mlp(fresh_glicko=True, gamma=args.gamma)
+    elif args.predict:
         generate_predictions()
     elif args.walk_forward:
         run(walk_forward=True, n_folds=args.folds, fresh_glicko=args.fresh_glicko)
