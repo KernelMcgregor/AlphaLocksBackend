@@ -672,3 +672,74 @@ class TestDecorrelationLoss:
         p = DecorrelatedModel(gamma=1.0, epochs=8, seed=4).fit(
             X, y, mkt).predict_proba(X)
         assert np.all(np.isfinite(p))
+
+
+class TestServingDependencies:
+    """The deployment image is not the development image.
+
+    The served winner model (mlp_v1.pkl) is a torch model, but torch is heavy and easy
+    to omit from a deployment or CI environment. When that happened, `model.py` imported
+    DecorrelatedModel at module scope, so `import app.services.ufc.model` raised
+    ImportError and the nightly prediction job died outright rather than degrading.
+    """
+
+    def _block_torch(self):
+        import builtins
+        real = builtins.__import__
+
+        def blocked(name, *a, **k):
+            if name == "torch" or name.startswith("torch."):
+                raise ImportError("No module named 'torch' (simulated)")
+            return real(name, *a, **k)
+        return real, blocked
+
+    def test_model_module_imports_without_torch(self):
+        """model.py must be importable in a torch-less environment."""
+        import builtins
+        import importlib
+        import sys
+
+        real, blocked = self._block_torch()
+        dropped = [m for m in list(sys.modules)
+                   if m == "torch" or m.startswith("torch.")
+                   or m.startswith("app.services.ufc.")]
+        saved = {m: sys.modules.pop(m) for m in dropped}
+        builtins.__import__ = blocked
+        try:
+            importlib.import_module("app.services.ufc.model")
+        finally:
+            builtins.__import__ = real
+            sys.modules.update(saved)
+
+    def test_lazy_loader_raises_importerror_not_something_else(self):
+        """generate_predictions() catches ImportError specifically to fall back to the
+        GBT. If the loader raised anything else the fallback would not engage."""
+        import builtins
+        import sys
+
+        from app.services.ufc.model import _decorrelated_model
+
+        real, blocked = self._block_torch()
+        # Blocking __import__ alone is not enough: an already-imported module is served
+        # straight from sys.modules and never reaches __import__ at all. Both torch and
+        # the module that imports it have to be evicted for the block to bite.
+        dropped = [m for m in list(sys.modules)
+                   if m == "torch" or m.startswith("torch.")
+                   or m == "app.services.ufc.decorrelated"]
+        saved = {m: sys.modules.pop(m) for m in dropped}
+        builtins.__import__ = blocked
+        try:
+            with pytest.raises(ImportError):
+                _decorrelated_model()
+        finally:
+            builtins.__import__ = real
+            sys.modules.update(saved)
+
+    def test_torch_is_declared_in_requirements(self):
+        """The fallback keeps the job alive; this keeps it from silently serving the
+        GBT forever while the MLP artifact sits unused."""
+        from pathlib import Path
+
+        req = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text()
+        assert any(line.strip().startswith("torch") for line in req.splitlines()), \
+            "torch missing from requirements.txt — mlp_v1.pkl cannot be served"

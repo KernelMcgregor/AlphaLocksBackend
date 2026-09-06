@@ -16,3 +16,12 @@ shap>=0.43.0
 optuna>=4.0.0
 venn-abers>=1.5.0
 openai>=1.30.0
+
+# Required by app/services/ufc/decorrelated.py, which backs the served MLP
+# (models/ufc/h2h/mlp_v1.pkl). Without it generate_predictions() falls back to the GBT.
+#
+# CPU wheels only. The default PyPI torch on Linux bundles the CUDA runtime and is
+# ~2.5GB, which is both useless on a CPU-only host and large enough to blow up build
+# times and image size. The CPU index serves a ~200MB wheel instead.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.2.0

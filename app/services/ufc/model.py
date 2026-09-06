@@ -43,11 +43,25 @@ from sklearn.preprocessing import StandardScaler
 
 from app.database import SessionLocal
 from app.services.ufc.market_anchor import MarketAnchor, devig, logit
-from app.services.ufc.decorrelated import DecorrelatedModel
 from app.services.ufc.glicko_service import run_glicko_inmemory
 from app.services.ufc.simulator import (
     HazardRateModel, attach_fit_targets, build_simulator_frame, simulate,
 )
+
+
+def _decorrelated_model():
+    """Import DecorrelatedModel lazily, because it pulls in torch.
+
+    Deliberately NOT a module-level import. torch is a heavy dependency that the
+    deployment and CI environments may not carry, and importing it at module scope makes
+    `import app.services.ufc.model` fail outright without it -- which would take down the
+    nightly prediction job and every caller that only needs the GBT path.
+
+    Callers that can degrade gracefully should catch ImportError; `generate_predictions`
+    falls back to the GBT rather than failing the run.
+    """
+    from app.services.ufc.decorrelated import DecorrelatedModel
+    return DecorrelatedModel
 from app.models.ufc import UFCEvent, UFCFight, UFCFighter, UFCFightStats
 
 MODEL_DIR = Path(__file__).parent.parent.parent.parent / "models" / "ufc" / "h2h"
@@ -2520,6 +2534,7 @@ def walk_forward_eval(
             m = devig(d["odds_red_prob"].values, d["odds_blue_prob"].values)
             return np.where(d["odds_red_prob"].notna().values, m, np.nan)
 
+        DecorrelatedModel = _decorrelated_model()
         best_g, best_roi = 0.0, -np.inf
         for g in DECORR_GAMMAS:
             mdl = DecorrelatedModel(gamma=g, seed=42).fit(
@@ -2890,7 +2905,7 @@ def train_mlp(fresh_glicko: bool = True, gamma: float = 0.0,
     log.info(f"  Early-stopping holdout {len(va)} (NOT a performance estimate)")
     log.info(f"  Features: {len(selected)}")
 
-    mdl = DecorrelatedModel(gamma=gamma, seed=42).fit(
+    mdl = _decorrelated_model()(gamma=gamma, seed=42).fit(
         tr[selected].values, tr["red_wins"].values, _mkt(tr),
         va[selected].values, va["red_wins"].values, _mkt(va),
     )
@@ -3100,7 +3115,20 @@ def generate_predictions():
     mlp_path = MODEL_DIR / "mlp_v1.pkl"
     cal_path = MODEL_DIR / "calibrated_model.pkl"
 
-    if mlp_path.exists():
+    # torch may be absent in a deployment or CI image. Serving stale-but-real GBT
+    # predictions beats failing the nightly job and serving nothing, so treat a missing
+    # torch as "no MLP available" rather than letting ImportError escape.
+    mlp_available = mlp_path.exists()
+    if mlp_available:
+        try:
+            DecorrelatedModel = _decorrelated_model()
+        except ImportError as e:
+            mlp_available = False
+            log.error(
+                "  mlp_v1.pkl is present but torch is not installed (%s). Falling back "
+                "to the GBT. Add torch to requirements.txt to serve the MLP.", e)
+
+    if mlp_available:
         base_model, meta = DecorrelatedModel.load(mlp_path)
         features = meta["features"]
         train_means = meta["train_means"]
