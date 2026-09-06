@@ -6,6 +6,10 @@ on:
     - cron: '0 6 * * *'
   workflow_dispatch: # Allow manual trigger
 
+# The picks job commits picks_log.jsonl back to the repo, so it needs write access.
+permissions:
+  contents: write
+
 jobs:
   check-and-update:
     runs-on: ubuntu-latest
@@ -69,9 +73,26 @@ jobs:
         if: steps.check.outputs.event_happened == 'true'
         run: python -m app.services.ufc.odds_scraper --live
 
+      # Results for last night's card are now in the DB, so any picks on it can be
+      # graded. --settle only ever fills in `result` and `profit` on entries that are
+      # still open; it cannot alter a pick or add one.
+      - name: Settle picks from last night's card
+        if: steps.check.outputs.event_happened == 'true'
+        run: python -m scripts.generate_picks --settle
+
+      # Fresh odds just landed for the NEXT card, so log picks against them. Must run
+      # after the odds scrape or it would price against a stale line.
+      - name: Log picks for upcoming fights
+        if: steps.check.outputs.event_happened == 'true'
+        run: python -m scripts.generate_picks --upcoming
+
+      - name: Commit picks log
+        if: steps.check.outputs.event_happened == 'true'
+        uses: ./.github/actions/commit-picks
+
       - name: Summary
         if: steps.check.outputs.event_happened == 'true'
-        run: echo "Post-event update complete - scraped results, refreshed upcoming, generated predictions, rankings, and fetched odds"
+        run: echo "Post-event update complete - scraped results, refreshed upcoming, generated predictions, rankings, fetched odds, settled and logged picks"
 
   # Also refresh odds twice a week regardless of events
   refresh-odds:
@@ -108,3 +129,18 @@ jobs:
       - name: Refresh odds
         if: steps.odds_check.outputs.refresh == 'true'
         run: python -m app.services.ufc.odds_scraper --live
+
+      # Picks are logged on the SAME cadence as the odds they are priced against.
+      # Decoupling the two would mean picking against a line that has since moved, and
+      # the pre-registered rule keys off the market price at pick time.
+      #
+      # A missed card is evidence permanently lost: the rule needs ~150 settled picks to
+      # reach a verdict at roughly 70/year, so the sample is the binding constraint on
+      # this whole experiment. Automating it is what stops that sample leaking.
+      - name: Log picks for upcoming fights
+        if: steps.odds_check.outputs.refresh == 'true'
+        run: python -m scripts.generate_picks --upcoming
+
+      - name: Commit picks log
+        if: steps.odds_check.outputs.refresh == 'true'
+        uses: ./.github/actions/commit-picks
