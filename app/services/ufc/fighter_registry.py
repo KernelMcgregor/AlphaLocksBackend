@@ -115,9 +115,17 @@ def is_rankable(st: FighterState, today: date, crit: Eligibility = Eligibility()
     )
 
 
-def build_fighter_registry(db) -> dict[int, FighterState]:
-    """Derive every fighter's state in two passes over the fight table."""
+def build_fighter_registry(db, as_of: date | None = None) -> dict[int, FighterState]:
+    """Derive every fighter's state in two passes over the fight table.
+
+    `as_of` truncates history to bouts on or before that date, so the registry
+    describes the roster *as it stood then*. Without it every historical ranking
+    inherits today's eligibility set — excluding fighters who have since retired
+    and admitting ones who had not yet debuted.
+    """
     fights = db.query(UFCFight).order_by(UFCFight.date, UFCFight.id).all()
+    if as_of is not None:
+        fights = [f for f in fights if f.date and f.date <= as_of]
 
     last_activity: dict[int, date] = {}
     last_decided: dict[int, date] = {}

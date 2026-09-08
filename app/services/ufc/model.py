@@ -1205,7 +1205,19 @@ def winner_feature_columns(df: pd.DataFrame) -> list[str]:
     # Round profile features
     cols += [c for c in df.columns if c.startswith(("avg_r1_", "avg_late_", "avg_output_", "avg_ctrl_trend",
                                                     "recent_r1_", "recent_late_", "recent_output_", "recent_ctrl_trend"))]
-    cols += [c for c in df.columns if c.startswith("style_") and c not in cols]
+    # KMeans style-archetype one-hots (style_0 .. style_{N_STYLES-1}) ONLY.
+    #
+    # This was `startswith("style_")`, which captured the one-hots but would also have
+    # silently swallowed anything else named style_*. That became a live hazard when
+    # style_service landed: its similarity space is built from career-to-date stats and
+    # the final Glicko ratings, so a style_similarity / style_embedding_* column joined
+    # onto this frame is retrodictive, and the wildcard would have made it a model
+    # feature with no error and no test failure. Matching the digit suffix keeps the
+    # one-hots and makes that impossible. tests/test_style_similarity.py asserts it.
+    cols += [
+        c for c in df.columns
+        if re.fullmatch(r"style_\d+", c) and c not in cols
+    ]
     # Fight-level context
     cols += [c for c in df.columns if c.startswith("div_") and c not in cols]
     cols += [c for c in FIGHT_LEVEL_COLS if c not in cols]

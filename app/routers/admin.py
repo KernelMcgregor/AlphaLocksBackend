@@ -298,6 +298,56 @@ def trigger_rankings(background_tasks: BackgroundTasks):
     return _start_task(background_tasks, "Generate Rankings", _run_all)
 
 
+@router.post("/generate-derived-stats", dependencies=[Depends(require_admin_key)])
+def trigger_derived_stats(background_tasks: BackgroundTasks):
+    from app.services.ufc.fight_stats_derived_service import compute_all_derived_stats
+
+    return _start_task(background_tasks, "Derived Fight Stats", compute_all_derived_stats)
+
+
+@router.post("/generate-career-stats", dependencies=[Depends(require_admin_key)])
+def trigger_career_stats(background_tasks: BackgroundTasks):
+    from app.services.ufc.career_stats_service import compute_all_career_stats
+
+    return _start_task(background_tasks, "Career Stats", compute_all_career_stats)
+
+
+@router.post("/generate-similarity", dependencies=[Depends(require_admin_key)])
+def trigger_similarity(
+    background_tasks: BackgroundTasks,
+    refit: bool = Query(
+        default=False,
+        description="Refit the frozen style space instead of transforming through it. "
+                    "Changes every stored similarity score and invalidates comparison "
+                    "with previous runs — rerun style_eval afterwards.",
+    ),
+):
+    from app.database import SessionLocal
+    from app.services.ufc.style_service import compute_and_save_similarity
+
+    def _run():
+        db = SessionLocal()
+        try:
+            compute_and_save_similarity(db, refit=refit)
+        finally:
+            db.close()
+
+    return _start_task(background_tasks, "Fighter Similarity", _run)
+
+
+@router.post("/refresh-after-event", dependencies=[Depends(require_admin_key)])
+def trigger_refresh_after_event(background_tasks: BackgroundTasks):
+    """Rerun the whole stats chain: derived -> career -> rankings -> similarity.
+
+    The same thing scheduled_scrape runs when a new card lands, exposed for the morning
+    after an event when you have re-scraped results by hand and want everything
+    downstream rebuilt in dependency order.
+    """
+    from app.main import refresh_after_event
+
+    return _start_task(background_tasks, "Refresh After Event", refresh_after_event)
+
+
 # ---------------------------------------------------------------------------
 # Previews
 # ---------------------------------------------------------------------------

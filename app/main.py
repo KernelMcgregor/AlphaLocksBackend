@@ -117,18 +117,95 @@ def run_migrations():
                     conn.execute(text(f"ALTER TABLE ufc.ufc_glicko_snapshots ADD COLUMN {col} FLOAT"))
 
 
+#: The stats chain, in dependency order. Each entry is (label, "module:function").
+#:
+#: Ordering is not cosmetic. Derived per-fight columns feed the career aggregates; the
+#: career aggregates and the published Glicko percentiles are the two halves of the style
+#: vector; so similarity has to run last and derived has to run first.
+#:
+#: Two of these steps were previously unreachable from the running app:
+#:   * compute_all_career_stats had NO call site anywhere in app/ — ufc_fighter_career_stats
+#:     was only ever refreshed by someone running the module CLI by hand.
+#:   * compute_all_derived_stats was called only from the tail of run_scrape() (the FULL
+#:     scrape). run_recent_update(), which is what actually runs the day after an event,
+#:     never called it, so a new fight's ~65 derived columns stayed empty until somebody
+#:     triggered a full re-scrape.
+#: publish_rankings therefore ran every night on stats that no longer matched the fights
+#: in the database. Fixing that is a precondition for style similarity, which reads both
+#: tables, but it was a live bug in the ranking pipeline independent of this feature.
+POST_EVENT_CHAIN = [
+    ("Derived Fight Stats", "app.services.ufc.fight_stats_derived_service:compute_all_derived_stats"),
+    ("Career Stats", "app.services.ufc.career_stats_service:compute_all_career_stats"),
+    ("Generate Rankings", "app.services.ufc.ranking_publisher:publish_rankings"),
+    # Must follow Generate Rankings: publish_rankings overwrites ufc_fighter_rankings,
+    # so without this the previous standings are lost and rank history never grows.
+    ("Record Rank History", "app.services.ufc.rank_history_backfill:record_rank_history"),
+    ("Fighter Similarity", "app.services.ufc.style_service:compute_and_save_similarity"),
+]
+
+#: Steps that take a db session as their first positional argument.
+_CHAIN_NEEDS_DB = {"Generate Rankings", "Record Rank History", "Fighter Similarity"}
+
+
+def refresh_after_event() -> dict[str, str]:
+    """Recompute everything downstream of a completed card.
+
+    Runs the whole chain even if a step fails, so one broken stage does not silently
+    strand the three after it — the same reasoning behind the per-step guards in
+    scheduled_scrape. Returns {label: "done" | "error: ..."} for the caller to report.
+    """
+    import importlib
+    import logging
+    log = logging.getLogger("refresh_after_event")
+    from app.routers.admin import record_run
+    from app.database import SessionLocal as ChainSession
+
+    results: dict[str, str] = {}
+    for label, target in POST_EVENT_CHAIN:
+        module_name, func_name = target.split(":")
+        try:
+            func = getattr(importlib.import_module(module_name), func_name)
+            if label in _CHAIN_NEEDS_DB:
+                db = ChainSession()
+                try:
+                    func(db)
+                finally:
+                    db.close()
+            else:
+                func()
+            log.info(f"{label}: done")
+            record_run(label, "done")
+            results[label] = "done"
+        except Exception as e:
+            log.exception(f"{label} failed")
+            record_run(label, "error", str(e))
+            results[label] = f"error: {e}"
+    return results
+
+
 def scheduled_scrape():
     import logging
     log = logging.getLogger("scheduled_scrape")
     from app.routers.admin import record_run
 
     from app.services.ufc.scraper import run_recent_update
+    new_events = []
     try:
-        run_recent_update()
+        new_events = run_recent_update()
         record_run("Recent Update", "done")
     except Exception as e:
         log.error(f"Recent update failed: {e}")
         record_run("Recent Update", "error", str(e))
+
+    # Only recompute when a card actually landed. On the ~29 nights in 30 with no new
+    # event the inputs are unchanged, and a Glicko replay over all of history to produce
+    # byte-identical output is the most expensive no-op in the pipeline.
+    if new_events:
+        names = ", ".join(e["name"] for e in new_events)
+        log.info(f"{len(new_events)} new event(s) — running post-event chain: {names}")
+        refresh_after_event()
+    else:
+        log.info("No new events; skipping the post-event stats chain")
 
     try:
         from app.services.ufc.model import generate_predictions
@@ -148,23 +225,29 @@ def scheduled_scrape():
         log.error(f"Method prediction generation failed: {e}")
         record_run("Method Predictions", "error", str(e))
 
+    # On event nights refresh_after_event already published rankings, on fresh derived and
+    # career stats. On quiet nights they still need republishing: eligibility and the
+    # inactivity sigma inflation are both functions of today's date, so the table drifts
+    # even when no one fights.
+    #
     # One call, one transaction. These were two separately-guarded steps: the Glicko step
     # wrote rank=0 placeholders and the Points step replaced them, so a failure in the
     # second logged an error and left a table of zeros serving at the top of every
     # division. publish_rankings computes both and commits once or not at all.
-    try:
-        from app.database import SessionLocal as RankingSession
-        from app.services.ufc.ranking_publisher import publish_rankings
-        _rank_db = RankingSession()
+    if not new_events:
         try:
-            publish_rankings(_rank_db)
-        finally:
-            _rank_db.close()
-        log.info("Glicko snapshots + fighter rankings published")
-        record_run("Generate Rankings", "done")
-    except Exception as e:
-        log.error(f"Ranking publication failed: {e}")
-        record_run("Generate Rankings", "error", str(e))
+            from app.database import SessionLocal as RankingSession
+            from app.services.ufc.ranking_publisher import publish_rankings
+            _rank_db = RankingSession()
+            try:
+                publish_rankings(_rank_db)
+            finally:
+                _rank_db.close()
+            log.info("Glicko snapshots + fighter rankings published")
+            record_run("Generate Rankings", "done")
+        except Exception as e:
+            log.error(f"Ranking publication failed: {e}")
+            record_run("Generate Rankings", "error", str(e))
 
     try:
         from app.services.ufc.preview_service import generate_all_upcoming_previews

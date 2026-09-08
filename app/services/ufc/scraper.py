@@ -852,7 +852,7 @@ def scrape_upcoming(max_events: int = 5):
 # Fast post-event update: only scrape recently completed events
 # ---------------------------------------------------------------------------
 
-def run_recent_update():
+def run_recent_update() -> list[dict]:
     """Fast update pipeline for the day after an event.
 
     1. Find the most recent completed event already in the DB
@@ -862,10 +862,18 @@ def run_recent_update():
     4. Update fighter records for fighters involved in those events
     5. Refresh upcoming events
     6. Re-generate predictions for new fights
+
+    Returns the newly-completed events (name/date/ufcstats_id dicts), empty on a night
+    with no card. Callers use this to decide whether the derived/career/rating/similarity
+    chain needs to run at all: it is the expensive half of the nightly job and on ~29
+    nights in 30 there is nothing new for it to consume. Returns [] on failure too, which
+    is the safe direction — a failed scrape should not trigger a recompute over stats it
+    did not manage to write.
     """
     log.info("Starting recent update")
     scraper = Scraper()
     db = SessionLocal()
+    processed_events: list[dict] = []
 
     try:
         # Step 1: Find the most recent completed event date in DB
@@ -891,6 +899,10 @@ def run_recent_update():
             log.info("No new completed events found")
         else:
             log.info(f"Found {len(new_events)} new completed events to process")
+            processed_events = [
+                {"name": ev["name"], "date": ev["date"], "ufcstats_id": ev["ufcstats_id"]}
+                for ev in new_events
+            ]
             upsert_events(db, new_events)
 
             # Step 3: For each new event, scrape its fights
@@ -941,10 +953,15 @@ def run_recent_update():
         scrape_upcoming()
 
         log.info("Recent update complete")
+        return processed_events
 
     except Exception:
         log.exception("Recent update failed")
         db.rollback()
+        # Deliberately [] and not the partial list: a failed scrape may have written some
+        # fights and not others, and recomputing career stats over a half-written event
+        # would publish numbers we would then have to correct.
+        return []
     finally:
         try:
             db.close()

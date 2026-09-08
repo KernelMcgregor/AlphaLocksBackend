@@ -1,19 +1,27 @@
+import json
+
+import datetime as dt
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.models.ufc import (
-    UFCEvent, UFCFight, UFCFighter, UFCFighterCareerStats, UFCFightOdds, UFCMethodOdds,
+    UFCEvent, UFCFight, UFCFighter, UFCFighterCareerStats, UFCFighterSimilarity,
+    UFCFightOdds, UFCMethodOdds,
     UFCFightPrediction, UFCFightPreview, UFCMethodPrediction, UFCFightShapValue, UFCFightStats,
+    UFCRankingHistory,
 )
 from app.schemas.ufc import (
     UFCEventDetailResponse,
+    UFCRankHistoryPoint,
     UFCEventResponse,
     UFCFighterCareerStatsResponse,
     UFCFightDetailResponse,
     UFCFightResponse,
     UFCFighterResponse,
     UFCFightStatsResponse,
+    UFCSimilarFighterResponse,
 )
 
 router = APIRouter(prefix="/ufc", tags=["ufc"])
@@ -62,6 +70,71 @@ def get_fighter_stats(fighter_id: int, db: Session = Depends(get_db)):
     return db.query(UFCFightStats).filter(UFCFightStats.fighter_id == fighter_id).all()
 
 
+@router.get("/fighters/{fighter_id}/rank-history", response_model=list[UFCRankHistoryPoint])
+def get_fighter_rank_history(fighter_id: int, db: Session = Depends(get_db)):
+    """Divisional rank after each of this fighter's bouts.
+
+    Reads the precomputed `ufc_ranking_history` table — see
+    `app.services.ufc.rank_history_backfill` for why this cannot be computed per
+    request. Returns [] if the backfill has not been run.
+
+    Each of the fighter's bout dates is matched to the ranking published on or
+    immediately after it, which is the standing that bout produced.
+    """
+    history = (
+        db.query(UFCRankingHistory)
+        .filter(UFCRankingHistory.fighter_id == fighter_id)
+        .order_by(UFCRankingHistory.as_of)
+        .all()
+    )
+    if not history:
+        return []
+
+    fights = (
+        db.query(UFCFight)
+        .filter(
+            (UFCFight.red_fighter_id == fighter_id) | (UFCFight.blue_fighter_id == fighter_id)
+        )
+        .filter(UFCFight.date.isnot(None))
+        # Completed bouts only. A scheduled fight has no winner and no method, and the
+        # backfill covers announced future event dates, so without this an upcoming
+        # bout would plot a rank the fighter has not earned yet. Draws and no-contests
+        # are kept — they happened, they just have no winner.
+        .filter(UFCFight.date <= dt.date.today())
+        .filter(UFCFight.winner_id.isnot(None) | UFCFight.method.isnot(None))
+        .order_by(UFCFight.date)
+        .all()
+    )
+
+    # A bout on date D produces the ranking stamped D (the publish for that event).
+    # A fighter is ranked in their division AND in p4p on the same date; the
+    # divisional row is the one meant by "their rank", so p4p only acts as a
+    # fallback for someone who somehow has no divisional row.
+    by_date: dict = {}
+    for h in history:
+        is_p4p = h.weight_class.startswith("p4p")
+        existing = by_date.get(h.as_of)
+        if existing is None or (existing.weight_class.startswith("p4p") and not is_p4p):
+            by_date[h.as_of] = h
+    out: list[UFCRankHistoryPoint] = []
+    for f in fights:
+        h = by_date.get(f.date)
+        if h is None:
+            continue
+        opponent = f.blue_fighter_id if f.red_fighter_id == fighter_id else f.red_fighter_id
+        out.append(UFCRankHistoryPoint(
+            as_of=h.as_of,
+            weight_class=h.weight_class,
+            rank=h.rank,
+            score=h.score,
+            total_ranked=h.total_ranked,
+            fight_id=str(f.id),
+            opponent_id=str(opponent) if opponent else None,
+            won=(f.winner_id == fighter_id) if f.winner_id else None,
+        ))
+    return out
+
+
 @router.get("/fighters/{fighter_id}/career-stats", response_model=UFCFighterCareerStatsResponse)
 def get_fighter_career_stats(fighter_id: int, db: Session = Depends(get_db)):
     stats = db.query(UFCFighterCareerStats).filter(
@@ -70,6 +143,57 @@ def get_fighter_career_stats(fighter_id: int, db: Session = Depends(get_db)):
     if not stats:
         raise HTTPException(status_code=404, detail="Career stats not found for this fighter")
     return stats
+
+
+@router.get("/fighters/{fighter_id}/similar", response_model=list[UFCSimilarFighterResponse])
+def get_similar_fighters(
+    fighter_id: int,
+    limit: int = Query(default=10, le=20),
+    same_division_only: bool = Query(default=False),
+    db: Session = Depends(get_db),
+):
+    """Stylistic comparables, nearest first.
+
+    Cross-division by default: the features are within-division percentiles, so a
+    flyweight and a heavyweight are directly comparable and the cross-division analogue
+    is usually the more interesting answer. `same_division_only` narrows it without a
+    second round trip because `same_division` is denormalised onto the row.
+
+    Empty list rather than 404 when a fighter has no comparables — that is the normal
+    state for anyone below the eligibility floor (3 decided fights / 10 rounds), not an
+    error, and the panel just does not render.
+    """
+    rows = (
+        db.query(UFCFighterSimilarity, UFCFighter)
+        .join(UFCFighter, UFCFighter.id == UFCFighterSimilarity.similar_fighter_id)
+        .filter(UFCFighterSimilarity.fighter_id == fighter_id)
+    )
+    if same_division_only:
+        rows = rows.filter(UFCFighterSimilarity.same_division.is_(True))
+
+    out = []
+    for sim, fighter in rows.order_by(UFCFighterSimilarity.rank).limit(limit).all():
+        try:
+            drivers = json.loads(sim.top_drivers or "[]")
+        except (TypeError, ValueError):
+            drivers = []
+        out.append(UFCSimilarFighterResponse(
+            id=fighter.id,
+            first_name=fighter.first_name,
+            last_name=fighter.last_name,
+            nickname=fighter.nickname,
+            image_url=fighter.image_url,
+            country_code=fighter.country_code,
+            wins=fighter.wins,
+            losses=fighter.losses,
+            draws=fighter.draws,
+            rank=sim.rank,
+            similarity=sim.similarity,
+            same_division=sim.same_division,
+            top_drivers=drivers,
+            previous_rank=sim.previous_rank,
+        ))
+    return out
 
 
 @router.get("/career-stats", response_model=list[UFCFighterCareerStatsResponse])

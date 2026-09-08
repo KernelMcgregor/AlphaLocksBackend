@@ -57,6 +57,19 @@ jobs:
         if: steps.check.outputs.event_happened == 'true'
         run: python -m app.services.ufc.scraper --recent
 
+      # The stats chain, in dependency order. Neither of the next two steps used to run
+      # here: compute_all_derived_stats fired only from the FULL scrape (never from
+      # --recent), and compute_all_career_stats had no automated call site at all. So
+      # last night's fight had empty derived columns and every career aggregate was as
+      # stale as the last manual run, and rankings below were computed on top of that.
+      - name: Compute derived fight stats
+        if: steps.check.outputs.event_happened == 'true'
+        run: python -m app.services.ufc.fight_stats_derived_service
+
+      - name: Compute career stats
+        if: steps.check.outputs.event_happened == 'true'
+        run: python -m app.services.ufc.career_stats_service
+
       - name: Generate winner predictions
         if: steps.check.outputs.event_happened == 'true'
         run: python -m app.services.ufc.model --predict
@@ -68,6 +81,13 @@ jobs:
       - name: Generate fighter rankings
         if: steps.check.outputs.event_happened == 'true'
         run: python -m app.services.ufc.ranking_service
+
+      # Reads career stats and the Glicko profiles, so it runs last. No --refit: the
+      # embedding space stays frozen so scores remain comparable across events and
+      # previous_rank measures fighters moving, not the basis moving.
+      - name: Generate style similarity
+        if: steps.check.outputs.event_happened == 'true'
+        run: python -m app.services.ufc.style_service
 
       - name: Scrape live odds
         if: steps.check.outputs.event_happened == 'true'

@@ -1,6 +1,6 @@
 import datetime as dt
 
-from sqlalchemy import BigInteger, DateTime, Date, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Date, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.config import settings
@@ -367,6 +367,32 @@ class UFCFighterRanking(TimestampMixin, Base):
     fighter: Mapped["UFCFighter"] = relationship()
 
 
+class UFCRankingHistory(Base):
+    """Divisional rank for a fighter at a past date.
+
+    `ufc_fighter_rankings` is overwritten on every publish, so it holds only the
+    present standings. This table is append-only and keyed by (fighter, as_of), which
+    is what makes a rank-over-time chart possible. Populated by
+    `python -m app.services.ufc.rank_history_backfill`.
+    """
+    __tablename__ = "ufc_ranking_history"
+    __table_args__ = (
+        # weight_class is part of the key: a fighter is ranked both in their own
+        # division and in p4p on the same date, so (fighter, date) collides.
+        UniqueConstraint("fighter_id", "as_of", "weight_class"),
+        Index("ix_rank_history_fighter_date", "fighter_id", "as_of"),
+        {"schema": UFC_SCHEMA},
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    fighter_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_fighters.id")), index=True)
+    as_of: Mapped[dt.date] = mapped_column(Date, index=True)
+    weight_class: Mapped[str] = mapped_column(String(30))
+    rank: Mapped[int] = mapped_column(Integer)
+    score: Mapped[float] = mapped_column(Float)          # 0-1000, normalised within division
+    total_ranked: Mapped[int] = mapped_column(Integer)   # division size, so a rank can be read in context
+
+
 # Canonical names of the rating-confidence columns. glicko_service stores the same
 # quantities in its in-memory snapshot dict under a leading underscore ("_meta_sigma"),
 # so the dict key is always "_" + the column name.
@@ -429,6 +455,47 @@ class UFCMatchupPrediction(TimestampMixin, Base):
 
     red_fighter: Mapped["UFCFighter"] = relationship(foreign_keys=[red_fighter_id])
     blue_fighter: Mapped["UFCFighter"] = relationship(foreign_keys=[blue_fighter_id])
+
+
+class UFCFighterSimilarity(Base):
+    """Top-K stylistic comparables for each fighter.
+
+    DISPLAY-ONLY AND RETRODICTIVE. Built from career-to-date stats and the *final*
+    Glicko ratings, so a fighter's vector here reflects fights that, for any given
+    historical bout, had not happened yet. It carries the same hazard as `whr_ranker`
+    and must never reach `model.build_features()`; `tests/test_leakage.py` asserts it.
+
+    Stored top-K rather than pairwise: 4.5k fighters is ~20M pairs, and nothing in the
+    product ever asks for the similarity of an arbitrary pair. Same reasoning as
+    `ufc_matchup_predictions`, which stores only the matchups it will serve.
+    """
+    __tablename__ = "ufc_fighter_similarity"
+    __table_args__ = (
+        UniqueConstraint("fighter_id", "similar_fighter_id"),
+        Index("ix_similarity_fighter", "fighter_id"),
+        {"schema": UFC_SCHEMA},
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    fighter_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_fighters.id")), index=True)
+    similar_fighter_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_fighters.id")))
+    rank: Mapped[int] = mapped_column(Integer)
+    similarity: Mapped[float] = mapped_column(Float)  # cosine in the frozen whitened space, 0-1
+    same_division: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    #: JSON [{"feature": ..., "z": ...}, ...] — the traits both fighters share most
+    #: strongly. Without this the panel is an oracle; with it the user can check the
+    #: claim against the stat table on the same page.
+    top_drivers: Mapped[str] = mapped_column(Text)
+
+    #: Rank this pair held in the previous run; NULL means it is newly in the top-K.
+    #: Carried across the delete-and-reinsert so the UI can mark what an event changed.
+    previous_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    computed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+    fighter: Mapped["UFCFighter"] = relationship(foreign_keys=[fighter_id])
+    similar_fighter: Mapped["UFCFighter"] = relationship(foreign_keys=[similar_fighter_id])
 
 
 class UFCFighterCareerStats(Base):

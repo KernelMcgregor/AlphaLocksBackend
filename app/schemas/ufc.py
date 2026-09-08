@@ -44,6 +44,46 @@ class UFCFighterResponse(BigIntStr, UFCFighterBase):
     model_config = {"from_attributes": True}
 
 
+class UFCSimilarFighterResponse(BigIntStr, BaseModel):
+    """One stylistic comparable, flattened with the neighbour's display fields.
+
+    The route joins ufc_fighters so a similarity panel is a single request; the previous
+    shape would have made the frontend fan out one fighter lookup per row.
+    """
+
+    id: int                        # the neighbour's fighter id
+    first_name: str
+    last_name: str
+    nickname: Optional[str] = None
+    image_url: Optional[str] = None
+    country_code: Optional[str] = None
+    wins: int = 0
+    losses: int = 0
+    draws: int = 0
+
+    rank: int
+    similarity: float
+    same_division: bool
+    #: [{"feature": "leg_pct", "z": 1.8}, ...] — the traits driving the match.
+    top_drivers: list[dict] = []
+    #: None means this comparable is new since the last run.
+    previous_rank: Optional[int] = None
+
+    model_config = {"from_attributes": True}
+
+
+class UFCRankHistoryPoint(BaseModel):
+    """A fighter's divisional rank after one of their bouts."""
+    as_of: dt.date
+    weight_class: str
+    rank: int
+    score: float
+    total_ranked: int
+    fight_id: Optional[str] = None
+    opponent_id: Optional[str] = None
+    won: Optional[bool] = None
+
+
 # --- Events ---
 
 class UFCEventBase(BaseModel):
