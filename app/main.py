@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import Base, engine
 from app.models import *  # noqa: F401, F403 — ensure all models are registered
-from app.models.ufc import GLICKO_META_COLS
+from app.models.ufc import FIGHTER_BIO_COLS, GLICKO_META_COLS
 from app.routers import admin, predictions, ufc
 
 scheduler = BackgroundScheduler()
@@ -27,6 +27,11 @@ def run_migrations():
                 conn.executescript(sql_file.read_text())
             except Exception:
                 pass  # Columns may already exist from prior runs
+        # 008: ufc.com bio fields on ufc_fighters (idempotent)
+        fighter_existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_fighters)").fetchall()}
+        for col, ddl in FIGHTER_BIO_COLS:
+            if col not in fighter_existing:
+                conn.execute(f"ALTER TABLE ufc_fighters ADD COLUMN {col} {ddl}")
         # Add derived columns to ufc_fight_stats (idempotent)
         existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_fight_stats)").fetchall()}
         derived_cols = [
@@ -83,6 +88,11 @@ def run_migrations():
                 conn.execute(text("ALTER TABLE ufc.ufc_fighters ADD COLUMN country_code VARCHAR(2)"))
             if "image_url" not in existing:
                 conn.execute(text("ALTER TABLE ufc.ufc_fighters ADD COLUMN image_url VARCHAR(500)"))
+            # 008: ufc.com bio fields. All nullable with no default, so Postgres treats
+            # each as a metadata-only change — no table rewrite on the live roster.
+            for col, ddl in FIGHTER_BIO_COLS:
+                if col not in existing:
+                    conn.execute(text(f"ALTER TABLE ufc.ufc_fighters ADD COLUMN {col} {ddl}"))
 
         # Add derived columns to ufc_fight_stats
         stats_existing = {c["name"] for c in insp.get_columns("ufc_fight_stats", schema="ufc")}

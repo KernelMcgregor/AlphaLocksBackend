@@ -30,6 +30,15 @@ class UFCFighterBase(BaseModel):
     draws: int = 0
     country_code: Optional[str] = None
     image_url: Optional[str] = None
+    # -- Bio, from ufc.com. Sparse by design: pre-2000s fighters often have no gym or
+    #    leg reach, and fighting_style is populated for only a minority of the roster. --
+    birthplace: Optional[str] = None
+    birth_country: Optional[str] = None
+    fighting_style: Optional[str] = None
+    trains_at: Optional[str] = None
+    leg_reach: Optional[str] = None
+    octagon_debut: Optional[dt.date] = None
+    status: Optional[str] = None
 
 
 class UFCFighterCreate(UFCFighterBase):

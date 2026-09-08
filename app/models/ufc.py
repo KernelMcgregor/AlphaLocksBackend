@@ -35,6 +35,18 @@ class UFCFighter(TimestampMixin, Base):
     country_code: Mapped[str | None] = mapped_column(String(2), nullable=True)  # ISO 3166-1 alpha-2
     image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
+    # -- Bio, scraped from ufc.com athlete pages (see services/ufc/ufc_profile_scraper.py) --
+    #: Raw UFC.com text, e.g. "Rochester, United States" — sometimes just "Germany".
+    birthplace: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    #: Last comma-segment of birthplace; feeds country_code.
+    birth_country: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    fighting_style: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    trains_at: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    #: Text like "40.50", matching the ufcstats-sourced height/weight/reach above.
+    leg_reach: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    octagon_debut: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    status: Mapped[str | None] = mapped_column(String(20), nullable=True)  # Active / Retired / ...
+
 
 class UFCEvent(TimestampMixin, Base):
     __tablename__ = "ufc_events"
@@ -397,6 +409,21 @@ class UFCRankingHistory(Base):
 # quantities in its in-memory snapshot dict under a leading underscore ("_meta_sigma"),
 # so the dict key is always "_" + the column name.
 GLICKO_META_COLS = ["meta_sigma", "meta_rounds_seen", "meta_fights_seen", "meta_days_since"]
+
+
+# (column, DDL type) for the ufc.com bio fields on ufc_fighters. Kept alongside the model
+# because create_all() only creates whole tables — existing tables need explicit ALTERs,
+# which main.run_migrations() issues for both the Postgres and SQLite branches. The types
+# below are spelled so the same list works verbatim on either.
+FIGHTER_BIO_COLS = [
+    ("birthplace", "VARCHAR(200)"),
+    ("birth_country", "VARCHAR(100)"),
+    ("fighting_style", "VARCHAR(100)"),
+    ("trains_at", "VARCHAR(200)"),
+    ("leg_reach", "VARCHAR(20)"),
+    ("octagon_debut", "DATE"),
+    ("status", "VARCHAR(20)"),
+]
 
 
 class UFCGlickoSnapshot(Base):
