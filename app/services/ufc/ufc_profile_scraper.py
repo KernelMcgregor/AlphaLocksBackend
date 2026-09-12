@@ -24,6 +24,7 @@ import logging
 import re
 import time
 import unicodedata
+from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
@@ -56,6 +57,9 @@ BIO_LABEL_TO_FIELD = {
 #: sampled, so a NULL here means "not scraped yet" rather than "UFC.com has no value".
 PROFILE_SENTINEL_FIELDS = ("image_url", "birthplace", "status")
 
+#: Substrings identifying UFC.com's "no portrait" stand-ins. See extract_profile.
+PLACEHOLDER_IMAGE_MARKERS = ("no-profile-image", "SHADOW_Fighter")
+
 #: Country name as UFC.com spells it -> ISO 3166-1 alpha-2. Hand-maintained rather than
 #: pulling in pycountry for one lookup; the roster spans a bounded set of countries and
 #: unmapped names are logged at the end of a run so this can be extended.
@@ -75,7 +79,12 @@ COUNTRY_TO_ISO = {
     "Colombia": "CO", "Congo": "CG", "Costa Rica": "CR", "Croatia": "HR",
     "Cuba": "CU", "Czech Republic": "CZ", "Czechia": "CZ", "Denmark": "DK",
     "Dominican Republic": "DO", "Ecuador": "EC", "Egypt": "EG", "El Salvador": "SV",
-    "England": "GB", "Estonia": "EE", "Finland": "FI", "France": "FR",
+    #: ISO 3166-2 subdivisions, not alpha-2 — flag-icons renders these as the individual
+    #: home-nation flags. "United Kingdom" stays plain GB (Union Jack) since UFC.com does
+    #: not say which nation it means.
+    "England": "GB-ENG", "Scotland": "GB-SCT", "Wales": "GB-WLS",
+    "Northern Ireland": "GB-NIR",
+    "Estonia": "EE", "Finland": "FI", "France": "FR",
     "Georgia": "GE", "Germany": "DE", "Ghana": "GH", "Greece": "GR",
     "Guam": "GU", "Guyana": "GY", "Hungary": "HU", "Iceland": "IS",
     "India": "IN", "Indonesia": "ID", "Iran": "IR", "Iraq": "IQ",
@@ -85,10 +94,10 @@ COUNTRY_TO_ISO = {
     "Macedonia": "MK", "North Macedonia": "MK", "Malaysia": "MY", "Mexico": "MX",
     "Moldova": "MD", "Mongolia": "MN", "Montenegro": "ME", "Morocco": "MA",
     "Netherlands": "NL", "New Zealand": "NZ", "Nicaragua": "NI", "Nigeria": "NG",
-    "Northern Ireland": "GB", "Norway": "NO", "Pakistan": "PK", "Panama": "PA",
+    "Norway": "NO", "Pakistan": "PK", "Panama": "PA",
     "Paraguay": "PY", "Peru": "PE", "Philippines": "PH", "Poland": "PL",
     "Portugal": "PT", "Puerto Rico": "PR", "Romania": "RO", "Russia": "RU",
-    "Saudi Arabia": "SA", "Scotland": "GB", "Senegal": "SN", "Serbia": "RS",
+    "Saudi Arabia": "SA", "Senegal": "SN", "Serbia": "RS",
     "Singapore": "SG", "Slovakia": "SK", "Slovenia": "SI", "Somalia": "SO",
     "South Africa": "ZA", "South Korea": "KR", "Korea": "KR", "Spain": "ES",
     "Suriname": "SR", "Sweden": "SE", "Switzerland": "CH", "Syria": "SY",
@@ -96,7 +105,7 @@ COUNTRY_TO_ISO = {
     "Tunisia": "TN", "Turkey": "TR", "Turkmenistan": "TM", "Ukraine": "UA",
     "United Arab Emirates": "AE", "United Kingdom": "GB", "United States": "US",
     "Uruguay": "UY", "Uzbekistan": "UZ", "Venezuela": "VE", "Vietnam": "VN",
-    "Wales": "GB", "Zimbabwe": "ZW",
+    "Zimbabwe": "ZW",
 }
 
 
@@ -192,10 +201,18 @@ def extract_profile(soup: BeautifulSoup) -> dict:
         or soup.select_one("#block-mainpagecontent img")
     )
     if img and img.get("src"):
-        image_url = img["src"]
-        if not image_url.startswith("http"):
-            image_url = f"https://www.ufc.com{image_url}"
-        updates["image_url"] = image_url
+        src = img["src"]
+        # UFC.com has two stand-ins for an athlete with no portrait, and both were being
+        # stored as though they were real headshots:
+        #   * '../themes/custom/ufc/assets/img/no-profile-image.png' — concatenating the
+        #     host onto that produced 'https://www.ufc.com../themes/...', a malformed URL
+        #     on 173 fighters.
+        #   * 'SHADOW_Fighter_fullLength_RED.png' — a valid URL for a black silhouette,
+        #     on 10 more. It loads, which is worse: it renders as a featureless body.
+        # Skipping both lets the UI fall back to initials, and join relative paths
+        # properly so a leading '..' can never survive.
+        if not any(p in src for p in PLACEHOLDER_IMAGE_MARKERS):
+            updates["image_url"] = urljoin("https://www.ufc.com/", src)
 
     return updates
 

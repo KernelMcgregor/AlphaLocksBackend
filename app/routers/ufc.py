@@ -3,6 +3,7 @@ import json
 import datetime as dt
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -53,6 +54,40 @@ def get_fighter(fighter_id: int, db: Session = Depends(get_db)):
     if not fighter:
         raise HTTPException(status_code=404, detail="Fighter not found")
     return fighter
+
+
+@router.get("/fighters/{fighter_id}/image")
+def get_fighter_image(fighter_id: int, db: Session = Depends(get_db)):
+    """Serve a fighter's headshot.
+
+    Cached bytes when scripts/cache_fighter_images.py has stored them, otherwise a
+    redirect to the source URL. One URL works either way, so callers do not have to know
+    whether the cache has been populated — and when a UFC.com `?itok=` signature
+    eventually expires, the cached copy is what keeps the portrait alive.
+    """
+    row = (
+        db.query(UFCFighter.image_data, UFCFighter.image_mime, UFCFighter.image_url)
+        .filter(UFCFighter.id == fighter_id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Fighter not found")
+
+    image_data, image_mime, image_url = row
+    if image_data:
+        return Response(
+            content=image_data,
+            media_type=image_mime or "image/png",
+            headers={
+                # Immutable in practice: a new portrait arrives as a new URL, and the
+                # cache is refreshed by an explicit script run.
+                "Cache-Control": "public, max-age=604800",
+                "ETag": f'W/"{fighter_id}-{len(image_data)}"',
+            },
+        )
+    if image_url:
+        return RedirectResponse(image_url, status_code=302)
+    raise HTTPException(status_code=404, detail="No image for fighter")
 
 
 @router.get("/fighters/{fighter_id}/fights", response_model=list[UFCFightResponse])
@@ -770,6 +805,7 @@ def get_upcoming_events(db: Session = Depends(get_db)):
                     "losses": f.red_fighter.losses,
                     "draws": f.red_fighter.draws,
                     "country_code": f.red_fighter.country_code,
+                    "image_url": f.red_fighter.image_url,
                 },
                 "blue_fighter": {
                     "id": str(f.blue_fighter.id),
@@ -781,6 +817,7 @@ def get_upcoming_events(db: Session = Depends(get_db)):
                     "losses": f.blue_fighter.losses,
                     "draws": f.blue_fighter.draws,
                     "country_code": f.blue_fighter.country_code,
+                    "image_url": f.blue_fighter.image_url,
                 },
                 "odds": [{
                     "bookmaker": o.bookmaker,

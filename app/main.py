@@ -93,6 +93,13 @@ def run_migrations():
             for col, ddl in FIGHTER_BIO_COLS:
                 if col not in existing:
                     conn.execute(text(f"ALTER TABLE ufc.ufc_fighters ADD COLUMN {col} {ddl}"))
+            # 009: widen country_code for ISO 3166-2 subdivisions ("GB-ENG"). Widening a
+            # varchar is metadata-only in Postgres, so no rewrite of the roster. SQLite
+            # does not enforce varchar length at all, hence no matching branch above.
+            cc_len = insp.get_columns("ufc_fighters", schema="ufc")
+            cc_len = next((c.get("type").length for c in cc_len if c["name"] == "country_code"), None)
+            if cc_len is not None and cc_len < 6:
+                conn.execute(text("ALTER TABLE ufc.ufc_fighters ALTER COLUMN country_code TYPE VARCHAR(6)"))
 
         # Add derived columns to ufc_fight_stats
         stats_existing = {c["name"] for c in insp.get_columns("ufc_fight_stats", schema="ufc")}

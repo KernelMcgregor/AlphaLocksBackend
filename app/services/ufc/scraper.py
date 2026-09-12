@@ -515,6 +515,20 @@ def scrape_fight_details(scraper: Scraper, fight_url: str) -> dict | None:
             parsed.append(row_data)
         return parsed
 
+    def _round_row_has_data(t_row, s_row):
+        """True if either table actually supplied cell text for this round.
+
+        A genuine scoreless round still yields strings ("0 of 0"); a phantom row
+        yields nothing at all, which is what distinguishes them.
+        """
+        for row in (t_row, s_row):
+            if not row:
+                continue
+            for fighter in row:
+                if any(str(v).strip() for v in fighter.values()):
+                    return True
+        return False
+
     # Totals = 1 row from table 0 + per-round rows from table 1
     totals_total = _parse_table_rows(totals_table, totals_fields)
     totals_rounds = _parse_table_rows(totals_per_round, totals_fields)
@@ -529,6 +543,18 @@ def scrape_fight_details(scraper: Scraper, fight_url: str) -> dict | None:
     for row_idx in range(num_rounds):
         # round_number: 0 = totals, 1+ = per round
         round_number = row_idx
+
+        # The two tables can disagree on row count when the markup carries stray
+        # <tr>s. Iterating to the longer one then substituting {} for the missing
+        # side wrote a row whose every field parsed to 0 — phantom rounds that a
+        # fight never had (one bout ended up with rows out to R23). Those rows are
+        # not harmless: fighter_registry counts them toward the 10-round
+        # eligibility floor, and glicko_service counts them in the per-weight-class
+        # baseline denominator while they contribute nothing to the numerators.
+        t_row = totals_rows[row_idx] if row_idx < len(totals_rows) else None
+        s_row = sig_rows[row_idx] if row_idx < len(sig_rows) else None
+        if round_number > 0 and not _round_row_has_data(t_row, s_row):
+            continue
 
         for fighter_idx, corner in enumerate(["red", "blue"]):
             t = totals_rows[row_idx][fighter_idx] if row_idx < len(totals_rows) else {}

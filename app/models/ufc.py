@@ -1,6 +1,6 @@
 import datetime as dt
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Date, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Date, Float, ForeignKey, Index, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.config import settings
@@ -32,8 +32,19 @@ class UFCFighter(TimestampMixin, Base):
     wins: Mapped[int] = mapped_column(Integer, default=0)
     losses: Mapped[int] = mapped_column(Integer, default=0)
     draws: Mapped[int] = mapped_column(Integer, default=0)
-    country_code: Mapped[str | None] = mapped_column(String(2), nullable=True)  # ISO 3166-1 alpha-2
+    #: ISO 3166-1 alpha-2 ("GB"), or a 3166-2 subdivision code for the UK home nations
+    #: ("GB-ENG"/"GB-SCT"/"GB-WLS"/"GB-NIR") so England, Scotland and Wales render their
+    #: own flags rather than the Union Jack. flag-icons ships both spellings.
+    country_code: Mapped[str | None] = mapped_column(String(6), nullable=True)
     image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    #: Locally cached copy of image_url, filled by scripts/cache_fighter_images.py.
+    #: UFC.com serves headshots through Drupal image styles whose URLs carry an `?itok=`
+    #: signature — those rotate, so every stored URL is on a clock. Caching the bytes is
+    #: what keeps a fighter's portrait working after that happens.
+    image_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    image_mime: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    image_fetched_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
     # -- Bio, scraped from ufc.com athlete pages (see services/ufc/ufc_profile_scraper.py) --
     #: Raw UFC.com text, e.g. "Rochester, United States" — sometimes just "Germany".
