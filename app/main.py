@@ -295,8 +295,23 @@ def scheduled_bovada_scrape():
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     run_migrations()
-    scheduler.add_job(scheduled_scrape, "interval", hours=24, id="ufc_scrape", replace_existing=True)
-    scheduler.add_job(scheduled_bovada_scrape, "cron", day_of_week="thu", hour=12, id="bovada_scrape", replace_existing=True)
+    # Anchored to the clock, not to process uptime. As an `interval` job the first
+    # run was scheduled 24h after add_job, so every deploy or restart reset the
+    # countdown -- on a service that redeploys daily the pipeline could go months
+    # without firing, which is what silently stopped fight previews. A cron trigger
+    # fires at the same hour regardless of when the process started.
+    #
+    # coalesce collapses runs missed while the process was down into one, and the
+    # grace time lets a restart shortly after the hour still pick it up instead of
+    # skipping to tomorrow.
+    scheduler.add_job(
+        scheduled_scrape, "cron", hour=9, id="ufc_scrape", replace_existing=True,
+        coalesce=True, misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        scheduled_bovada_scrape, "cron", day_of_week="thu", hour=12, id="bovada_scrape",
+        replace_existing=True, coalesce=True, misfire_grace_time=3600,
+    )
     scheduler.start()
     yield
     scheduler.shutdown()

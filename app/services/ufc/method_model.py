@@ -33,6 +33,7 @@ from app.database import SessionLocal
 from app.services.ufc.model import (
     build_features,
     load_fight_data,
+    _classify_weight_class,
     _safe_divide,
 )
 
@@ -1218,6 +1219,105 @@ def _build_prediction_matchup(df: pd.DataFrame) -> pd.DataFrame:
     matchup["weight_class_ordinal"] = red["weight_class_ordinal"].values
     matchup["is_5_round"] = red["is_5_round"].values
 
+    # --- Add upcoming fights (no fight stats yet) using latest fighter features ---
+    #
+    # load_fight_data() inner-joins fight stats and filters out all-zero placeholder
+    # rows, so a bout that has not happened is simply absent from `df` — which meant
+    # the method model could only ever predict fights that were already over, and no
+    # upcoming fight has ever had a method prediction. The winner model solved this
+    # in build_serving_matchup() by pairing each fighter's most recent feature
+    # snapshot; this mirrors that, column for column, so the two models cover the
+    # same set of fights.
+    #
+    # Features are properties of a fighter's history and carry over as-is. The two
+    # exceptions are age and layoff, which depend on WHEN the fight happens: copied
+    # off the last historical row they would give the fighter's age at their previous
+    # bout and the gap before it, so both are recomputed against the upcoming date.
+    from app.models.ufc import UFCFight, UFCFighter
+
+    df_sorted = df.sort_values("date", ascending=False)
+    latest_by_fighter = df_sorted.groupby("stats_fighter_id").first()
+    last_fight_date = df.groupby("stats_fighter_id")["date"].max().to_dict()
+
+    up_db = SessionLocal()
+    upcoming_fights = (
+        up_db.query(UFCFight).filter(UFCFight.id.notin_(set(common))).all()
+    )
+    fighter_dob = {int(f.id): f.dob for f in up_db.query(UFCFighter).all()}
+    up_db.close()
+
+    def _overrides(fighter_id, fight_date) -> dict:
+        out = {}
+        if not fight_date:
+            return out
+        dob = fighter_dob.get(int(fighter_id))
+        if isinstance(dob, _date):
+            out["age"] = (fight_date - dob).days / 365.25
+        prev = last_fight_date.get(fighter_id)
+        if prev is not None:
+            out["days_since_last"] = (pd.Timestamp(fight_date) - pd.Timestamp(prev)).days
+        return out
+
+    def _feat(feats, overrides, col) -> float:
+        if col in overrides:
+            return float(overrides[col])
+        return float(feats.get(col, 0.0) or 0.0)
+
+    upcoming_rows = []
+    for fight in upcoming_fights:
+        if fight.red_fighter_id not in latest_by_fighter.index:
+            continue
+        if fight.blue_fighter_id not in latest_by_fighter.index:
+            continue
+        r_feats = latest_by_fighter.loc[fight.red_fighter_id]
+        b_feats = latest_by_fighter.loc[fight.blue_fighter_id]
+        r_over = _overrides(fight.red_fighter_id, fight.date)
+        b_over = _overrides(fight.blue_fighter_id, fight.date)
+
+        row = {"fight_id": fight.id}
+        for col in feature_cols:
+            row[f"diff_{col}"] = _feat(r_feats, r_over, col) - _feat(b_feats, b_over, col)
+        for col in combined_cols:
+            row[f"combined_{col}"] = (_feat(r_feats, r_over, col) + _feat(b_feats, b_over, col)) / 2
+
+        r_ko, b_ko = _feat(r_feats, r_over, "ko_rate"), _feat(b_feats, b_over, "ko_rate")
+        r_kod, b_kod = _feat(r_feats, r_over, "been_ko_rate"), _feat(b_feats, b_over, "been_ko_rate")
+        r_sub, b_sub = _feat(r_feats, r_over, "sub_rate"), _feat(b_feats, b_over, "sub_rate")
+        r_subd, b_subd = _feat(r_feats, r_over, "been_subbed_rate"), _feat(b_feats, b_over, "been_subbed_rate")
+        row["ko_tendency"] = (r_ko + b_kod + b_ko + r_kod) / 4
+        row["sub_tendency"] = (r_sub + b_subd + b_sub + r_subd) / 4
+        row["dec_tendency"] = (_feat(r_feats, r_over, "dec_rate") + _feat(b_feats, b_over, "dec_rate")) / 2
+
+        for col in ["elo", "elo_expected", "resume_score", "career_fights", "career_win_pct",
+                    "streak", "finish_rate", "ko_rate", "sub_rate", "dec_rate",
+                    "been_ko_rate", "been_subbed_rate", "ko_elo", "sub_elo", "dec_elo",
+                    "style_matchup_adv"]:
+            if col in feature_cols:
+                row[f"red_{col}"] = _feat(r_feats, r_over, col)
+                row[f"blue_{col}"] = _feat(b_feats, b_over, col)
+
+        # Fight-level, and so taken from the upcoming bout itself rather than from
+        # either fighter's history. `max_fight_time_seconds` is 0 until the fight is
+        # scored, so the five-round flag comes off the scheduled time format.
+        division = _classify_weight_class(fight.weight_class) if fight.weight_class else "unknown"
+        row["weight_class_ordinal"] = float(WEIGHT_CLASS_ORDINAL.get(division, 5))
+        # A quarter of announced bouts have no time_format yet, so a title bout with
+        # a blank format would be scored as a three-rounder — and round count moves
+        # the decision probability more than most features in this model.
+        is_title = bool(fight.weight_class and "title" in fight.weight_class.lower())
+        row["is_5_round"] = float(len((fight.time_format or "").split("-")) >= 5 or is_title)
+        upcoming_rows.append(row)
+
+    if upcoming_rows:
+        upcoming_df = pd.DataFrame(upcoming_rows).set_index("fight_id")
+        upcoming_df.index.name = "fight_id"
+        matchup = pd.concat([matchup, upcoming_df])
+        log.info(f"  Added {len(upcoming_rows)} upcoming fights using latest fighter features")
+
+    # Winner-model-derived columns, computed over the whole frame so upcoming fights
+    # get theirs too. The per-corner rates come off the matchup's own red_/blue_
+    # columns rather than the historical `red`/`blue` frames, which do not cover the
+    # rows just appended.
     from app.models.ufc import UFCFightPrediction
     db_wp = SessionLocal()
     winner_preds = {wp.fight_id: wp.red_prob for wp in db_wp.query(UFCFightPrediction).all()}
@@ -1229,9 +1329,13 @@ def _build_prediction_matchup(df: pd.DataFrame) -> pd.DataFrame:
     matchup["upset_potential"] = 1 - matchup["favorite_prob"]
     rp = matchup["winner_red_prob"].values
     bp = matchup["winner_blue_prob"].values
-    matchup["fav_ko_rate"] = red["ko_rate"].values * rp + blue["ko_rate"].values * bp
-    matchup["fav_sub_rate"] = red["sub_rate"].values * rp + blue["sub_rate"].values * bp
-    matchup["fav_finish_rate"] = red["finish_rate"].values * rp + blue["finish_rate"].values * bp
+    for out_col, src in [("fav_ko_rate", "ko_rate"), ("fav_sub_rate", "sub_rate"),
+                         ("fav_finish_rate", "finish_rate")]:
+        if f"red_{src}" in matchup.columns:
+            matchup[out_col] = (
+                matchup[f"red_{src}"].fillna(0).values * rp
+                + matchup[f"blue_{src}"].fillna(0).values * bp
+            )
 
     matchup = matchup.fillna(0)
     return matchup

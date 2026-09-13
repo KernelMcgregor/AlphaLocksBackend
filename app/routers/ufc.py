@@ -4,7 +4,7 @@ import datetime as dt
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse, Response
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, aliased, joinedload
 
 from app.database import get_db
 from app.models.ufc import (
@@ -380,6 +380,10 @@ def get_fight(fight_id: int, db: Session = Depends(get_db)):
         "predicted_winner": pred.predicted_winner,
         "confidence": pred.confidence,
         "red_prob": pred.red_prob,
+        # Venn-Abers calibration bounds. Stored since the model was calibrated but
+        # never serialized, so the UI had no way to show how wide the interval is.
+        "va_prob_low": pred.va_prob_low,
+        "va_prob_high": pred.va_prob_high,
     } if pred else None
     result["method_prediction"] = {
         "predicted_method": method_pred.predicted_method,
@@ -392,6 +396,11 @@ def get_fight(fight_id: int, db: Session = Depends(get_db)):
         "bookmaker": o.bookmaker,
         "red_odds": o.red_odds,
         "blue_odds": o.blue_odds,
+        # Vig-inclusive implied probabilities, as scraped. The frontend used to
+        # re-derive these from the American odds; they are stored, so serve them.
+        "red_implied_prob": o.red_implied_prob,
+        "blue_implied_prob": o.blue_implied_prob,
+        "updated_at": o.updated_at.isoformat() if o.updated_at else None,
     } for o in odds_rows]
     result["shap_values"] = [{
         "feature_name": s.feature_name,
@@ -427,6 +436,90 @@ def get_fight(fight_id: int, db: Session = Depends(get_db)):
     } if preview else None
 
     return result
+
+
+@router.get("/previews")
+def list_previews(
+    limit: int = Query(default=60, le=200),
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    """Every written preview as an index row — the list behind "See All Articles".
+
+    Deliberately not the full article: the index only needs a headline and an
+    opening line, and the bodies run to a few thousand words each. The reader
+    follows the row to `/ufc/fights/{id}/preview`, which serves the whole piece
+    from the fight payload that page already fetches.
+    """
+    red_f = aliased(UFCFighter)
+    blue_f = aliased(UFCFighter)
+    rows = (
+        db.query(UFCFightPreview, UFCFight, UFCEvent, red_f, blue_f)
+        .join(UFCFight, UFCFight.id == UFCFightPreview.fight_id)
+        .outerjoin(UFCEvent, UFCEvent.id == UFCFight.event_id)
+        .outerjoin(red_f, red_f.id == UFCFight.red_fighter_id)
+        .outerjoin(blue_f, blue_f.id == UFCFight.blue_fighter_id)
+        # Newest card first, and within a card the most recently written piece.
+        .order_by(UFCFight.date.desc(), UFCFightPreview.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    def _headline_and_lede(content: str) -> tuple[str | None, str | None]:
+        """First markdown heading, and the first paragraph that follows it."""
+        headline = None
+        lede = None
+        for line in (content or "").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("#"):
+                if headline is None:
+                    headline = stripped.lstrip("#").strip()
+                continue
+            if headline is not None or lede is None:
+                # Skip table rows and list markers — they read as noise in a card.
+                if stripped.startswith(("|", "-", "*", ">")):
+                    continue
+                lede = stripped
+                break
+        return headline, lede
+
+    out = []
+    for preview, fight, event, red, blue in rows:
+        headline, lede = _headline_and_lede(preview.content)
+        out.append({
+            "fight_id": str(fight.id),
+            "headline": headline,
+            "lede": lede,
+            "weight_class": fight.weight_class,
+            "fight_date": fight.date.isoformat() if fight.date else None,
+            "is_upcoming": fight.winner_id is None,
+            "event_name": event.name if event else None,
+            "event_date": event.date.isoformat() if event and event.date else None,
+            "event_location": event.location if event else None,
+            "red_name": f"{red.first_name} {red.last_name}".strip() if red else None,
+            "blue_name": f"{blue.first_name} {blue.last_name}".strip() if blue else None,
+            "model_used": preview.model_used,
+            "generated_at": preview.created_at.isoformat() if preview.created_at else None,
+        })
+    return out
+
+
+@router.get("/fights/{fight_id}/context")
+def get_fight_context(fight_id: int, db: Session = Depends(get_db)):
+    """Matchup context: per-corner Glicko skills, skill edges, and shared opponents.
+
+    Complements `GET /fights/{id}` rather than replacing it — see
+    `app/services/ufc/fight_context_service.py` for what is deliberately left out.
+    """
+    from app.services.ufc.fight_context_service import gather_matchup_context
+
+    context = gather_matchup_context(fight_id, db)
+    if not context:
+        raise HTTPException(status_code=404, detail="Fight not found")
+    return context
 
 
 # --- Predictions ---

@@ -6,7 +6,7 @@ and odds to generate rich markdown previews for upcoming UFC fights.
 """
 
 import logging
-import time
+from concurrent.futures import ThreadPoolExecutor
 
 from openai import OpenAI
 from sqlalchemy import or_
@@ -17,8 +17,21 @@ from app.database import SessionLocal
 from app.models.ufc import (
     UFCEvent, UFCFight, UFCFighter, UFCFightOdds,
     UFCFightPrediction, UFCFightPreview, UFCFightShapValue,
-    UFCFightStats, UFCGlickoSnapshot, UFCFighterRanking,
-    UFCMethodPrediction,
+    UFCFightStats, UFCMethodPrediction,
+)
+# These per-fighter reads used to be defined here. They moved to
+# fight_context_service so the read-only /fights/{id}/context endpoint can serve
+# them without importing the OpenAI client this module pulls in.
+from app.services.ufc.fight_context_service import (  # noqa: F401
+    GLICKO_DIMS,
+    GLICKO_LABELS,
+    _days_since_last_fight,
+    _division_change,
+    _finish_rates,
+    _get_glicko_data,
+    _percentile_tier,
+    _scheduled_rounds,
+    glicko_matchup_edges,
 )
 
 log = logging.getLogger(__name__)
@@ -86,171 +99,6 @@ def _fighter_recent_fights(db: Session, fighter_id: int, limit: int = 5) -> list
         results.append(fight_info)
 
     return results
-
-
-def _finish_rates(db: Session, fighter_id: int) -> dict:
-    """Calculate KO and submission finish rates from all wins."""
-    wins = (
-        db.query(UFCFight)
-        .filter(UFCFight.winner_id == fighter_id)
-        .all()
-    )
-    total = len(wins)
-    if total == 0:
-        return {"ko_rate": 0, "sub_rate": 0, "total_wins": 0}
-    ko_count = sum(1 for w in wins if w.method and "KO" in w.method.upper())
-    sub_count = sum(1 for w in wins if w.method and "SUB" in w.method.upper())
-    return {
-        "ko_rate": round(ko_count / total, 2),
-        "sub_rate": round(sub_count / total, 2),
-        "total_wins": total,
-    }
-
-
-def _days_since_last_fight(db: Session, fighter_id: int) -> int | None:
-    """Days between today and the fighter's most recent completed fight."""
-    from datetime import date
-    last = (
-        db.query(UFCFight.date)
-        .filter(
-            or_(UFCFight.red_fighter_id == fighter_id, UFCFight.blue_fighter_id == fighter_id),
-            UFCFight.winner_id.isnot(None),
-        )
-        .order_by(UFCFight.date.desc())
-        .first()
-    )
-    if not last or not last[0]:
-        return None
-    fight_date = last[0] if isinstance(last[0], date) else date.fromisoformat(str(last[0]))
-    return (date.today() - fight_date).days
-
-
-def _division_change(db: Session, fighter_id: int, current_weight_class: str | None) -> dict:
-    """Check if this is a UFC debut or division change."""
-    past_fights = (
-        db.query(UFCFight.weight_class)
-        .filter(
-            or_(UFCFight.red_fighter_id == fighter_id, UFCFight.blue_fighter_id == fighter_id),
-            UFCFight.winner_id.isnot(None),
-        )
-        .order_by(UFCFight.date.desc())
-        .limit(5)
-        .all()
-    )
-    if not past_fights:
-        return {"ufc_debut": True, "division_change": False, "previous_division": None}
-    prev_class = past_fights[0][0]
-    changed = (
-        current_weight_class is not None
-        and prev_class is not None
-        and current_weight_class.strip().lower() != prev_class.strip().lower()
-    )
-    return {
-        "ufc_debut": False,
-        "division_change": changed,
-        "previous_division": prev_class if changed else None,
-    }
-
-
-def _scheduled_rounds(fight) -> int | None:
-    """Parse scheduled rounds from time_format (e.g. '3 Rnd (5-5-5)')."""
-    fmt = fight.time_format
-    if not fmt:
-        return None
-    parts = fmt.split()
-    if parts and parts[0].isdigit():
-        return int(parts[0])
-    return None
-
-
-GLICKO_DIMS = ["pts", "ko", "kod", "sub", "subd", "td", "tdd", "ctrl",
-                "str_vol", "str_acc", "str_def", "dist", "clinch", "gnd", "durability"]
-
-GLICKO_LABELS = {
-    "pts": "Round Winning", "ko": "KO Power", "kod": "KO Defense",
-    "sub": "Submission Offense", "subd": "Submission Defense",
-    "td": "Takedown Offense", "tdd": "Takedown Defense",
-    "ctrl": "Control Time", "str_vol": "Strike Volume",
-    "str_acc": "Strike Accuracy", "str_def": "Strike Defense",
-    "dist": "Distance Striking", "clinch": "Clinch Striking",
-    "gnd": "Ground Striking", "durability": "Durability",
-}
-
-
-def _percentile_tier(pct: float) -> str:
-    if pct >= 90:
-        return "Elite"
-    if pct >= 70:
-        return "Strong"
-    if pct >= 40:
-        return "Average"
-    if pct >= 20:
-        return "Below Avg"
-    return "Weak"
-
-
-def _get_glicko_data(db: Session, fight_id: int, fighter_id: int, weight_class: str | None) -> dict | None:
-    """Get Glicko snapshot and ranking data for a fighter."""
-    snapshot = (
-        db.query(UFCGlickoSnapshot)
-        .filter(UFCGlickoSnapshot.fight_id == fight_id, UFCGlickoSnapshot.fighter_id == fighter_id)
-        .first()
-    )
-    if not snapshot:
-        return None
-
-    # Filter on the division too. Fighters ranked in a p4p table have a second row, and
-    # .first() on fighter_id alone returned whichever the DB happened to yield — so a
-    # top-25 p4p rank could be shown as the divisional one. Also exclude rank=0
-    # placeholder rows, same reason as get_rankings().
-    from app.services.ufc.points_ranking_service import _classify_weight_class
-
-    wc_key = _classify_weight_class(weight_class) if weight_class else None
-    ranking = (
-        db.query(UFCFighterRanking)
-        .filter(
-            UFCFighterRanking.fighter_id == fighter_id,
-            UFCFighterRanking.weight_class == wc_key,
-            UFCFighterRanking.rank > 0,
-        )
-        .first()
-    ) if wc_key and wc_key != "unknown" else None
-
-    # feature_profile stores bare floats already normalised to 0-99 within the division.
-    # This previously expected {dim: {"percentile": n}}, which no writer has ever
-    # produced, so `percentiles` was always empty and every percentile/tier below was
-    # None — the whole block rendered blank.
-    import json
-    percentiles = {}
-    if ranking and ranking.feature_profile:
-        try:
-            profile = json.loads(ranking.feature_profile)
-            percentiles = {
-                k: float(v) for k, v in profile.items()
-                if k in GLICKO_DIMS and isinstance(v, (int, float))
-            }
-        except (json.JSONDecodeError, AttributeError, TypeError, ValueError):
-            pass
-
-    ratings = {}
-    for dim in GLICKO_DIMS:
-        val = getattr(snapshot, dim, None)
-        pct = percentiles.get(dim)
-        ratings[dim] = {
-            "label": GLICKO_LABELS[dim],
-            "rating": round(val, 1) if val is not None else None,
-            "percentile": round(pct, 1) if pct is not None else None,
-            "tier": _percentile_tier(pct) if pct is not None else None,
-        }
-
-    result = {"dimensions": ratings}
-    if ranking:
-        result["division_rank"] = ranking.rank
-        # `score` is a 0-1000 division-normalised points score, NOT a win rate. The old
-        # `score * 100` label read as a percentage and rendered values up to 100000%.
-        result["division_score"] = round(ranking.score, 1)
-
-    return result
 
 
 def gather_fight_context(fight_id: int, db: Session) -> dict | None:
@@ -377,32 +225,25 @@ def _glicko_block(label: str, glicko: dict | None) -> str:
     return "\n".join(lines)
 
 
-def _glicko_matchup_edges(red_glicko: dict | None, blue_glicko: dict | None) -> str:
-    """Compute biggest Glicko differentials between fighters."""
-    if not red_glicko or not blue_glicko:
-        return ""
-
-    edges = []
-    for dim in GLICKO_DIMS:
-        rd = red_glicko["dimensions"].get(dim, {})
-        bd = blue_glicko["dimensions"].get(dim, {})
-        if rd.get("rating") is not None and bd.get("rating") is not None:
-            diff = rd["rating"] - bd["rating"]
-            r_pct = rd.get("percentile", "?")
-            b_pct = bd.get("percentile", "?")
-            edges.append((abs(diff), dim, diff, r_pct, b_pct))
-
-    edges.sort(reverse=True)
+def _glicko_edge_block(red_glicko: dict | None, blue_glicko: dict | None) -> str:
+    """Format the biggest Glicko differentials for the prompt."""
+    edges = glicko_matchup_edges(red_glicko, blue_glicko)
     if not edges:
         return ""
 
+    # The prompt has always printed percentiles with `:.0f`, which blows up on the
+    # None a fighter outside the divisional rankings carries.
+    def pct(v):
+        return f"{v:.0f}th" if isinstance(v, (int, float)) else "unknown"
+
     lines = ["**KEY MATCHUP EDGES (biggest Glicko differentials):**"]
-    for _, dim, diff, r_pct, b_pct in edges[:6]:
-        label = GLICKO_LABELS[dim]
+    for e in edges[:6]:
+        diff, label = e["diff"], e["label"]
+        r_pct, b_pct = pct(e["red_percentile"]), pct(e["blue_percentile"])
         if diff > 0:
-            lines.append(f"- Red {label} advantage: +{diff:.0f} rating pts ({r_pct:.0f}th vs {b_pct:.0f}th percentile)")
+            lines.append(f"- Red {label} advantage: +{diff:.0f} rating pts ({r_pct} vs {b_pct} percentile)")
         else:
-            lines.append(f"- Blue {label} advantage: +{abs(diff):.0f} rating pts ({b_pct:.0f}th vs {r_pct:.0f}th percentile)")
+            lines.append(f"- Blue {label} advantage: +{abs(diff):.0f} rating pts ({b_pct} vs {r_pct} percentile)")
 
     return "\n".join(lines)
 
@@ -500,13 +341,37 @@ Keep the total length to about 600-800 words."""
 
 {_glicko_block('BLUE', context.get('blue_glicko'))}
 
-{_glicko_matchup_edges(context.get('red_glicko'), context.get('blue_glicko'))}"""
+{_glicko_edge_block(context.get('red_glicko'), context.get('blue_glicko'))}"""
 
     return system, user
 
 
-def generate_preview(fight_id: int, db: Session, force: bool = False) -> UFCFightPreview | None:
-    """Generate an AI preview for a single fight."""
+def _preview_client() -> OpenAI:
+    """Client for the preview model.
+
+    An explicit timeout matters here: the default is long enough that one stalled
+    completion can hold a worker for minutes, and in the parallel path that is a
+    whole slot doing nothing. Retries cover DeepSeek's occasional 5xx under load.
+    """
+    return OpenAI(
+        api_key=settings.DEEPSEEK_API_KEY,
+        base_url=settings.DEEPSEEK_BASE_URL,
+        timeout=settings.PREVIEW_TIMEOUT_SECONDS,
+        max_retries=2,
+    )
+
+
+def generate_preview(
+    fight_id: int,
+    db: Session,
+    force: bool = False,
+    client: OpenAI | None = None,
+) -> UFCFightPreview | None:
+    """Generate an AI preview for a single fight.
+
+    `client` lets a batch share one connection pool across fights; omitted, each
+    call builds its own.
+    """
     if not settings.DEEPSEEK_API_KEY:
         log.warning("DEEPSEEK_API_KEY not set, skipping preview generation")
         return None
@@ -524,10 +389,7 @@ def generate_preview(fight_id: int, db: Session, force: bool = False) -> UFCFigh
     system_prompt, user_message = build_preview_prompt(context)
 
     try:
-        client = OpenAI(
-            api_key=settings.DEEPSEEK_API_KEY,
-            base_url=settings.DEEPSEEK_BASE_URL,
-        )
+        client = client or _preview_client()
         response = client.chat.completions.create(
             model=settings.PREVIEW_MODEL,
             max_tokens=4096,
@@ -565,44 +427,75 @@ def generate_preview(fight_id: int, db: Session, force: bool = False) -> UFCFigh
         return None
 
 
-def generate_all_upcoming_previews(force: bool = False):
-    """Generate previews for all upcoming fights that have predictions."""
+def pending_preview_fight_ids(db: Session, force: bool = False) -> list[int]:
+    """Upcoming fights with a prediction, oldest event first.
+
+    `force` includes fights that already have a preview (they get regenerated);
+    otherwise only the ones still missing are returned.
+    """
     from datetime import date
+
+    q = (
+        db.query(UFCFight.id)
+        .join(UFCEvent, UFCFight.event_id == UFCEvent.id)
+        .join(UFCFightPrediction, UFCFightPrediction.fight_id == UFCFight.id)
+        .filter(
+            UFCFight.winner_id.is_(None),
+            UFCEvent.date >= date.today(),
+        )
+        .order_by(UFCEvent.date.asc())
+    )
+    if not force:
+        q = q.outerjoin(UFCFightPreview, UFCFightPreview.fight_id == UFCFight.id) \
+             .filter(UFCFightPreview.id.is_(None))
+    return [row[0] for row in q.all()]
+
+
+def generate_all_upcoming_previews(force: bool = False, workers: int | None = None) -> dict:
+    """Generate previews for all upcoming fights that have predictions.
+
+    Fights are fanned out across a thread pool: the work is one blocking HTTPS
+    call each, so the wall clock was previously the sum of ~50 completions
+    (30-40 minutes) when it is really the slowest one times the number of batches.
+    Each fight gets its own Session -- SQLAlchemy sessions are not thread-safe --
+    and the OpenAI client, which is, is shared so they pool connections.
+
+    Returns a summary so callers can report rather than guess from the log.
+    """
+    if not settings.DEEPSEEK_API_KEY:
+        log.warning("DEEPSEEK_API_KEY not set, skipping preview generation")
+        return {"requested": 0, "generated": 0, "failed": 0, "skipped_no_key": True}
+
+    workers = workers or settings.PREVIEW_WORKERS
 
     db = SessionLocal()
     try:
         # Collect IDs first, then close the query session to avoid transaction conflicts
-        fight_ids = [
-            row[0] for row in
-            db.query(UFCFight.id)
-            .join(UFCEvent, UFCFight.event_id == UFCEvent.id)
-            .join(UFCFightPrediction, UFCFightPrediction.fight_id == UFCFight.id)
-            .filter(
-                UFCFight.winner_id.is_(None),
-                UFCEvent.date >= date.today(),
-            )
-            .all()
-        ]
+        fight_ids = pending_preview_fight_ids(db, force=force)
+    finally:
         db.close()
 
-        log.info(f"Generating previews for {len(fight_ids)} upcoming fights")
+    if not fight_ids:
+        log.info("No upcoming fights need a preview")
+        return {"requested": 0, "generated": 0, "failed": 0}
 
-        for fight_id in fight_ids:
-            session = SessionLocal()
-            try:
-                generate_preview(fight_id, session, force=force)
-            except Exception:
-                log.exception(f"Failed to generate preview for fight {fight_id}")
-            finally:
-                session.close()
-            time.sleep(1)  # Rate limit courtesy
+    log.info(f"Generating previews for {len(fight_ids)} upcoming fights ({workers} workers)")
+    client = _preview_client()
 
-        log.info("Finished generating all upcoming previews")
-
-    except Exception:
-        log.exception("Failed to generate upcoming previews")
-    finally:
+    def one(fight_id: int) -> bool:
+        session = SessionLocal()
         try:
-            db.close()
+            return generate_preview(fight_id, session, force=force, client=client) is not None
         except Exception:
-            pass
+            log.exception(f"Failed to generate preview for fight {fight_id}")
+            return False
+        finally:
+            session.close()
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(one, fight_ids))
+
+    generated = sum(results)
+    failed = len(results) - generated
+    log.info(f"Finished previews: {generated} generated, {failed} failed")
+    return {"requested": len(fight_ids), "generated": generated, "failed": failed}

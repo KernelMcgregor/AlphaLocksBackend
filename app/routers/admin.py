@@ -366,14 +366,30 @@ def trigger_preview_generation(
     return {"message": "Preview generated", "fight_id": fight_id}
 
 
+@router.get("/pending-previews", dependencies=[Depends(require_admin_key)])
+def list_pending_previews(
+    force: bool = Query(default=False),
+    db: Session = Depends(get_db),
+):
+    """How many upcoming fights would `generate-all-previews` write, without writing."""
+    from app.services.ufc.preview_service import pending_preview_fight_ids
+
+    ids = pending_preview_fight_ids(db, force=force)
+    return {"count": len(ids), "fight_ids": ids}
+
+
 @router.post("/generate-all-previews", dependencies=[Depends(require_admin_key)])
 def trigger_all_previews(
     background_tasks: BackgroundTasks,
     force: bool = Query(default=False),
+    workers: int | None = Query(default=None, ge=1, le=16),
 ):
     from app.services.ufc.preview_service import generate_all_upcoming_previews
 
-    return _start_task(background_tasks, "Generate All Previews", generate_all_upcoming_previews, force=force)
+    return _start_task(
+        background_tasks, "Generate All Previews", generate_all_upcoming_previews,
+        force=force, workers=workers,
+    )
 
 
 # ---------------------------------------------------------------------------

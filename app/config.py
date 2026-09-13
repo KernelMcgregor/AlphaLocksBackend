@@ -14,6 +14,13 @@ class Settings(BaseSettings):
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
     PREVIEW_MODEL: str = "deepseek-chat"
+    # Fights generated concurrently. Each is one blocking HTTPS call, so this is
+    # wall-clock divided by roughly this factor. DeepSeek does not publish a hard
+    # request cap; 8 has been comfortable and leaves headroom.
+    PREVIEW_WORKERS: int = 8
+    # Per-request ceiling. The SDK default is long enough that one stalled
+    # completion holds a worker slot for minutes.
+    PREVIEW_TIMEOUT_SECONDS: float = 180.0
     ADMIN_API_KEY: str = ""
 
     @field_validator("CORS_ORIGINS", mode="before")
