@@ -226,6 +226,45 @@ def trigger_bovada_scrape(background_tasks: BackgroundTasks):
     return _start_task(background_tasks, "Bovada Odds", scrape_bovada_method_odds)
 
 
+@router.post("/scrape-prediction-markets", dependencies=[Depends(require_admin_key)])
+def trigger_prediction_markets(
+    background_tasks: BackgroundTasks,
+    venue: str = Query(default="both", pattern="^(kalshi|polymarket|both)$"),
+    backfill: bool = Query(default=False),
+    curves: str = Query(default="all", pattern="^(moneyline|all)$"),
+):
+    """Refresh Kalshi/Polymarket quotes and price curves.
+
+    `backfill=true` walks every event the venues have ever listed, including settled ones, and
+    rebuilds history from their candlestick endpoints. Safe to re-run: history writes are
+    ON CONFLICT DO NOTHING on (market_id, captured_at).
+    """
+    from app.services.ufc.prediction_markets import run_backfill, run_live
+
+    if backfill:
+        return _start_task(background_tasks, f"Prediction Markets backfill ({venue})",
+                           run_backfill, venue, curves)
+    return _start_task(background_tasks, f"Prediction Markets ({venue})", run_live, venue, curves)
+
+
+@router.post("/reconcile-fights", dependencies=[Depends(require_admin_key)])
+def trigger_reconcile(
+    background_tasks: BackgroundTasks,
+    apply: bool = Query(default=False),
+    previews: bool = Query(default=True),
+):
+    """Remove bouts that are no longer on their ufcstats event page.
+
+    Defaults to a report-only pass -- `apply=true` is required to delete. Deletion is skipped for
+    any fight with a recorded winner and for any event whose page fails to fetch, so a bad scrape
+    cannot empty a card.
+    """
+    from app.services.ufc.reconcile_service import run_reconcile
+
+    label = "Reconcile Fights" + ("" if apply else " (dry run)")
+    return _start_task(background_tasks, label, run_reconcile, 30, 120, not apply, True, previews)
+
+
 @router.post("/scrape-profiles", dependencies=[Depends(require_admin_key)])
 def trigger_profile_scrape(
     background_tasks: BackgroundTasks,

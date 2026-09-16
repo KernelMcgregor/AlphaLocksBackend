@@ -292,6 +292,51 @@ def scheduled_bovada_scrape():
         record_run("Bovada Odds", "error", str(e))
 
 
+def scheduled_prediction_markets():
+    """Refresh Kalshi and Polymarket quotes and curves for open fights.
+
+    Runs every two hours. The cadence is affordable because the job pulls each venue's own price
+    history rather than polling: one pass is ~950 requests and ~90 seconds, and re-requesting an
+    overlapping window is a no-op thanks to the unique constraint on (market_id, captured_at).
+    That also means a missed run costs nothing -- the next one refetches the gap -- so this and
+    the GitHub Actions schedule can both fire without conflicting.
+    """
+    import logging
+    log = logging.getLogger("scheduled_prediction_markets")
+    from app.routers.admin import record_run
+    try:
+        from app.services.ufc.prediction_markets import run_live
+        from app.services.ufc.prediction_markets.common import clear_caches
+        clear_caches()  # a long-lived process must not keep a stale candidate-fight cache
+        stats = run_live(venue="both")
+        log.info(f"Prediction markets refreshed: {stats}")
+        record_run("Prediction Markets", "done")
+    except Exception as e:
+        log.error(f"Prediction market refresh failed: {e}")
+        record_run("Prediction Markets", "error", str(e))
+
+
+def scheduled_reconcile():
+    """Drop bouts that have been pulled from their card, then rebuild what depended on them.
+
+    Paired with the prediction-market refresh on the same two-hour cadence because the two solve
+    the same staleness problem from opposite ends: a cancelled bout otherwise keeps its slot on
+    the upcoming-events page, keeps its prediction, and offers a false candidate when an external
+    feed's fight is matched to ours.
+    """
+    import logging
+    log = logging.getLogger("scheduled_reconcile")
+    from app.routers.admin import record_run
+    try:
+        from app.services.ufc.reconcile_service import run_reconcile
+        result = run_reconcile(dry_run=False)
+        log.info(f"Reconcile: {result['removed']} stale fights removed")
+        record_run("Reconcile Fights", "done")
+    except Exception as e:
+        log.error(f"Reconcile failed: {e}")
+        record_run("Reconcile Fights", "error", str(e))
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     run_migrations()
@@ -310,6 +355,17 @@ async def lifespan(_app: FastAPI):
     )
     scheduler.add_job(
         scheduled_bovada_scrape, "cron", day_of_week="thu", hour=12, id="bovada_scrape",
+        replace_existing=True, coalesce=True, misfire_grace_time=3600,
+    )
+    # Cron rather than interval, for the same reason as the jobs above: an interval job restarts
+    # its countdown on every deploy, so on a service that redeploys often it may never fire.
+    scheduler.add_job(
+        scheduled_prediction_markets, "cron", hour="*/2", id="prediction_markets",
+        replace_existing=True, coalesce=True, misfire_grace_time=3600,
+    )
+    # Offset an hour from the market refresh so the two never contend for the same worker.
+    scheduler.add_job(
+        scheduled_reconcile, "cron", hour="1,7,13,19", id="reconcile_fights",
         replace_existing=True, coalesce=True, misfire_grace_time=3600,
     )
     scheduler.start()

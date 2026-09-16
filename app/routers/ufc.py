@@ -435,6 +435,13 @@ def get_fight(fight_id: int, db: Session = Depends(get_db)):
         "generated_at": preview.created_at.isoformat() if preview.created_at else None,
     } if preview else None
 
+    # Prediction-market quotes (Kalshi, Polymarket). Served from the same call as the odds board
+    # because the page already renders both side by side; a second request would only add a
+    # render pass where the exchange rows pop in after the sportsbook ones.
+    from app.services.ufc.prediction_markets.serving import consensus_prob, fight_payload
+    result["prediction_markets"] = fight_payload(db, fight_id) or None
+    result["market_consensus"] = consensus_prob(db, fight_id)
+
     return result
 
 
@@ -520,6 +527,30 @@ def get_fight_context(fight_id: int, db: Session = Depends(get_db)):
     if not context:
         raise HTTPException(status_code=404, detail="Fight not found")
     return context
+
+
+@router.get("/fights/{fight_id}/market-history")
+def get_fight_market_history(
+    fight_id: int,
+    market_type: str = Query(default="moneyline"),
+    db: Session = Depends(get_db),
+):
+    """Prediction-market price curves for a fight, one series per venue.
+
+    Kept off the main fight payload deliberately: a curve is hundreds of points per venue, the
+    fight page is already a large single response, and only the movement chart needs it.
+
+    Points are red-corner probabilities. Both venues publish their own price history, so this is
+    real historical data rather than a record of when we happened to poll — which is why curves
+    exist for fights that settled long before any of this was built.
+    """
+    from app.services.ufc.prediction_markets.serving import market_history
+
+    fight = db.query(UFCFight.id).filter(UFCFight.id == fight_id).first()
+    if not fight:
+        raise HTTPException(status_code=404, detail="Fight not found")
+    return {"fight_id": fight_id, "market_type": market_type,
+            "series": market_history(db, fight_id, market_type)}
 
 
 # --- Predictions ---
@@ -881,6 +912,10 @@ def get_upcoming_events(db: Session = Depends(get_db)):
         for o in odds_rows:
             odds_map.setdefault(o.fight_id, []).append(o)
 
+        # Exchange consensus for the whole card in one query — see consensus_probs_bulk.
+        from app.services.ufc.prediction_markets.serving import consensus_probs_bulk
+        exchange_map = consensus_probs_bulk(db, fight_ids)
+
         fight_list = []
         for f in fights:
             p = pred_map.get(f.id)
@@ -918,6 +953,9 @@ def get_upcoming_events(db: Session = Depends(get_db)):
                     "blue_odds": o.blue_odds,
                     "updated_at": o.updated_at.isoformat() if o.updated_at else None,
                 } for o in fight_odds],
+                # Volume-weighted Kalshi/Polymarket price for the red corner. Namespaced apart
+                # from `odds` because it is a no-vig traded probability, not an American line.
+                "exchange": exchange_map.get(f.id),
                 "prediction": {
                     "predicted_winner": p.predicted_winner,
                     "confidence": p.confidence,
@@ -964,6 +1002,10 @@ def get_picks(db: Session = Depends(get_db)):
 
 def _get_picks_data(db: Session):
     from datetime import date as _date, timedelta
+
+    from app.services.ufc.prediction_markets.serving import (
+        best_raw_prices as best_exchange_prices, consensus_prob as market_consensus,
+    )
 
     def implied_prob(american_odds):
         if american_odds > 0:
@@ -1064,6 +1106,45 @@ def _get_picks_data(db: Session):
             "blue_odds": o.blue_odds,
         } for o in sorted(odds_rows, key=lambda o: o.bookmaker)]
 
+        # Exchange pricing, kept in its own fields rather than mixed into `odds_rows`.
+        #
+        # This endpoint powers the site's picks/arbitrage page. The *pre-registered* rule lives in
+        # app/services/ufc/picks.py and scripts/generate_picks.py, and PREREGISTRATION.md registers
+        # its book set; letting exchange prices into the average above would change the registered
+        # market price and silently invalidate the rule. They are separate code paths and the
+        # exchange data is in separate tables, so that cannot happen by accident -- but the numbers
+        # are kept separate here too, so the page can show both without either being mistaken for
+        # the other.
+        exchange = market_consensus(db, fight.id)
+        exchange_edge = None
+        if exchange and prediction:
+            # Against a no-vig exchange price there is no devig assumption in the comparison,
+            # which makes this the more honest of the two edges shown.
+            side_prob = (prediction.red_prob if (edge_side or "red") == "red"
+                         else 1 - prediction.red_prob)
+            market_side = (exchange["red_prob"] if (edge_side or "red") == "red"
+                           else 1 - exchange["red_prob"])
+            exchange_edge = round((side_prob - market_side) * 100, 1)
+
+        # Cross-venue arbitrage: an exchange price against a sportsbook price. Because exchange
+        # quotes carry no vig, this pairing is far likelier to cross than book-vs-book, which is
+        # what the existing `margin` measures.
+        cross_margin, cross_detail = None, None
+        raw = best_exchange_prices(db, fight.id)
+        if raw and best_red and best_blue:
+            # Raw exchange prices, not the normalised consensus: normalising forces red + blue to
+            # exactly 1 and so guarantees a margin of zero, which is the one answer an arbitrage
+            # check must never be hard-coded to give.
+            book_red, book_blue = implied_prob(best_red.red_odds), implied_prob(best_blue.blue_odds)
+            red_src = "exchange" if raw["red_price"] < book_red else "book"
+            blue_src = "exchange" if raw["blue_price"] < book_blue else "book"
+            total = min(raw["red_price"], book_red) + min(raw["blue_price"], book_blue)
+            cross_margin = round((1 - total) * 100, 2)
+            cross_detail = {
+                "red_source": raw["red_venue"] if red_src == "exchange" else best_red.bookmaker,
+                "blue_source": raw["blue_venue"] if blue_src == "exchange" else best_blue.bookmaker,
+            }
+
         results.append({
             "fight_id": fight.id,
             "event_name": fight.event.name if fight.event else "",
@@ -1092,6 +1173,12 @@ def _get_picks_data(db: Session):
             "edge_implied_prob": edge_implied_prob,
             # Odds
             "all_odds": all_books,
+            # Prediction markets, deliberately namespaced apart from the sportsbook fields above.
+            "exchange_red_prob": round(exchange["red_prob"] * 100, 1) if exchange else None,
+            "exchange_venues": exchange["venues"] if exchange else None,
+            "exchange_edge": exchange_edge,
+            "cross_venue_margin": cross_margin,
+            "cross_venue_detail": cross_detail,
             "updated_at": max(
                 (o.updated_at for o in odds_rows if o.updated_at),
                 default=None,

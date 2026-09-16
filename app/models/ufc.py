@@ -358,6 +358,137 @@ class UFCMethodOdds(TimestampMixin, Base):
     fight: Mapped["UFCFight"] = relationship()
 
 
+class UFCPredictionMarket(TimestampMixin, Base):
+    """One tradeable outcome on a prediction-market venue (Kalshi, Polymarket).
+
+    Deliberately *not* stored in `ufc_fight_odds`. That table is queried unfiltered by the
+    winner model's feature join (`model.py`), by the pre-registered picks generator
+    (`scripts/generate_picks.py`), and by `ranking_baselines.py`. PREREGISTRATION.md registers
+    the book set as FanDuel/DraftKings/BetMGM/Bovada and lists changing it as a rule change, so
+    adding exchange prices there would both contaminate training features and silently invalidate
+    the pre-registered rule. Keeping exchanges in their own tables makes that impossible rather
+    than merely discouraged.
+
+    Prices here live in probability space (0-1), not American odds: that is how both venues quote,
+    and converting to American and back would only lose precision. Exchange quotes are also
+    near-no-vig by construction (yes + no ~ 1), so the devig step that `ufc_fight_odds` bakes into
+    `red_implied_prob` has no analogue -- normalise across the pair at read time instead.
+    """
+
+    __tablename__ = "ufc_prediction_markets"
+    __table_args__ = (
+        UniqueConstraint("platform", "external_market_id"),
+        Index("ix_pred_market_fight_type", "fight_id", "market_type"),
+        {"schema": UFC_SCHEMA},
+    )
+
+    #: Nullable: markets are recorded even when fuzzy name matching fails to tie them to a fight,
+    #: so an unmatched venue market is a visible row to debug rather than a silent drop.
+    fight_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey(_fk("ufc_fights.id")), index=True, nullable=True
+    )
+    platform: Mapped[str] = mapped_column(String(20), index=True)  # 'kalshi' | 'polymarket'
+
+    #: Kalshi event_ticker (KXUFCFIGHT-26SEP19VANPAN) | Polymarket event slug
+    external_event_id: Mapped[str] = mapped_column(String(200), index=True)
+    #: Kalshi market ticker (…-VAN) | Polymarket CLOB token id
+    external_market_id: Mapped[str] = mapped_column(String(200))
+
+    #: 'moneyline'|'method'|'fighter_method'|'round_ou'|'fighter_round'|'distance'|'unknown'
+    market_type: Mapped[str] = mapped_column(String(40), index=True)
+    #: 'red'|'blue'|'ko_tko'|'submission'|'decision'|'ou_2.5'|'red_r1'|…
+    outcome_key: Mapped[str] = mapped_column(String(60))
+    #: Raw venue label, kept verbatim. Both venues add market types over time; when
+    #: classification falls through to 'unknown' this is the only way to see what arrived.
+    outcome_label: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    #: Which corner the outcome belongs to, once resolved against ufc_fights. Null for
+    #: fight-level markets (method, distance, round totals) that belong to neither corner.
+    side: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
+    status: Mapped[str] = mapped_column(String(20), default="open")  # open|settled|cancelled
+    #: 1.0 / 0.0 / 0.5 once settled. Comparing this against ufc_fights.winner_id is the
+    #: cheapest end-to-end check that matching and corner orientation are both correct.
+    resolved_outcome: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    fight: Mapped["UFCFight"] = relationship()
+
+
+class UFCPredictionMarketQuote(TimestampMixin, Base):
+    """Latest observation per market, updated in place -- the closing price once settled.
+
+    Mirrors the role `UFCFightOdds` plays for sportsbooks: one row, always current. The full
+    curve lives in `UFCPredictionMarketHistory`.
+    """
+
+    __tablename__ = "ufc_prediction_market_quotes"
+    __table_args__ = (
+        UniqueConstraint("market_id"),
+        {"schema": UFC_SCHEMA},
+    )
+
+    market_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey(_fk("ufc_prediction_markets.id")), index=True
+    )
+    price: Mapped[float] = mapped_column(Float)  # probability space, 0-1
+    bid: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ask: Mapped[float | None] = mapped_column(Float, nullable=True)
+    volume: Mapped[float | None] = mapped_column(Float, nullable=True)
+    open_interest: Mapped[float | None] = mapped_column(Float, nullable=True)
+    liquidity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    captured_at: Mapped[dt.datetime] = mapped_column(DateTime, index=True)
+
+    market: Mapped["UFCPredictionMarket"] = relationship()
+
+
+class UFCPredictionMarketHistory(Base):
+    """Append-only price curve, one row per market per observation timestamp.
+
+    Unlike `UFCFightOddsHistory` -- which can only ever record what a scrape happened to observe,
+    and so cannot be backfilled -- this table is populated from the venues' *own* history
+    endpoints (Kalshi candlesticks, Polymarket /prices-history). Two consequences follow, and the
+    ingestion job is built around both:
+
+    1. History is backfillable. Curves exist for fights that settled long before this project
+       ever called these APIs.
+    2. History is self-healing. A missed or failed run leaves no permanent hole, because the next
+       run re-requests the same window from the venue rather than recording only "now". This is
+       why the refresh job pulls candles instead of polling snapshots, and why running it from
+       both APScheduler and GitHub Actions is harmless.
+
+    `captured_at` is therefore the venue's own period timestamp, not our wall clock. Combined with
+    the unique constraint that makes re-ingesting a window a no-op.
+    """
+
+    __tablename__ = "ufc_prediction_market_history"
+    __table_args__ = (
+        UniqueConstraint("market_id", "captured_at"),
+        Index("ix_pred_market_history_market_captured", "market_id", "captured_at"),
+        {"schema": UFC_SCHEMA},
+    )
+
+    # Declared explicitly rather than inherited from TimestampMixin, for the same reason
+    # UFCFightOddsHistory does: a column tracking mutation has no business on a table whose
+    # entire contract is that rows are never mutated.
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, index=True)
+
+    market_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey(_fk("ufc_prediction_markets.id")), index=True
+    )
+    price: Mapped[float] = mapped_column(Float)
+    bid: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ask: Mapped[float | None] = mapped_column(Float, nullable=True)
+    volume: Mapped[float | None] = mapped_column(Float, nullable=True)
+    open_interest: Mapped[float | None] = mapped_column(Float, nullable=True)
+    captured_at: Mapped[dt.datetime] = mapped_column(DateTime, index=True)
+
+    #: Days between this observation and the fight, denormalised at write time -- the whole point
+    #: of the table is price as a function of time-to-event, and the event date can move when a
+    #: bout is rebooked. Same rationale as UFCFightOddsHistory.days_to_fight.
+    days_to_fight: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    market: Mapped["UFCPredictionMarket"] = relationship()
+
+
 class UFCFightShapValue(TimestampMixin, Base):
     __tablename__ = "ufc_fight_shap_values"
     __table_args__ = (

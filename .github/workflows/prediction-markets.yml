@@ -1,0 +1,68 @@
+name: Prediction Markets
+
+# Every two hours. The cadence is affordable because the job pulls each venue's own price history
+# rather than polling for snapshots: ~950 requests and ~90s per pass, against measured ceilings of
+# ~4 rps unauthenticated on Kalshi and 14+ rps on Polymarket.
+#
+# Pulling history rather than sampling it also makes the job self-healing and exactly idempotent.
+# A missed or failed run leaves no permanent hole, because the next run re-requests the same
+# window and the unique constraint on (market_id, captured_at) discards what is already stored.
+# That is why this can run here *and* on the in-process APScheduler without the two conflicting.
+#
+# This is the schedule that actually runs reliably: the APScheduler jobs in app/main.py die with
+# the Railway dyno.
+on:
+  schedule:
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+    inputs:
+      backfill:
+        description: 'Walk every event ever listed, including settled, and rebuild curves'
+        type: boolean
+        default: false
+      venue:
+        description: 'Which venue to ingest'
+        type: choice
+        options: [both, kalshi, polymarket]
+        default: both
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    # A backfill walks ~1200 events across both venues at a throttled request rate.
+    timeout-minutes: 90
+    env:
+      # Both APIs are unauthenticated for market reads, so no venue secrets are needed.
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Refresh prediction markets
+        run: |
+          python -m app.services.ufc.prediction_markets \
+            ${{ inputs.backfill && '--backfill' || '--live' }} \
+            --venue ${{ inputs.venue || 'both' }} \
+            --curves all
+
+      # Paired with the market refresh because both fix staleness on the upcoming card, from
+      # opposite ends: a cancelled bout otherwise keeps its slot on the events page, keeps its
+      # prediction, and offers a false candidate when a venue's fight is matched to ours.
+      #
+      # Only runs on the schedule, not on a manual backfill, where the intent is market data only.
+      - name: Remove cancelled fights and refresh what depended on them
+        if: github.event_name == 'schedule'
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        # Regeneration is skipped entirely when nothing was removed, so the usual run costs one
+        # page fetch per upcoming event and nothing else.
+        run: python -m app.services.ufc.reconcile_service --apply

@@ -70,6 +70,18 @@ jobs:
         if: steps.check.outputs.event_happened == 'true'
         run: python -m app.services.ufc.career_stats_service
 
+      # Must precede the two prediction steps. ufcstats drops a cancelled or rebooked bout from
+      # its event page, but upsert_fight only ever inserts or updates, so the bout survives in our
+      # copy forever — Noche UFC stored 16 fights against a real card of 13, with Jean Silva
+      # appearing twice. Without this the models below generate predictions for bouts that will
+      # never happen, and those bouts stay on the upcoming-events page.
+      #
+      # --no-previews here because this job's own preview pass covers the replacement bout; the
+      # standalone reconcile job below is the one that needs to fill that gap itself.
+      - name: Remove cancelled fights
+        if: steps.check.outputs.event_happened == 'true'
+        run: python -m app.services.ufc.reconcile_service --apply --no-previews
+
       - name: Generate winner predictions
         if: steps.check.outputs.event_happened == 'true'
         run: python -m app.services.ufc.model --predict
