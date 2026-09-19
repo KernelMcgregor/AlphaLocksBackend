@@ -1,0 +1,1746 @@
+# Tapology's published UFC rankings — the fit target.
+#
+# Two accepted formats, auto-detected per division:
+#
+#   1. RAW PAGE DUMP (preferred — just select the division page and paste). The parser
+#      anchors on the record line, so rank numbers, movement arrows, nicknames, scheduled
+#      -bout notes and the method/year columns all take care of themselves, and the
+#      Strength of Schedule number is captured as a second calibration target.
+#
+#   2. One name per line, best first.
+#
+# Division headers accept the key (w_strawweight) or the display name (Women's Strawweight).
+# Lines starting with # are ignored.
+#
+# Then run:   ./venv/bin/python -m app.services.ufc.tapology_fit
+
+== lightweight
+1
+Justin Gaethje
+
+Justin "The Highlight" Gaethje
+11-5
+UFC
+Strength
+of
+Schedule
+help
+67
+TKO
+2026
+DEC
+2026
+DEC
+2025
+TKO
+2024
+TKO
+2023
+DEC
+2023
+2
+Ilia Topuria
+
+Ilia "El Matador" Topuria
+9-1
+UFC
+76
+TKO
+2026
+TKO
+2025
+TKO
+2024
+TKO
+2024
+DEC
+2023
+SUB
+2022
+3
+▲
+1
+Charles Oliveira
+
+Charles "Do Bronxs" Oliveira
+25-11, 1 NC
+UFC
+78
+DEC
+2026
+SUB
+2025
+TKO
+2025
+DEC
+2024
+DEC
+2024
+TKO
+2023
+4
+1
+▼
+Arman Tsarukyan
+
+Arman "The Batman" Tsarukyan
+10-2
+UFC
+52
+SUB
+2025
+DEC
+2024
+TKO
+2023
+TKO
+2023
+DEC
+2022
+DEC
+2022
+#10 Mauricio Ruffy
+Scheduled Sep 19
+5
+Paddy Pimblett
+
+Paddy "The Baddy" Pimblett
+8-1
+UFC
+49
+SUB
+2026
+DEC
+2026
+TKO
+2025
+SUB
+2024
+DEC
+2023
+DEC
+2022
+6
+Max Holloway
+
+Max "Blessed" Holloway
+24-9
+UFC
+60
+TKO
+2026
+DEC
+2026
+DEC
+2025
+TKO
+2024
+TKO
+2024
+TKO
+2023
+7
+Quillan Salkilld
+
+Quillan Salkilld
+6-0
+UFC
+32
+SUB
+2026
+TKO
+2026
+SUB
+2026
+TKO
+2025
+DEC
+2025
+TKO
+2025
+8
+Benoit Saint Denis
+
+Benoit "God of War" Saint Denis
+9-4
+UFC
+47
+SUB
+2026
+TKO
+2026
+TKO
+2025
+SUB
+2025
+SUB
+2025
+TKO
+2024
+9
+Renato Moicano
+
+Renato Moicano
+13-7
+UFC
+57
+SUB
+2026
+DEC
+2025
+SUB
+2025
+TKO
+2024
+TKO
+2024
+DEC
+2024
+#29 Tom Nolan
+Scheduled Oct 31
+10
+Mauricio Ruffy
+
+Mauricio Ruffy
+5-1
+UFC
+39
+TKO
+2026
+TKO
+2026
+SUB
+2025
+TKO
+2025
+DEC
+2024
+TKO
+2024
+#4 Arman Tsarukyan
+Scheduled Sep 19
+11
+Rafael Fiziev
+
+Rafael "Ataman" Fiziev
+8-5
+UFC
+58
+TKO
+2026
+TKO
+2026
+DEC
+2025
+DEC
+2025
+TKO
+2023
+DEC
+2023
+12
+▲
+1
+Jalin Turner
+
+Jalin "The Tarantula" Turner
+9-6
+UFC
+43
+TKO
+2026
+TKO
+2025
+SUB
+2025
+TKO
+2024
+TKO
+2023
+DEC
+2023
+13
+▲
+1
+Salahdine Parnasse
+
+Salahdine "Lion of Atlas" Parnasse
+1-0
+UFC
+11
+TKO
+2026
+14
+▲
+1
+Axel Sola
+
+Axel Sola
+3-1
+UFC
+21
+TKO
+2026
+SUB
+2026
+DEC
+2026
+TKO
+2025
+15
+▲
+1
+Manuel Torres
+
+Manuel "El Loco" Torres
+5-2
+UFC
+36
+TKO
+2026
+TKO
+2025
+TKO
+2025
+TKO
+2024
+SUB
+2024
+TKO
+2023
+16
+▲
+1
+Mateusz Gamrot
+
+Mateusz "Gamer" Gamrot
+9-5
+UFC
+53
+SUB
+2026
+SUB
+2026
+SUB
+2025
+DEC
+2025
+DEC
+2024
+DEC
+2024
+17
+▲
+1
+Jim Miller
+
+Jim "A-10" Miller
+28-18, 1 NC
+UFC
+29
+SUB
+2026
+DEC
+2025
+SUB
+2024
+DEC
+2024
+SUB
+2024
+TKO
+2023
+18
+▲
+1
+Grant Dawson
+
+Grant "KGD" Dawson
+12-2-1
+UFC
+34
+SUB
+2026
+TKO
+2025
+DEC
+2025
+TKO
+2024
+DEC
+2024
+TKO
+2023
+#47 Nurullo Aliev
+Scheduled Oct 24
+19
+7
+▼
+Rafa García
+
+Rafa "Gifted" García
+7-5
+UFC
+37
+DEC
+2026
+DEC
+2026
+TKO
+2025
+DEC
+2025
+TKO
+2024
+DEC
+2023
+Lost to Rongzhu
+Prelims Last Week
+20
+Chris Padilla
+
+Chris "Taco" Padilla
+5-0-1
+UFC
+22
+SUB
+2026
+DEC
+2026
+TKO
+2025
+DEC
+2025
+TKO
+2024
+SUB
+2024
+
+== flyweight
+1
+Joshua Van
+
+Joshua "The Fearless" Van
+10-1
+UFC
+Strength
+of
+Schedule
+help
+46
+TKO
+2026
+2
+Alexandre Pantoja
+
+Alexandre "The Cannibal" Pantoja
+14-4
+UFC
+60
+TKO
+2025
+3
+Tatsuro Taira
+
+Tatsuro "The Best" Taira
+8-2
+UFC
+50
+TKO
+2026
+4
+Manel Kape
+
+Manel "StarBoy" Kape
+8-3
+UFC
+43
+TKO
+2026
+5
+Brandon Royval
+
+Brandon "Raw Dawg" Royval
+8-5
+UFC
+54
+SUB
+2026
+6
+Kyoji Horiguchi
+
+Kyoji "Karate Kid" Horiguchi
+9-2
+UFC
+42
+TKO
+2026
+7
+Asu Almabayev
+
+Asu "Zulfikar" Almabayev
+7-1
+UFC
+36
+SUB
+2026
+8
+Lone'er Kavanagh
+
+Lone'er Kavanagh
+3-2
+UFC
+38
+SUB
+2026
+9
+Ramazan Temirov
+
+Ramazan "Temurlan" Temirov
+3-0
+UFC
+18
+TKO
+2026
+10
+Steve Erceg
+
+Steve "Astroboy" Erceg
+5-4
+UFC
+47
+TKO
+2026
+11
+Alex Perez
+
+Alex Perez
+8-7, 1 NC
+UFC
+37
+DEC
+2026
+12
+Tim Elliott
+
+Tim Elliott
+11-12
+UFC
+28
+DEC
+2026
+13
+Sumudaerji
+
+"The Tibetan Eagle" Sumudaerji
+7-4, 1 NC
+UFC
+24
+DEC
+2026
+14
+Amir Albazi
+
+Amir "The Prince" Albazi
+5-2
+UFC
+37
+DEC
+2026
+15
+Kai Kara-France
+
+Kai "Don't Blink" Kara-France
+8-5
+UFC
+46
+SUB
+2025
+16
+Jose Ochoa
+
+Jose "Kalzifer" Ochoa
+2-2
+UFC
+19
+DEC
+2026
+17
+Alessandro Costa
+
+Alessandro "Nono" Costa
+5-3
+UFC
+16
+SUB
+2026
+18
+Edgar Cháirez
+
+Edgar "Puro Chicali" Cháirez
+4-3, 1 NC
+UFC
+21
+DEC
+2026
+19
+Rei Tsuruya
+
+Rei Tsuruya
+3-1
+UFC
+15
+SUB
+2026
+20
+Brandon Moreno
+
+Brandon "The Assassin Baby" Moreno
+12-7-2
+UFC
+38
+DEC
+2026
+21
+Joseph Morales
+
+Joseph "Bopo" Morales
+3-3
+UFC
+23
+DEC
+2026
+22
+Jafel Filho
+
+Jafel "Pastor" Filho
+3-3
+UFC
+19
+DEC
+2026
+23
+Tagir Ulanbekov
+
+Tagir Ulanbekov
+6-2
+UFC
+21
+SUB
+2025
+
+== bantamweight
+1
+Petr Yan
+
+Petr "No Mercy" Yan
+12-4
+UFC
+Strength
+of
+Schedule
+help
+60
+DEC
+2025
+2
+Merab Dvalishvili
+
+Merab "The Machine" Dvalishvili
+14-3
+UFC
+81
+DEC
+2025
+3
+Sean O'Malley
+
+"Suga" Sean O'Malley
+12-3, 1 NC
+UFC
+72
+TKO
+2026
+4
+Yadong Song
+
+Yadong "Kung Fu Kid" Song
+13-4-1
+UFC
+64
+TKO
+2026
+5
+Umar Nurmagomedov
+
+Umar Nurmagomedov
+8-2
+UFC
+64
+TKO
+2026
+6
+Mario Bautista
+
+Mario Bautista
+12-3
+UFC
+61
+DEC
+2026
+7
+Cory Sandhagen
+
+Cory Sandhagen
+11-6
+UFC
+66
+DEC
+2026
+8
+Payton Talbott
+
+Payton Talbott
+5-1
+UFC
+25
+DEC
+2025
+9
+Charles Jourdain
+
+Charles "Air" Jourdain
+9-7-1
+UFC
+28
+DEC
+2026
+10
+Kyler Phillips
+
+Kyler "The Matrix" Phillips
+6-4
+UFC
+39
+DEC
+2026
+11
+Raul Rosas Jr.
+
+Raul "El Niño Problema" Rosas Jr.
+6-1
+UFC
+21
+DEC
+2026
+12
+Raoni Barcelos
+
+Raoni Barcelos
+11-4
+UFC
+31
+DEC
+2026
+13
+Vinicius Oliveira
+
+Vinicius "LokDog" Oliveira
+5-1
+UFC
+35
+TKO
+2026
+14
+Marcus McGhee
+
+Marcus "The Maniac" McGhee
+5-1
+UFC
+27
+DEC
+2026
+15
+Aiemann Zahabi
+
+Aiemann "Icemann" Zahabi
+8-3
+UFC
+41
+TKO
+2026
+16
+Deiveson Figueiredo
+
+Deiveson "Deus da Guerra" Figueiredo
+14-7-1
+UFC
+66
+SUB
+2026
+17
+David Martinez
+
+David "Doctor" Martinez
+4-0
+UFC
+23
+DEC
+2026
+18
+Montel Jackson
+
+Montel "Quik" Jackson
+9-4
+UFC
+33
+DEC
+2026
+19
+Bryce Mitchell
+
+Bryce "Thug Nasty" Mitchell
+10-3
+UFC
+37
+SUB
+2026
+20
+Da'Mon Blackshear
+
+Da'Mon "Da Monster" Blackshear
+5-4-1
+UFC
+29
+DEC
+2025
+
+== featherweight
+1
+Alexander Volkanovski
+
+Alexander Volkanovski
+15-3
+UFC
+Strength
+of
+Schedule
+help
+82
+DEC
+2026
+2
+Diego Lopes
+
+Diego Lopes
+7-3
+UFC
+63
+TKO
+2026
+3
+Movsar Evloev
+
+Movsar Evloev
+10-0
+UFC
+50
+DEC
+2026
+4
+Aljamain Sterling
+
+Aljamain "Funk Master" Sterling
+18-5
+UFC
+56
+DEC
+2026
+5
+Yair Rodriguez
+
+Yair "El Pantera" Rodriguez
+11-4, 1 NC
+UFC
+70
+DEC
+2025
+6
+Brian Ortega
+
+Brian "T-City" Ortega
+8-5, 1 NC
+UFC
+68
+DEC
+2025
+7
+Lerone Murphy
+
+"The Miracle" Lerone Murphy
+9-1-1
+UFC
+48
+DEC
+2026
+8
+Jean Silva
+
+Jean "Lord" Silva
+7-1
+UFC
+41
+SUB
+2026
+9
+Youssef Zalal
+
+Youssef "The Moroccan Devil" Zalal
+8-4-1
+UFC
+36
+DEC
+2026
+10
+Arnold Allen
+
+Arnold "Almighty" Allen
+12-3
+UFC
+57
+DEC
+2026
+11
+Melquizael Costa
+
+Melquizael "The Dalmatian" Costa
+7-3
+UFC
+40
+DEC
+2026
+12
+Pat Sabatini
+
+Pat Sabatini
+9-2
+UFC
+31
+DEC
+2026
+13
+Steve Garcia
+
+Steve "Mean Machine" Garcia
+8-3
+UFC
+35
+TKO
+2026
+14
+Kevin Vallejos
+
+Kevin "El Chino" Vallejos
+4-0
+UFC
+19
+TKO
+2026
+15
+Doo Ho Choi
+
+"The Korean Superboy" Doo Ho Choi
+6-3-1
+UFC
+30
+TKO
+2026
+16
+Sean Woodson
+
+Sean "The Sniper" Woodson
+8-2-1
+UFC
+37
+DEC
+2026
+17
+Chepe Mariscal
+
+Chepe "Machine Gun" Mariscal
+5-1
+UFC
+25
+DEC
+2025
+18
+Vinicius Oliveira
+
+Vinicius "LokDog" Oliveira
+5-1
+UFC
+35
+TKO
+2026
+19
+Aaron Pico
+
+Aaron Pico
+1-1
+UFC
+18
+DEC
+2026
+20
+Julian Erosa
+
+Julian "Juicy J" Erosa
+9-9
+UFC
+24
+TKO
+2026
+
+== welterweight
+1
+Islam Makhachev
+
+Islam Makhachev
+18-1
+UFC
+Strength
+of
+Schedule
+help
+80
+DEC
+2026
+2
+Carlos Prates
+
+Carlos "The Nightmare" Prates
+7-1
+UFC
+65
+TKO
+2026
+3
+Ian Machado Garry
+
+"The Future" Ian Machado Garry
+10-2
+UFC
+70
+DEC
+2026
+4
+Michael Morales
+
+Michael Morales
+7-0
+UFC
+41
+TKO
+2025
+5
+Sean Brady
+
+Sean Brady
+9-2
+UFC
+54
+DEC
+2026
+6
+Kamaru Usman
+
+Kamaru "The Nigerian Nightmare" Usman
+16-4
+UFC
+78
+DEC
+2026
+7
+Jack Della Maddalena
+
+Jack Della Maddalena
+8-2
+UFC
+64
+TKO
+2026
+8
+Gabriel Bonfim
+
+Gabriel "Marretinha" Bonfim
+7-1
+UFC
+44
+DEC
+2026
+9
+Joaquin Buckley
+
+Joaquin "New Mansa" Buckley
+11-6
+UFC
+58
+DEC
+2026
+10
+Belal Muhammad
+
+Belal "Remember the Name" Muhammad
+15-6, 1 NC
+UFC
+71
+DEC
+2026
+snooze
+Shavkat Rakhmonov
+
+Shavkat "Nomad" Rakhmonov
+7-0
+UFC
+46
+DEC
+2024
+Inactive for 21 Months
+11
+Leon Edwards
+
+Leon "Rocky" Edwards
+14-5, 1 NC
+UFC
+75
+TKO
+2025
+12
+Uros Medic
+
+Uros "The Doctor" Medic
+8-3
+UFC
+33
+TKO
+2026
+13
+Kevin Holland
+
+Kevin "Trailblazer" Holland
+16-12, 1 NC
+UFC
+47
+DEC
+2026
+14
+Michael Page
+
+Michael "Venom" Page
+5-1
+UFC
+49
+DEC
+2026
+15
+Yaroslav Amosov
+
+Yaroslav Amosov
+2-0
+UFC
+16
+SUB
+2026
+16
+Chidi Njokuani
+
+Chidi "Bang Bang" Njokuani
+6-5
+UFC
+27
+DEC
+2026
+17
+Geoff Neal
+
+Geoff "Handz of Steel" Neal
+8-6
+UFC
+53
+TKO
+2026
+18
+Daniel Rodriguez
+
+Daniel "D-Rod" Rodriguez
+10-5
+UFC
+39
+TKO
+2026
+19
+Myktybek Orolbai
+
+Myktybek Orolbai
+5-2
+UFC
+34
+SUB
+2026
+20
+Sam Patterson
+
+Sam Patterson
+5-2
+UFC
+31
+TKO
+2026
+
+== middleweight
+1
+Sean Strickland
+
+Sean Strickland
+18-7
+UFC
+Strength
+of
+Schedule
+help
+84
+DEC
+2026
+2
+Khamzat Chimaev
+
+Khamzat "Borz" Chimaev
+9-1
+UFC
+73
+DEC
+2026
+3
+Dricus Du Plessis
+
+Dricus "Stillknocks" Du Plessis
+10-1
+UFC
+79
+DEC
+2026
+4
+Nassourdine Imavov
+
+Nassourdine "The Sniper" Imavov
+9-2, 1 NC
+UFC
+67
+DEC
+2025
+5
+Caio Borralho
+
+Caio "The Natural" Borralho
+8-1
+UFC
+56
+DEC
+2026
+6
+Brendan Allen
+
+Brendan "All In" Allen
+15-4
+UFC
+61
+DEC
+2026
+7
+Anthony Hernandez
+
+Anthony "Fluffy" Hernandez
+9-4
+UFC
+56
+DEC
+2026
+8
+Gregory Rodrigues
+
+Gregory "Robocop" Rodrigues
+11-3
+UFC
+50
+DEC
+2026
+9
+Reinier de Ridder
+
+Reinier "RDR" de Ridder
+5-2
+UFC
+57
+TKO
+2026
+10
+Paulo Costa
+
+Paulo "The Eraser" Costa
+8-4
+UFC
+52
+TKO
+2026
+11
+Joe Pyfer
+
+Joe "Bodybagz" Pyfer
+7-1
+UFC
+40
+TKO
+2026
+12
+Robert Whittaker
+
+Robert "The Reaper" Whittaker
+18-7
+UFC
+61
+TKO
+2026
+13
+Kamaru Usman
+
+Kamaru "The Nigerian Nightmare" Usman
+16-4
+UFC
+78
+DEC
+2026
+14
+Michael Page
+
+Michael "Venom" Page
+5-1
+UFC
+49
+DEC
+2026
+15
+Ikram Aliskerov
+
+Ikram Aliskerov
+5-1
+UFC
+40
+DEC
+2026
+16
+Christian Leroy Duncan
+
+"CLD" Christian Leroy Duncan
+8-2
+UFC
+36
+DEC
+2026
+17
+Jared Cannonier
+
+Jared "Tha Killa Gorilla" Cannonier
+11-10
+UFC
+53
+DEC
+2026
+18
+Edmen Shahbazyan
+
+Edmen "The Golden Boy" Shahbazyan
+9-6
+UFC
+33
+DEC
+2026
+19
+Abus Magomedov
+
+Abus Magomedov
+5-3
+UFC
+43
+SUB
+2026
+20
+Bo Nickal
+
+Bo Nickal
+6-1
+UFC
+30
+TKO
+2026
+
+== light_heavyweight
+1
+Carlos Ulberg
+
+Carlos "Black Jag" Ulberg
+10-1
+UFC
+Strength
+of
+Schedule
+help
+58
+TKO
+2026
+2
+Alex Pereira
+
+Alex "Poatan" Pereira
+10-3
+UFC
+78
+TKO
+2026
+3
+Magomed Ankalaev
+
+Magomed Ankalaev
+13-2-1, 1 NC
+UFC
+75
+TKO
+2026
+4
+Jiří Procházka
+
+Jiří Procházka
+6-3
+UFC
+74
+TKO
+2026
+5
+Khalil Rountree Jr.
+
+Khalil Rountree Jr.
+10-7, 1 NC
+UFC
+62
+TKO
+2025
+6
+Dominick Reyes
+
+Dominick "The Devastator" Reyes
+10-5
+UFC
+51
+DEC
+2026
+7
+Navajo Stirling
+
+Navajo Stirling
+6-0
+UFC
+27
+TKO
+2026
+8
+Reinier de Ridder
+
+Reinier "RDR" de Ridder
+5-2
+UFC
+57
+TKO
+2026
+9
+Paulo Costa
+
+Paulo "The Eraser" Costa
+8-4
+UFC
+52
+TKO
+2026
+10
+Robert Whittaker
+
+Robert "The Reaper" Whittaker
+18-7
+UFC
+61
+TKO
+2026
+11
+Bogdan Guskov
+
+Bogdan "Hitman" Guskov
+4-2-1
+UFC
+42
+TKO
+2026
+12
+Volkan Oezdemir
+
+Volkan "No Time" Oezdemir
+9-7
+UFC
+49
+TKO
+2025
+13
+Azamat Murzakanov
+
+Azamat "The Professional" Murzakanov
+6-1
+UFC
+39
+TKO
+2026
+14
+Jan Błachowicz
+
+Jan Błachowicz
+12-9-2
+UFC
+58
+TKO
+2026
+15
+Jamahal Hill
+
+Jamahal "Sweet Dreams" Hill
+6-4, 1 NC
+UFC
+71
+DEC
+2025
+16
+Johnny Walker
+
+Johnny Walker
+8-7, 1 NC
+UFC
+52
+DEC
+2026
+17
+Aleksandar Rakić
+
+Aleksandar "Rocket" Rakić
+7-5
+UFC
+68
+DEC
+2026
+18
+Muhammad Saidov
+
+Muhammad "Kubik" Saidov
+1-0
+UFC
+9
+TKO
+2026
+19
+Modestas Bukauskas
+
+Modestas "The Baltic Gladiator" Bukauskas
+9-5
+UFC
+26
+TKO
+2026
+20
+Roman Dolidze
+
+Roman Dolidze
+9-6
+UFC
+56
+TKO
+2026
+
+== heavyweight
+1
+Tom Aspinall
+
+Tom Aspinall
+8-1, 1 NC
+UFC
+Strength
+of
+Schedule
+help
+66
+TKO
+2024
+2
+Ciryl Gane
+
+Ciryl "Bon Gamin" Gane
+11-2, 1 NC
+UFC
+67
+TKO
+2026
+3
+Alexander Volkov
+
+Alexander "Drago" Volkov
+14-5
+UFC
+67
+DEC
+2026
+4
+Sergei Pavlovich
+
+Sergei Pavlovich
+9-3
+UFC
+58
+TKO
+2026
+5
+Waldo Cortes-Acosta
+
+Waldo "Salsa Boy" Cortes-Acosta
+UFC
+56
+DEC
+2026
+6
+Alex Pereira
+
+Alex "Poatan" Pereira
+10-3
+UFC
+78
+TKO
+2026
+7
+Rizvan Kuniev
+
+Rizvan Kuniev
+UFC
+29
+TKO
+2026
+8
+Curtis Blaydes
+
+Curtis "Razor" Blaydes
+15-6, 1 NC
+UFC
+52
+DEC
+2026
+9
+Valter Walker
+
+Valter "The Clean Monster" Walker
+UFC
+25
+SUB
+2026
+10
+Josh Hokit
+
+Josh Hokit
+UFC
+18
+TKO
+2026
+11
+Aleksandar Rakić
+
+Aleksandar "Rocket" Rakić
+7-5
+UFC
+68
+DEC
+2026
+12
+Derrick Lewis
+
+Derrick "The Black Beast" Lewis
+20-12
+UFC
+40
+TKO
+2026
+13
+Ante Delija
+
+Ante "Walking Trouble" Delija
+UFC
+27
+DEC
+2026
+14
+Vitor Petrino
+
+Vitor Petrino
+8-2
+UFC
+30
+DEC
+2026
+15
+Serghei Spivac
+
+Serghei "Polar Bear" Spivac
+UFC
+50
+DEC
+2026
+16
+Mario Pinto
+
+Mario Pinto
+UFC
+15
+TKO
+2026
+17
+Brando Peričić
+
+Brando "The Balkan Bear" Peričić
+UFC
+10
+TKO
+2026
+18
+Shamil Gaziev
+
+Shamil Gaziev
+UFC
+35
+TKO
+2026
+19
+Tallison Teixeira
+
+Tallison "Xicão" Teixeira
+UFC
+33
+TKO
+2026
+20
+Ryan Spann
+
+Ryan "Superman" Spann
+10-7
+UFC
+24
+TKO
+2026

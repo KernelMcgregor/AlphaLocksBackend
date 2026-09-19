@@ -178,7 +178,7 @@ def _get_glicko_data(db: Session, fight_id: int, fighter_id: int, weight_class: 
     # .first() on fighter_id alone returned whichever the DB happened to yield — so a
     # top-25 p4p rank could be shown as the divisional one. Also exclude rank=0
     # placeholder rows, same reason as get_rankings().
-    from app.services.ufc.points_ranking_service import _classify_weight_class
+    from app.services.ufc.fighter_registry import classify_weight_class as _classify_weight_class
 
     wc_key = _classify_weight_class(weight_class) if weight_class else None
     ranking = (

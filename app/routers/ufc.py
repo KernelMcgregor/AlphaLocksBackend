@@ -988,7 +988,7 @@ def get_rankings():
     Each fighter carries a `ledger`: the per-bout decomposition of their score, so the
     ranking can be audited rather than taken on faith.
     """
-    from app.services.ufc.tiered_ranking_service import get_rankings
+    from app.services.ufc.tapology_rankings import get_rankings
     return get_rankings()
 
 

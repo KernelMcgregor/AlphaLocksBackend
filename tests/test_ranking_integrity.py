@@ -242,133 +242,26 @@ class TestServedRanksAreNeverZero:
         """rank=0 rows must never reach the API even if the table somehow holds them."""
         import inspect
 
-        from app.services.ufc import points_ranking_service as prs
+        from app.services.ufc import tapology_rankings as tr
 
-        src = inspect.getsource(prs.get_rankings)
+        src = inspect.getsource(tr.get_rankings)
         assert "rank > 0" in src, (
             "get_rankings must filter placeholder rows; 0 sorts above 1 and lands them "
             "at the top of every division")
 
 
 class TestWeightClassClassifierIsShared:
-    def test_points_service_delegates_to_the_registry(self):
-        """Two copies of this function is how the division disagreement started."""
-        from app.services.ufc.points_ranking_service import _classify_weight_class
+    def test_there_is_only_one_classifier(self):
+        """Two copies of this function is how the division disagreement started. The
+        ranker must not carry its own; it imports the registry's."""
+        import inspect
 
-        assert _classify_weight_class is classify_weight_class
+        from app.services.ufc import tapology_rankings as tr
+
+        assert tr.classify_weight_class is classify_weight_class
+        assert "def classify_weight_class" not in inspect.getsource(tr)
 
     def test_womens_featherweight_pools_into_bantamweight(self):
         """Deliberate: a defunct two-fighter division, pooled identically by both
         engines. Asserted so it stays a decision rather than becoming a surprise."""
         assert classify_weight_class("Women's Featherweight Bout") == "w_bantamweight"
-
-
-class TestLossPenaltyIsNotFree:
-    """Activity used to be a one-way ratchet.
-
-    Against an elite opponent the shipped scoring paid +9.50 for a finish and charged
-    0.18 for a split-decision loss — a 50:1 asymmetry, because `opp_loss` was
-    `max(2.0 - opp_mult, 0.3)`, which INVERTED with opponent quality and bottomed out
-    exactly where the competition was hardest. Fighting was nearly risk-free, so anyone
-    who kept fighting climbed.
-    """
-
-    #: Like-for-like: same method, same opponent quality. Comparing the best possible
-    #: win against the cheapest possible loss conflates the asymmetry being tested with
-    #: the legitimate gap between a first-round finish and a razor-thin decision, so it
-    #: is measured separately below.
-    MAX_LIKE_FOR_LIKE = 4.0
-    MAX_CROSS_EXTREME = 10.0
-
-    def _pairs(self):
-        from app.services.ufc.points_ranking_service import (
-            LOSS_METHOD_MULT, LOSS_PENALTY_BASE, WIN_POINTS,
-            _loss_opponent_factor, _quality_from_percentile,
-        )
-        for pct in [i / 20 for i in range(21)]:
-            opp_mult = _quality_from_percentile(pct)
-            for cat in WIN_POINTS:
-                yield (cat, pct,
-                       WIN_POINTS[cat] * opp_mult,
-                       abs(LOSS_PENALTY_BASE * LOSS_METHOD_MULT[cat]
-                           * _loss_opponent_factor(opp_mult)))
-
-    def test_same_result_type_is_roughly_symmetric(self):
-        """A finish over an elite vs being finished by one, at the same quality."""
-        worst = max(((w / l, cat, pct) for cat, pct, w, l in self._pairs()),
-                    key=lambda t: t[0])
-        ratio, cat, pct = worst
-        assert ratio <= self.MAX_LIKE_FOR_LIKE, (
-            f"{cat} at opponent pct {pct}: win is worth {ratio:.1f}x what the same "
-            "result costs when lost. Under the shipped scoring this reached 22:1.")
-
-    def test_the_extremes_are_no_longer_absurd(self):
-        """Best case win vs cheapest case loss. Some gap is legitimate; 50:1 was not."""
-        wins = [w for _, _, w, _ in self._pairs()]
-        losses = [l for _, _, _, l in self._pairs()]
-        ratio = max(wins) / min(losses)
-        assert ratio <= self.MAX_CROSS_EXTREME, (
-            f"extreme win:loss ratio is {ratio:.1f}:1; it was ~50:1 when a "
-            "split-decision loss to an elite cost 0.18 against a +9.50 finish")
-
-    def test_losing_to_an_elite_still_costs_something(self):
-        from app.services.ufc.points_ranking_service import _loss_opponent_factor
-        assert _loss_opponent_factor(2.0) >= 0.5
-
-    def test_a_loss_hurts_less_against_better_opposition(self):
-        """Monotone in the right direction — just bounded, unlike the old factor."""
-        from app.services.ufc.points_ranking_service import _loss_opponent_factor
-        assert _loss_opponent_factor(0.3) > _loss_opponent_factor(2.0)
-
-
-class TestEloKIsPerFighter:
-    def test_a_veteran_is_not_destabilised_by_facing_a_debutant(self):
-        """K used to be `min(fight_count[red], fight_count[blue])`, so a 30-fight
-        veteran updated at the newcomer rate whenever they met a debutant."""
-        import inspect
-
-        from app.services.ufc import points_ranking_service as prs
-
-        src = inspect.getsource(prs.PointsEloRanker.rank)
-        assert "min(fight_count" not in src
-        assert "k_red" in src and "k_blue" in src
-
-
-class TestCareerStrengthActuallySeparatesContenders:
-    """The career-Elo term was scaled by percentile among ALL eligible fighters. With
-    563 eligible, every contender sits between the 94th and 100th percentile, so the
-    term was a near-constant 33-35 across an entire top 15 — provably inert exactly
-    where it was supposed to do its job.
-
-    Measured: Charles Oliveira led Quillan Salkilld by 97 Elo, worth 1.93 points of
-    score, against Salkilld's +9.1 fight-points edge from a 6-0 run. Career quality
-    could not overcome recent form, so a 7-fight prospect outranked a former champion.
-    """
-
-    def _bonus(self, elo):
-        from app.services.ufc.points_ranking_service import (
-            ELO_BONUS_MAX, ELO_LINEAR_SPREAD, ELO_START,
-        )
-        return max(0.0, min(1.0, (elo - ELO_START) / ELO_LINEAR_SPREAD)) * ELO_BONUS_MAX
-
-    def test_elite_fighters_are_separated_by_their_elo_gap(self):
-        """A ~100 Elo gap between two contenders must be worth materially more than the
-        1.93 points the percentile form gave it."""
-        gap = self._bonus(1824) - self._bonus(1727)
-        assert gap > 6.0, (
-            f"a 97-Elo gap is worth only {gap:.2f} points; the career term cannot "
-            "outweigh a hot streak and the ranking collapses to recent form")
-
-    def test_the_term_is_monotone_in_elo(self):
-        assert (self._bonus(1600) < self._bonus(1700)
-                < self._bonus(1800) < self._bonus(1880))
-
-    def test_it_is_bounded(self):
-        from app.services.ufc.points_ranking_service import ELO_BONUS_MAX
-        assert self._bonus(1200) == 0.0
-        assert self._bonus(3000) == ELO_BONUS_MAX
-
-    def test_the_window_holds_more_than_one_hot_streak(self):
-        """Six bouts compressed a 36-fight career into the same span as a 6-0 run."""
-        from app.services.ufc.points_ranking_service import FIGHTS_WINDOW
-        assert FIGHTS_WINDOW >= 10

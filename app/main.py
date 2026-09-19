@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import Base, engine
 from app.models import *  # noqa: F401, F403 — ensure all models are registered
-from app.models.ufc import FIGHTER_BIO_COLS, GLICKO_META_COLS
+from app.models.ufc import FIGHTER_BIO_COLS, GLICKO_META_COLS, RANKING_HISTORY_COLS
 from app.routers import admin, predictions, ufc
 
 scheduler = BackgroundScheduler()
@@ -53,6 +53,11 @@ def run_migrations():
         for col in derived_cols:
             if col not in existing:
                 conn.execute(f"ALTER TABLE ufc_fight_stats ADD COLUMN {col} REAL")
+        # 010: Strength of Schedule on ufc_ranking_history (idempotent)
+        hist_existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_ranking_history)").fetchall()}
+        for col, ddl in RANKING_HISTORY_COLS:
+            if hist_existing and col not in hist_existing:
+                conn.execute(f"ALTER TABLE ufc_ranking_history ADD COLUMN {col} {ddl}")
         # 006: rating-confidence columns on ufc_glicko_snapshots (idempotent)
         snap_existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_glicko_snapshots)").fetchall()}
         for col in GLICKO_META_COLS:
@@ -132,6 +137,15 @@ def run_migrations():
             with engine.begin() as conn:
                 for col in snap_missing:
                     conn.execute(text(f"ALTER TABLE ufc.ufc_glicko_snapshots ADD COLUMN {col} FLOAT"))
+
+        # 010: Strength of Schedule on ufc_ranking_history. Nullable with no default, so
+        # Postgres treats it as metadata-only — no rewrite of the history table.
+        hist_existing = {c["name"] for c in insp.get_columns("ufc_ranking_history", schema="ufc")}
+        hist_missing = [(c, d) for c, d in RANKING_HISTORY_COLS if c not in hist_existing]
+        if hist_missing:
+            with engine.begin() as conn:
+                for col, ddl in hist_missing:
+                    conn.execute(text(f"ALTER TABLE ufc.ufc_ranking_history ADD COLUMN {col} {ddl}"))
 
 
 #: The stats chain, in dependency order. Each entry is (label, "module:function").

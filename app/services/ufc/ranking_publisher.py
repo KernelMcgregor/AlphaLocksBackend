@@ -58,6 +58,26 @@ class RankingResult:
     scores: dict[int, float] = field(default_factory=dict)   #: raw, pre-normalisation
     extras: dict[int, dict] = field(default_factory=dict)    #: merged into feature_profile
 
+    #: Per-(fighter, division) score. Tapology ranks a fighter in BOTH classes when their
+    #: last two bouts differ, and the weight-class carryover haircut makes those two
+    #: scores genuinely different — so one number per fighter cannot normalise correctly
+    #: in both lists. Falls back to `scores` when empty.
+    division_scores: dict[tuple[int, str], float] = field(default_factory=dict)
+
+    #: Which divisions each fighter is legitimately ranked in. When supplied, this is what
+    #: the division invariant checks against, instead of the registry's single opinion.
+    eligible_divisions: dict[int, set[str]] = field(default_factory=dict)
+
+    #: Per-(fighter, division) score. Tapology ranks a fighter in BOTH classes when their
+    #: last two bouts differ, and the weight-class carryover haircut makes those two
+    #: scores genuinely different — so one number per fighter cannot normalise correctly
+    #: in both lists. Falls back to `scores` when empty.
+    division_scores: dict[tuple[int, str], float] = field(default_factory=dict)
+
+    #: Which divisions each fighter is legitimately ranked in. When supplied, this is what
+    #: the division invariant checks against, instead of the registry's single opinion.
+    eligible_divisions: dict[int, set[str]] = field(default_factory=dict)
+
 
 class RankingIntegrityError(RuntimeError):
     """Raised instead of committing a ranking that would repeat a known failure."""
@@ -83,11 +103,20 @@ def _check(result: RankingResult, profiles: dict, registry: dict,
                     f"{division}: fighter {fid} was ranked but is not rankable "
                     f"(fights={st.decided_fights} rounds={st.rounds} "
                     f"last_activity={st.last_activity})")
-            if st.division != division:
+            allowed = result.eligible_divisions.get(fid)
+            if allowed is not None:
+                if division not in allowed:
+                    raise RankingIntegrityError(
+                        f"fighter {fid} ranked in {division} but the ranker only "
+                        f"qualified them for {sorted(allowed)}")
+            elif st.division != division:
                 raise RankingIntegrityError(
                     f"fighter {fid} ranked in {division} but registry says "
                     f"{st.division} — the division disagreement that produced rank=0 rows")
-            if (fid, division) not in profiles:
+            # A fighter ranked in a second division has no dimension profile there —
+            # profiles are built per registry division. The radar falls back to their
+            # primary one rather than blocking the publish.
+            if (fid, division) not in profiles and not result.eligible_divisions.get(fid):
                 raise RankingIntegrityError(
                     f"{division}: fighter {fid} has no dimension profile; the radar "
                     "chart would render all 15 dimensions as 0")
@@ -97,11 +126,14 @@ def publish_rankings(db, ranker=None, as_of: date | None = None,
                      crit: Eligibility | None = None, preview: bool = False) -> dict:
     """Compute, verify and atomically publish rankings for every division."""
     from app.services.ufc.ranking_service import compute_dimension_profiles
-    from app.services.ufc.tiered_ranking_service import TieredRanker
+    from app.services.ufc.tapology_rankings import TAPOLOGY_ELIGIBILITY, TapologyRanker
 
-    ranker = ranker or TieredRanker()
+    ranker = ranker or TapologyRanker()
     today = as_of or date.today()
-    crit = crit or Eligibility()
+    # Tapology's floor is ONE completed UFC bout in 21 months, not our old 2-fight /
+    # 5-round bar. Defaulting to it here keeps the publisher's invariant check and the
+    # ranker applying the same predicate.
+    crit = crit or TAPOLOGY_ELIGIBILITY
 
     log.info("=" * 60)
     log.info(f"PUBLISHING RANKINGS  ranker={getattr(ranker, 'name', type(ranker).__name__)}"
@@ -123,7 +155,12 @@ def publish_rankings(db, ranker=None, as_of: date | None = None,
             continue
 
         # Normalise to 0-1000 within the division so every ranker lands on one scale.
-        vals = [result.scores.get(f, 0.0) for f in fids]
+        def _score(f, d=division):
+            if result.division_scores:
+                return result.division_scores.get((f, d), result.scores.get(f, 0.0))
+            return result.scores.get(f, 0.0)
+
+        vals = [_score(f) for f in fids]
         s_max, s_min = max(vals), min(vals)
         span = (s_max - s_min) or 1.0
 
@@ -135,8 +172,8 @@ def publish_rankings(db, ranker=None, as_of: date | None = None,
                 fighter_id=int(fid),
                 weight_class=division,
                 rank=rank,
-                score=round((result.scores.get(fid, 0.0) - s_min) / span * 1000, 1),
-                expected_wins=round((result.scores.get(fid, 0.0) - s_min) / span * 1000, 1),
+                score=round((_score(fid) - s_min) / span * 1000, 1),
+                expected_wins=round((_score(fid) - s_min) / span * 1000, 1),
                 total_opponents=len(fids) - 1,
                 feature_profile=json.dumps(profile),
             ))

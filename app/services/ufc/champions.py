@@ -43,6 +43,25 @@ def is_undisputed_title_bout(weight_class: str | None) -> bool:
     return "interim" not in low and "tournament" not in low
 
 
+def load_title_bouts(db) -> list[tuple]:
+    """Every UFC title bout, newest first, as plain tuples.
+
+    Split out so a caller that needs champions at MANY dates — the rank-history backfill
+    walks ~700 event dates — pays for this query once instead of once per date. Columns
+    only: hydrating the full fight table as ORM objects was the dominant cost.
+    """
+    rows = (
+        db.query(
+            UFCFight.date, UFCFight.weight_class, UFCFight.method,
+            UFCFight.winner_id, UFCFight.red_fighter_id, UFCFight.blue_fighter_id,
+        )
+        .join(UFCEvent, UFCFight.event_id == UFCEvent.id)
+        .order_by(UFCFight.date.desc(), UFCFight.id.desc())
+        .all()
+    )
+    return [r for r in rows if r[0] and r[1]]
+
+
 def current_champions(db, as_of: date | None = None,
                       divisions: dict[int, str] | None = None) -> dict[str, int]:
     """division -> fighter_id of the reigning undisputed champion.
@@ -58,42 +77,46 @@ def current_champions(db, as_of: date | None = None,
       title is vacant, not his. If `divisions` is supplied, a champion-of-record who no
       longer competes in that division is dropped rather than pinned.
     """
-    as_of = as_of or date.today()
-    rows = (
-        db.query(UFCFight)
-        .join(UFCEvent, UFCFight.event_id == UFCEvent.id)
-        .order_by(UFCFight.date.desc(), UFCFight.id.desc())
-        .all()
-    )
+    return champions_as_of(load_title_bouts(db), as_of or date.today(), divisions)
+
+
+def champions_as_of(title_bouts: list[tuple], as_of: date,
+                    divisions: dict | None = None) -> dict[str, int]:
+    """`current_champions` as a pure function over prefetched rows.
+
+    Same rules, no database. Takes the output of `load_title_bouts` so the backfill can
+    resolve the champion at every historical date from one query.
+    """
+    rows = title_bouts
 
     # Every title-bout win, undisputed or interim, oldest first. Used to identify the
     # sitting champion when a title defence produces no result.
     title_wins: dict[str, list[tuple[date, int]]] = {}
-    for f in reversed(rows):
-        if not f.date or f.date > as_of or not f.weight_class:
+    for f_date, wc, method, winner_id, _red, _blue in reversed(rows):
+        if f_date > as_of:
             continue
-        low = f.weight_class.lower()
-        if not f.weight_class.startswith("UFC ") or "title bout" not in low:
+        low = wc.lower()
+        if not wc.startswith("UFC ") or "title bout" not in low:
             continue
         if "tournament" in low:
             continue
-        if is_decided(f.method, f.winner_id):
-            div = classify_weight_class(f.weight_class)
+        if is_decided(method, winner_id):
+            div = classify_weight_class(wc)
             if div != "unknown":
-                title_wins.setdefault(div, []).append((f.date, f.winner_id))
+                title_wins.setdefault(div, []).append((f_date, winner_id))
 
     champs: dict[str, int] = {}
-    for f in rows:
-        if not f.date or f.date > as_of:
+    for f_date, wc, method, winner_id, red_id, blue_id in rows:
+        if f_date > as_of:
             continue
-        if not is_undisputed_title_bout(f.weight_class):
+        if not is_undisputed_title_bout(wc):
             continue
-        div = classify_weight_class(f.weight_class)
+        div = classify_weight_class(wc)
         if div == "unknown" or div in champs:
             continue
 
-        if is_decided(f.method, f.winner_id):
-            champs[div] = f.winner_id
+        if is_decided(method, winner_id):
+            champs[div] = winner_id
             continue
 
         # A waved-off title fight does not transfer the belt, and it is also the only
@@ -103,17 +126,28 @@ def current_champions(db, as_of: date | None = None,
         #
         # The champion is whichever participant had most recently won a title bout in the
         # division — interim counts, since that is exactly what an elevation promotes.
-        prior = [w for w in title_wins.get(div, []) if w[0] < f.date]
-        for when, winner_id in reversed(prior):
-            if winner_id in (f.red_fighter_id, f.blue_fighter_id):
-                champs[div] = winner_id
-                log.info(f"  Champions: {div} title bout on {f.date} had no result; "
-                         f"belt stays with the prior title winner ({when})")
+        prior = [w for w in title_wins.get(div, []) if w[0] < f_date]
+        for when, prior_winner in reversed(prior):
+            if prior_winner in (red_id, blue_id):
+                champs[div] = prior_winner
+                log.debug(f"  Champions: {div} title bout on {f_date} had no result; "
+                          f"belt stays with the prior title winner ({when})")
                 break
 
     if divisions is not None:
-        vacated = {d: fid for d, fid in champs.items()
-                   if divisions.get(fid) not in (None, d)}
+        # `divisions` maps a fighter to the class(es) they currently compete in. Tapology
+        # ranks a fighter in BOTH when their last two bouts differ, so the value may be a
+        # collection — and comparing a list against a division string with `not in
+        # (None, d)` silently declared every belt vacant.
+        def _still_competes(fid: int, d: str) -> bool:
+            current = divisions.get(fid)
+            if current is None:
+                return True          # unknown division is not evidence of a move
+            if isinstance(current, (list, set, tuple)):
+                return d in current
+            return current == d
+
+        vacated = {d: fid for d, fid in champs.items() if not _still_competes(fid, d)}
         for d in vacated:
             champs.pop(d, None)
         if vacated:

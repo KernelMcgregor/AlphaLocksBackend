@@ -548,6 +548,10 @@ class UFCRankingHistory(Base):
     rank: Mapped[int] = mapped_column(Integer)
     score: Mapped[float] = mapped_column(Float)          # 0-1000, normalised within division
     total_ranked: Mapped[int] = mapped_column(Integer)   # division size, so a rank can be read in context
+    #: Tapology's Strength of Schedule, 1-99, AS OF this date. Stored rather than derived
+    #: because it is computed from each opponent's standing at the time of the bout — it
+    #: cannot be recovered later from the fighter's record alone.
+    sos: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 # Canonical names of the rating-confidence columns. glicko_service stores the same
@@ -560,6 +564,14 @@ GLICKO_META_COLS = ["meta_sigma", "meta_rounds_seen", "meta_fights_seen", "meta_
 # because create_all() only creates whole tables — existing tables need explicit ALTERs,
 # which main.run_migrations() issues for both the Postgres and SQLite branches. The types
 # below are spelled so the same list works verbatim on either.
+#: (column, DDL type) added to ufc_ranking_history after its first release. Same pattern
+#: as FIGHTER_BIO_COLS: create_all() only creates whole tables, so an existing history
+#: table needs an explicit ALTER, spelled so one list works on Postgres and SQLite alike.
+RANKING_HISTORY_COLS = [
+    ("sos", "INTEGER"),
+]
+
+
 FIGHTER_BIO_COLS = [
     ("birthplace", "VARCHAR(200)"),
     ("birth_country", "VARCHAR(100)"),
