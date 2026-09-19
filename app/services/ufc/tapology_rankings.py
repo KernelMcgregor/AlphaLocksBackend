@@ -610,6 +610,180 @@ DIMENSIONS = [
 ]
 
 
+#: How far back "movement" looks. A single event only churns the handful of divisions
+#: that fought on it, so a since-last-publish delta is blank for most of the board and
+#: noisy where it isn't. A quarter is long enough that the arrow reflects a trajectory.
+MOVEMENT_DAYS = 90
+
+
+def _movement_baseline(db, fighter_ids: set[int]) -> dict[tuple[int, str], dict]:
+    """Standings as of ~`MOVEMENT_DAYS` ago, keyed by (fighter_id, weight_class).
+
+    Snapshots are written per event date, so there is rarely a row exactly 90 days back.
+    This picks the one distinct `as_of` nearest the target and reads the whole board at
+    that date — one query, and every fighter is compared against the *same* past
+    standings. Comparing each fighter to their own nearest snapshot would mix dates and
+    make two fighters' arrows incomparable.
+    """
+    from sqlalchemy import func, select
+
+    from app.models.ufc import UFCRankingHistory
+
+    if not fighter_ids:
+        return {}
+
+    target = date.today() - timedelta(days=MOVEMENT_DAYS)
+    as_of = db.execute(
+        select(func.max(UFCRankingHistory.as_of)).where(UFCRankingHistory.as_of <= target)
+    ).scalar()
+    if as_of is None:
+        # History does not reach back 90 days yet — fall back to the oldest snapshot
+        # there is, so the column degrades to "since we started tracking" rather than
+        # reporting every fighter as NEW.
+        as_of = db.execute(select(func.min(UFCRankingHistory.as_of))).scalar()
+    if as_of is None:
+        return {}
+
+    rows = (
+        db.query(UFCRankingHistory)
+        .filter(
+            UFCRankingHistory.as_of == as_of,
+            UFCRankingHistory.fighter_id.in_(fighter_ids),
+        )
+        .all()
+    )
+    return {
+        (r.fighter_id, r.weight_class): {
+            "as_of": r.as_of.isoformat(), "rank": r.rank, "sos": r.sos,
+        }
+        for r in rows
+    }
+
+
+def _next_fights(db, fighter_ids: set[int]) -> dict[int, dict]:
+    """The announced upcoming bout per ranked fighter, if any.
+
+    Keyed by fighter id rather than (fighter, division): a fighter has at most one booked
+    fight, and it may well be in a division they are not ranked in (a move up, a catchweight),
+    which is exactly the case worth surfacing on a rankings board.
+    """
+    from sqlalchemy.orm import aliased
+
+    from app.models.ufc import UFCFightOdds, UFCFightPrediction
+
+    if not fighter_ids:
+        return {}
+
+    # Yesterday, not today: events stay listed through the day after so a UTC offset
+    # never hides a card that is still in progress. Mirrors /ufc/upcoming.
+    cutoff = date.today() - timedelta(days=1)
+    red_f = aliased(UFCFighter)
+    blue_f = aliased(UFCFighter)
+
+    rows = (
+        db.query(UFCFight, UFCEvent, red_f, blue_f, UFCFightPrediction)
+        .join(UFCEvent, UFCEvent.id == UFCFight.event_id)
+        .join(red_f, red_f.id == UFCFight.red_fighter_id)
+        .join(blue_f, blue_f.id == UFCFight.blue_fighter_id)
+        .outerjoin(UFCFightPrediction, UFCFightPrediction.fight_id == UFCFight.id)
+        .filter(
+            UFCFight.winner_id.is_(None),
+            UFCEvent.date >= cutoff,
+            (UFCFight.red_fighter_id.in_(fighter_ids)) | (UFCFight.blue_fighter_id.in_(fighter_ids)),
+        )
+        # Soonest card first, so the dict assignment below keeps the nearest bout for a
+        # fighter booked on two future events.
+        .order_by(UFCEvent.date.desc())
+        .all()
+    )
+
+    # Market prices for those same bouts, one query rather than one per fight. The stored
+    # implied probabilities are already vig-removed, so averaging across books gives a
+    # consensus that is directly comparable to the model's number.
+    odds_by_fight: dict[int, list] = {}
+    if rows:
+        for o in db.query(UFCFightOdds).filter(
+            UFCFightOdds.fight_id.in_([f.id for f, *_ in rows])
+        ).all():
+            odds_by_fight.setdefault(o.fight_id, []).append(o)
+
+    out: dict[int, dict] = {}
+    for fight, event, red, blue, pred in rows:
+        books = odds_by_fight.get(fight.id, [])
+        for fid, opp, is_red in ((red.id, blue, True), (blue.id, red, False)):
+            if fid not in fighter_ids:
+                continue
+            win_prob = None
+            if pred is not None and pred.red_prob is not None:
+                win_prob = round(pred.red_prob if is_red else 1 - pred.red_prob, 4)
+
+            market_prob, best_odds, best_book = None, None, None
+            if books:
+                probs = [(b.red_implied_prob if is_red else b.blue_implied_prob) for b in books]
+                probs = [p for p in probs if p is not None]
+                if probs:
+                    market_prob = round(sum(probs) / len(probs), 4)
+                prices = [
+                    ((b.red_odds if is_red else b.blue_odds), b.bookmaker)
+                    for b in books
+                    if (b.red_odds if is_red else b.blue_odds) is not None
+                ]
+                if prices:
+                    # Best price for a bettor is the highest American number: +250 pays
+                    # more than +180, and -110 pays more than -150.
+                    best_odds, best_book = max(prices, key=lambda p: p[0])
+            out[fid] = {
+                "fight_id": str(fight.id),
+                "event_name": event.name,
+                "event_date": event.date.isoformat() if event.date else None,
+                "event_location": event.location,
+                "weight_class": fight.weight_class,
+                "opponent_id": str(opp.id),
+                "opponent_name": f"{opp.first_name or ''} {opp.last_name or ''}".strip(),
+                "opponent_country_code": opp.country_code,
+                "opponent_image_url": opp.image_url,
+                "opponent_record": [opp.wins, opp.losses, opp.draws],
+                "win_probability": win_prob,
+                # Vig-removed consensus across books, the best American price on offer,
+                # and who offers it. `edge` is the model's disagreement with the market —
+                # the whole reason both numbers are shown side by side.
+                "market_probability": market_prob,
+                "best_odds": best_odds,
+                "best_book": best_book,
+                "book_count": len(books),
+                "edge": (round(win_prob - market_prob, 4)
+                         if win_prob is not None and market_prob is not None else None),
+            }
+    return out
+
+
+def _last_fight_details(db, fight_ids: set[int]) -> dict[int, dict]:
+    """Round, time and event for each fighter's most recent scored bout.
+
+    The ledger is frozen into `feature_profile` at publish time and carries only what the
+    scorer needed, so these are joined at read time instead — that keeps "how did it end"
+    available on the board without forcing a republish to widen the stored ledger.
+    """
+    if not fight_ids:
+        return {}
+    rows = (
+        db.query(UFCFight, UFCEvent)
+        .outerjoin(UFCEvent, UFCEvent.id == UFCFight.event_id)
+        .filter(UFCFight.id.in_(fight_ids))
+        .all()
+    )
+    return {
+        fight.id: {
+            "finish_round": fight.finish_round,
+            "finish_time": fight.finish_time,
+            "time_format": fight.time_format,
+            "details": fight.details,
+            "event_name": event.name if event else None,
+        }
+        for fight, event in rows
+    }
+
+
 def get_rankings() -> dict:
     import json
 
@@ -629,13 +803,61 @@ def get_rankings() -> dict:
         if not rankings:
             return {"weight_classes": [], "method": "none"}
 
+        fighter_ids = {r.fighter_id for r, _ in rankings}
+        baseline = _movement_baseline(db, fighter_ids)
+        next_fights = _next_fights(db, fighter_ids)
+
+        # Collect every fighter's most recent bout id first so the detail join is one
+        # query for the whole board rather than one per row.
+        profiles: dict[int, dict] = {}
+        last_ids: set[int] = set()
+        last_opp_ids: set[int] = set()
+        for ranking, _ in rankings:
+            try:
+                p = json.loads(ranking.feature_profile) if ranking.feature_profile else {}
+            except (json.JSONDecodeError, TypeError):
+                p = {}
+            profiles[ranking.id] = p
+            led = p.get("ledger") or []
+            if led and str(led[0].get("fight_id", "")).isdigit():
+                last_ids.add(int(led[0]["fight_id"]))
+            if led and str(led[0].get("opponent_id", "")).isdigit():
+                last_opp_ids.add(int(led[0]["opponent_id"]))
+        last_details = _last_fight_details(db, last_ids)
+        # Portraits for the last-fight opponents. The ledger stores only a name and id,
+        # and the board shows a headshot per bout, so the photo is joined here rather
+        # than fetched per row on the client.
+        opp_images = dict(
+            db.query(UFCFighter.id, UFCFighter.image_url)
+            .filter(UFCFighter.id.in_(last_opp_ids))
+            .all()
+        ) if last_opp_ids else {}
+
         wc_map: dict[str, list] = {}
         for ranking, fighter in rankings:
-            try:
-                profile = json.loads(ranking.feature_profile) if ranking.feature_profile else {}
-            except (json.JSONDecodeError, TypeError):
-                profile = {}
+            profile = profiles.get(ranking.id, {})
+            ledger = profile.get("ledger", [])
+            prior = baseline.get((ranking.fighter_id, ranking.weight_class))
 
+            last_fight = None
+            if ledger:
+                fid = str(ledger[0].get("fight_id", ""))
+                oid = str(ledger[0].get("opponent_id", ""))
+                last_fight = {
+                    **ledger[0],
+                    **(last_details.get(int(fid), {}) if fid.isdigit() else {}),
+                    "opponent_image_url": opp_images.get(int(oid)) if oid.isdigit() else None,
+                }
+
+            # Current streak, read off the front of the ledger. A draw ends a streak
+            # without starting one, which is how every record line treats it.
+            streak, streak_type = 0, None
+            if ledger and not ledger[0].get("drew"):
+                streak_type = "W" if ledger[0]["won"] else "L"
+                for b in ledger:
+                    if b.get("drew") or b["won"] != ledger[0]["won"]:
+                        break
+                    streak += 1
             wc_map.setdefault(ranking.weight_class, []).append({
                 "id": str(fighter.id),
                 "first_name": fighter.first_name,
@@ -657,7 +879,23 @@ def get_rankings() -> dict:
                 "eligible": profile.get("eligible", True),
                 # The per-bout decomposition. The point of a rules-based ranking is that
                 # it can be audited, so the breakdown ships with the number.
-                "ledger": profile.get("ledger", []),
+                "ledger": ledger,
+                # `ledger` is ordered most-recent-first (the scorer's recency decay is
+                # indexed off position 0), so the head of it IS the last fight. Lifted out
+                # as its own field so the row does not have to know that.
+                "last_fight": last_fight,
+                "streak": streak,
+                "streak_type": streak_type,
+                # Rank ~90 days ago and the delta from it. `delta` is POSITIVE when the
+                # fighter climbed: ranks count down, so it is prior - current, not the
+                # other way round. None means they were unranked in this division then.
+                "movement": {
+                    "prior_rank": prior["rank"] if prior else None,
+                    "delta": (prior["rank"] - ranking.rank) if prior else None,
+                    "prior_sos": prior["sos"] if prior else None,
+                    "as_of": prior["as_of"] if prior else None,
+                },
+                "next_fight": next_fights.get(ranking.fighter_id),
             })
 
         return {
@@ -669,6 +907,7 @@ def get_rankings() -> dict:
             "method": "tapology",
             "dimensions": DIMENSIONS,
             "window": WINDOW,
+            "movement_days": MOVEMENT_DAYS,
         }
     finally:
         db.close()
