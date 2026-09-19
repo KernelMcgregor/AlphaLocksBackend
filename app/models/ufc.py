@@ -513,8 +513,11 @@ class UFCFighterRanking(TimestampMixin, Base):
     fighter_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_fighters.id")), index=True)
     weight_class: Mapped[str] = mapped_column(String(30))
     rank: Mapped[int] = mapped_column(Integer)
-    score: Mapped[float] = mapped_column(Float)  # expected win rate (0-1)
-    expected_wins: Mapped[float] = mapped_column(Float)
+    # 0-1000, min-max normalised WITHIN the division by ranking_publisher. Not a
+    # probability and not comparable across divisions. (It was documented as "expected
+    # win rate (0-1)" for a long time; it has never held that.)
+    score: Mapped[float] = mapped_column(Float)
+    expected_wins: Mapped[float] = mapped_column(Float)  # duplicate of `score`, kept for API compat
     total_opponents: Mapped[int] = mapped_column(Integer)
     feature_profile: Mapped[str] = mapped_column(Text)  # JSON blob of feature values
 

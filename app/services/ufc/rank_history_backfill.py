@@ -6,7 +6,7 @@ Why this exists
 holds the present standings. Nothing records what a fighter's rank was after a given
 bout, which is what a rank-over-time chart needs.
 
-Ranks cannot be computed per request. `PointsEloRanker.rank()` reloads the whole fight
+Ranks cannot be computed per request. `TieredRanker.rank()` reloads the whole fight
 table and replays Elo across all of UFC history on each call, so one call per fight date
 is seconds-to-minutes of work. This module does that replay once, offline, and writes
 the result down.
@@ -35,7 +35,7 @@ from sqlalchemy import delete, func, select
 
 from app.models.ufc import UFCEvent, UFCFight, UFCRankingHistory
 from app.services.ufc.fighter_registry import Eligibility, build_fighter_registry
-from app.services.ufc.points_ranking_service import PointsEloRanker
+from app.services.ufc.tiered_ranking_service import TieredRanker
 
 log = logging.getLogger("rank_history_backfill")
 
@@ -52,7 +52,7 @@ def event_dates(db, since: date | None = None) -> list[date]:
     return sorted(d for (d,) in db.execute(q).all() if d is not None)
 
 
-def ranks_as_of(db, as_of: date, crit: Eligibility, ranker: PointsEloRanker) -> list[dict]:
+def ranks_as_of(db, as_of: date, crit: Eligibility, ranker: TieredRanker) -> list[dict]:
     """Rank every division as it stood on `as_of`. Mirrors ranking_publisher's
     normalisation so the stored score matches what the live rankings show."""
     registry = build_fighter_registry(db, as_of=as_of)
@@ -79,7 +79,7 @@ def ranks_as_of(db, as_of: date, crit: Eligibility, ranker: PointsEloRanker) -> 
 
 def backfill(db, since: date | None = None, resume: bool = False) -> int:
     crit = Eligibility()
-    ranker = PointsEloRanker()
+    ranker = TieredRanker()
 
     dates = event_dates(db, since)
     if resume:

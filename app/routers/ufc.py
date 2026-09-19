@@ -983,8 +983,12 @@ def get_upcoming_events(db: Session = Depends(get_db)):
 
 @router.get("/rankings")
 def get_rankings():
-    """Get fighter rankings by weight class (precomputed from full model)."""
-    from app.services.ufc.points_ranking_service import get_rankings
+    """Get fighter rankings by weight class (precomputed from full model).
+
+    Each fighter carries a `ledger`: the per-bout decomposition of their score, so the
+    ranking can be audited rather than taken on faith.
+    """
+    from app.services.ufc.tiered_ranking_service import get_rankings
     return get_rankings()
 
 

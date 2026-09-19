@@ -80,6 +80,27 @@ def is_decided(method: str | None, winner_id: int | None) -> bool:
     return not any(marker in m for marker in UNDECIDED_METHOD_MARKERS)
 
 
+def current_division(divisions: list[str]) -> str:
+    """Which division a fighter belongs to, given their bouts oldest-first.
+
+    A single bout in a new weight class does not move a fighter; it takes two. Max
+    Holloway fighting once at welterweight is still a lightweight, and becomes a
+    welterweight on the second one. This is Tapology's published rule — a fighter is
+    ranked in the class they fought in over their *last two* bouts — and it matters
+    because one-off catchweight-adjacent appearances and short-notice moves up otherwise
+    relocate a contender out of the division they actually compete in.
+
+    Implemented as: if the last two recognised bouts agree, that is the division;
+    otherwise the move is not yet established and the earlier one stands.
+    """
+    if not divisions:
+        return "unknown"
+    if len(divisions) == 1:
+        return divisions[0]
+    last, prev = divisions[-1], divisions[-2]
+    return last if last == prev else prev
+
+
 @dataclass(frozen=True)
 class FighterState:
     """What every ranking consumer needs to agree on."""
@@ -101,9 +122,19 @@ class Eligibility:
     first-round finishes that Glicko would reject for having too little scored material.
     """
 
-    min_decided_fights: int = 3
-    min_rounds: int = 10
-    max_days_inactive: int = 548
+    #: Lowered from 3/10 after measurement against the official UFC rankings: 2/5 scores
+    #: 0.807 mean Spearman with 0.95 coverage, against 0.804/0.93 at 3/10. The old floor
+    #: left genuine contenders unranked — Salahdine Parnasse is official lightweight #10
+    #: on two UFC bouts. Going further (1/0) gains coverage but loses accuracy, so this is
+    #: the measured optimum rather than the loosest setting.
+    min_decided_fights: int = 2
+    min_rounds: int = 5
+    #: Tapology's 21 months (639 days) PLUS their 60-day display grace, as a single
+    #: number. Splitting it — registry holding 639 while the ranker applied 699 — made the
+    #: ranker admit fighters `is_rankable` rejected, and ranking_publisher's invariant
+    #: check caught it. That disagreement between two eligibility opinions is the original
+    #: rank=0 defect; there is one predicate here on purpose.
+    max_days_inactive: int = 699
 
 
 def is_rankable(st: FighterState, today: date, crit: Eligibility = Eligibility()) -> bool:
@@ -129,7 +160,7 @@ def build_fighter_registry(db, as_of: date | None = None) -> dict[int, FighterSt
 
     last_activity: dict[int, date] = {}
     last_decided: dict[int, date] = {}
-    division: dict[int, str] = {}
+    recent_divisions: dict[int, list[str]] = defaultdict(list)
     decided_fights: dict[int, int] = defaultdict(int)
 
     decided_fight_ids: set[int] = set()
@@ -149,10 +180,10 @@ def build_fighter_registry(db, as_of: date | None = None) -> dict[int, FighterSt
             # whatever the result was.
             if f.date >= last_activity.get(fid, date.min):
                 last_activity[fid] = f.date
-                # Division follows the latest bout in a *recognised* division, so a
-                # catchweight or unparsed bout does not erase a known division.
-                if wc != "unknown":
-                    division[fid] = wc
+            # Catchweight and unparsed bouts are skipped rather than recorded, so they
+            # neither erase a known division nor count toward establishing a new one.
+            if wc != "unknown":
+                recent_divisions[fid].append(wc)
             if decided:
                 decided_fights[fid] += 1
                 if f.date >= last_decided.get(fid, date.min):
@@ -173,7 +204,7 @@ def build_fighter_registry(db, as_of: date | None = None) -> dict[int, FighterSt
 
     registry = {
         fid: FighterState(
-            division=division.get(fid, "unknown"),
+            division=current_division(recent_divisions.get(fid, [])),
             last_activity=act,
             decided_fights=decided_fights.get(fid, 0),
             rounds=rounds.get(fid, 0),

@@ -96,10 +96,10 @@ def _check(result: RankingResult, profiles: dict, registry: dict,
 def publish_rankings(db, ranker=None, as_of: date | None = None,
                      crit: Eligibility | None = None, preview: bool = False) -> dict:
     """Compute, verify and atomically publish rankings for every division."""
-    from app.services.ufc.points_ranking_service import PointsEloRanker
     from app.services.ufc.ranking_service import compute_dimension_profiles
+    from app.services.ufc.tiered_ranking_service import TieredRanker
 
-    ranker = ranker or PointsEloRanker()
+    ranker = ranker or TieredRanker()
     today = as_of or date.today()
     crit = crit or Eligibility()
 
@@ -108,7 +108,9 @@ def publish_rankings(db, ranker=None, as_of: date | None = None,
              f"  as_of={today}")
     log.info("=" * 60)
 
-    registry = build_fighter_registry(db)
+    # as_of matters: without it, a bout scheduled for TOMORROW counts as activity today.
+    # Arman Tsarukyan showed idle=-1 days because of a fight dated after the publish date.
+    registry = build_fighter_registry(db, as_of=today)
     profiles = compute_dimension_profiles(db, registry, today, crit)
     result = ranker.rank(db, registry, today, crit)
 

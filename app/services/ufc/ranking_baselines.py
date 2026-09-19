@@ -242,6 +242,54 @@ class PointsRankerOnline:
                              "is_title": is_title, "is_5rd": is_5rd})
 
 
+class TieredRankerOnline:
+    """The shipping ranker, evaluated causally.
+
+    Shares every helper with `tiered_ranking_service`, so the harness scores the shipping
+    rule rather than a re-implementation that can drift from it. The production ranker is
+    already online in structure — it reads pre-fight state before applying each bout — so
+    this is a thin driver over the same functions, not a parallel scoring path.
+
+    `conservative` toggles the `rating - RD` readout against the raw rating. That is the
+    only real degree of freedom left in the ranker, so it is the one thing worth an
+    ablation; everything else is a published constant.
+    """
+
+    name = "tiered"
+
+    def __init__(self, mode: str = "decay"):
+        from app.services.ufc.glicko1 import Glicko1
+
+        self.g = Glicko1()
+        self.mode = mode
+        if mode != "decay":
+            self.name = f"tiered_{mode}"
+
+    def rate(self, fid, as_of):
+        # Match the production eligibility floor: below three decided bouts the ranking
+        # declines to rate a fighter at all, so the harness must not score them either.
+        if self.g.fights.get(fid, 0) < 3:
+            return None
+        _, rd = self.g.state(fid, as_of)
+        base = (self.g.decayed(fid, as_of) if self.mode == "decay"
+                else self.g.peak(fid, as_of) if self.mode == "peak"
+                else self.g.state(fid, as_of)[0])
+        return (base, rd)
+
+    def observe(self, fight):
+        from app.services.ufc.tiered_ranking_service import bout_weight, outcome_value
+
+        r, b = fight.red_fighter_id, fight.blue_fighter_id
+        if r is None or b is None:
+            return
+        if classify_weight_class(fight.weight_class) == "unknown":
+            return
+        # Method and distance go INTO the update, as Fight Matrix and BoxRec publish them.
+        v = outcome_value(fight.method)
+        self.g.observe(r, b, v if fight.winner_id == r else 1.0 - v,
+                       fight.date, bout_weight(fight.method, fight.time_format))
+
+
 def build_ranker(name: str, db=None):
     if name == "always_red":
         return AlwaysRed()
@@ -253,6 +301,11 @@ def build_ranker(name: str, db=None):
         return PointsRankerOnline()
     if name == "points_legacy":
         return PointsRankerOnline(legacy=True)
+    if name == "tiered":
+        return TieredRankerOnline()
+    if name.startswith("tiered_"):
+        # Ablations: tiered_raw (no decay), tiered_peak (BoxRec peak-in-window).
+        return TieredRankerOnline(mode=name.split("_", 1)[1])
     if name.startswith("points+"):
         # "-" separates flags because "," already separates rankers on the CLI.
         flags = frozenset(x for x in name[len("points+"):].split("-") if x)

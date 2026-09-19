@@ -108,7 +108,12 @@ class TestNoContestIsNotInactivity:
 
 class TestDivisionFollowsTheLatestBout:
     """Ode Osbourne: last decided bout at Bantamweight, last bout at Flyweight. The two
-    services filed him under different divisions, so both rows survived the delete."""
+    services filed him under different divisions, so both rows survived the delete.
+
+    The invariant under test is that EVERY bout feeds the division, including the
+    no-contest — not that the single latest bout wins. Which of the recent divisions is
+    selected is `current_division`'s job and it now takes two bouts to complete a move.
+    """
 
     def _registry(self):
         fights = [
@@ -119,8 +124,24 @@ class TestDivisionFollowsTheLatestBout:
         rows = _rounds(1, (20, 21), 3) + _rounds(2, (20, 22), 3) + _rounds(3, (20, 23), 4)
         return build_fighter_registry(FakeDB(fights, rows))
 
-    def test_division_comes_from_the_latest_bout_not_the_latest_result(self):
-        assert self._registry()[20].division == "flyweight"
+    def test_a_single_bout_back_at_flyweight_does_not_move_him(self):
+        """One flyweight bout after a bantamweight one is not a division change; it takes
+        two. Before the two-fight rule this asserted "flyweight" — the change is
+        deliberate, and it is what keeps a one-off appearance from relocating a
+        contender out of the division they actually compete in."""
+        assert self._registry()[20].division == "bantamweight"
+
+    def test_the_no_contest_still_feeds_the_division(self):
+        """The original defect: a bout with no winner told Points nothing about division
+        while Glicko counted it. It must still participate — a second flyweight bout
+        completes the move even though the first of the two was waved off."""
+        fights = [
+            FakeFight(1, date(2024, 3, 16), 20, 21, 20, "Bantamweight Bout"),
+            FakeFight(2, date(2026, 7, 11), 20, 23, None, "Flyweight Bout", method=None),
+            FakeFight(3, date(2026, 8, 11), 20, 24, 20, "Flyweight Bout"),
+        ]
+        rows = _rounds(1, (20, 21), 3) + _rounds(2, (20, 23), 4) + _rounds(3, (20, 24), 3)
+        assert build_fighter_registry(FakeDB(fights, rows))[20].division == "flyweight"
 
     def test_unknown_divisions_do_not_erase_a_known_one(self):
         """A catchweight must not blank out the division and make a fighter unrankable."""
@@ -149,14 +170,19 @@ class TestDecidedClassification:
 
 class TestEligibilityIsAnded:
     """Each service applied only ONE threshold, so each admitted fighters the other
-    rejected — and every such fighter was a candidate rank=0 row."""
+    rejected — and every such fighter was a candidate rank=0 row.
+
+    The fixtures below sit just under the CURRENT floor (2 decided bouts / 5 rounds). They
+    were written against the old 3/10 floor and had to move with it; what is being tested
+    is the AND, not the specific numbers.
+    """
 
     def test_enough_fights_but_too_few_rounds_is_not_rankable(self):
-        st = FighterState("lightweight", TODAY, decided_fights=4, rounds=5)
+        st = FighterState("lightweight", TODAY, decided_fights=4, rounds=3)
         assert not is_rankable(st, TODAY), "4 quick finishes is too little scored material"
 
     def test_enough_rounds_but_too_few_fights_is_not_rankable(self):
-        st = FighterState("lightweight", TODAY, decided_fights=2, rounds=15)
+        st = FighterState("lightweight", TODAY, decided_fights=1, rounds=15)
         assert not is_rankable(st, TODAY)
 
     def test_unknown_division_is_never_rankable(self):
