@@ -8,6 +8,8 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session, aliased, joinedload
 
 from app.database import get_db
+from app.services import response_cache
+from app.services.response_cache import with_session
 from app.models.ufc import (
     UFCEvent, UFCFight, UFCFighter, UFCFighterCareerStats, UFCFighterSimilarity,
     UFCFightOdds, UFCMethodOdds,
@@ -27,6 +29,14 @@ from app.schemas.ufc import (
 )
 
 router = APIRouter(prefix="/ufc", tags=["ufc"])
+
+# Server-side cache lifetimes (seconds) for the views that are slow to build — see
+# app/services/response_cache.py. Past the TTL the old answer is still served while a
+# background refresh runs, so these bound staleness, not latency.
+UPCOMING_TTL = 5 * 60
+RANKINGS_TTL = 10 * 60
+PREVIEWS_TTL = 10 * 60
+FIGHT_TTL = 5 * 60
 
 
 # --- Fighters ---
@@ -345,7 +355,15 @@ def list_fights(
 
 
 @router.get("/fights/{fight_id}")
-def get_fight(fight_id: int, db: Session = Depends(get_db)):
+def get_fight(fight_id: int):
+    # ~1.8s cold (odds, SHAP, stats, markets — a dozen remote round trips), and every
+    # fight page and preview page opens with it.
+    return response_cache.cached(
+        f"fight:{fight_id}", with_session(_build_fight, fight_id), FIGHT_TTL,
+    )
+
+
+def _build_fight(db: Session, fight_id: int):
     fight = (
         db.query(UFCFight)
         .options(
@@ -451,7 +469,6 @@ def get_fight(fight_id: int, db: Session = Depends(get_db)):
 def list_previews(
     limit: int = Query(default=60, le=200),
     offset: int = 0,
-    db: Session = Depends(get_db),
 ):
     """Every written preview as an index row — the list behind "See All Articles".
 
@@ -460,6 +477,12 @@ def list_previews(
     follows the row to `/ufc/fights/{id}/preview`, which serves the whole piece
     from the fight payload that page already fetches.
     """
+    return response_cache.cached(
+        f"previews:{limit}:{offset}", with_session(_build_previews, limit, offset), PREVIEWS_TTL,
+    )
+
+
+def _build_previews(db: Session, limit: int, offset: int):
     red_f = aliased(UFCFighter)
     blue_f = aliased(UFCFighter)
     rows = (
@@ -517,12 +540,18 @@ def list_previews(
 
 
 @router.get("/fights/{fight_id}/context")
-def get_fight_context(fight_id: int, db: Session = Depends(get_db)):
+def get_fight_context(fight_id: int):
     """Matchup context: per-corner Glicko skills, skill edges, and shared opponents.
 
     Complements `GET /fights/{id}` rather than replacing it — see
     `app/services/ufc/fight_context_service.py` for what is deliberately left out.
     """
+    return response_cache.cached(
+        f"fight-context:{fight_id}", with_session(_build_fight_context, fight_id), FIGHT_TTL,
+    )
+
+
+def _build_fight_context(db: Session, fight_id: int):
     from app.services.ufc.fight_context_service import gather_matchup_context
 
     context = gather_matchup_context(fight_id, db)
@@ -963,8 +992,12 @@ def _upcoming_corner(fighter, recent_form: list | None = None) -> dict:
 
 
 @router.get("/upcoming")
-def get_upcoming_events(db: Session = Depends(get_db)):
+def get_upcoming_events():
     """Get upcoming events with fights and predictions."""
+    return response_cache.cached("upcoming", _upcoming_build, UPCOMING_TTL)
+
+
+def _build_upcoming(db: Session):
     from datetime import date as _date, timedelta
 
     # Use yesterday as cutoff so events stay visible through the day after (handles UTC offset)
@@ -1083,8 +1116,22 @@ def get_rankings():
     Each fighter carries a `ledger`: the per-bout decomposition of their score, so the
     ranking can be audited rather than taken on faith.
     """
+    return response_cache.cached("rankings", _rankings_build, RANKINGS_TTL)
+
+
+def _rankings_build():
+    # get_rankings opens its own session, so it is already a valid cache thunk.
     from app.services.ufc.tapology_rankings import get_rankings
     return get_rankings()
+
+
+_upcoming_build = with_session(_build_upcoming)
+
+# The two views behind the landing page and every fighter profile. Warmed at startup
+# and after each scheduled job, so the first visitor after a deploy does not pay the
+# ~6s cold build.
+response_cache.register_warmer("upcoming", _upcoming_build, UPCOMING_TTL)
+response_cache.register_warmer("rankings", _rankings_build, RANKINGS_TTL)
 
 
 @router.get("/arbitrage")

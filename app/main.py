@@ -1,4 +1,6 @@
+import functools
 import sqlite3
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -225,6 +227,23 @@ def refresh_after_event() -> dict[str, str]:
     return results
 
 
+def _refreshes_views(job):
+    """Rebuild the API response cache once a scheduled job has written.
+
+    The cache would pick the writes up by itself within its TTL, but a job run is the
+    one moment we know the data changed, so the next page load should reflect it.
+    """
+    @functools.wraps(job)
+    def run():
+        try:
+            return job()
+        finally:
+            from app.routers.admin import refresh_cached_views
+            refresh_cached_views()
+    return run
+
+
+@_refreshes_views
 def scheduled_scrape():
     import logging
     log = logging.getLogger("scheduled_scrape")
@@ -303,6 +322,7 @@ def scheduled_scrape():
     record_run("Full Pipeline", "done")
 
 
+@_refreshes_views
 def scheduled_bovada_scrape():
     import logging
     log = logging.getLogger("scheduled_bovada")
@@ -317,6 +337,7 @@ def scheduled_bovada_scrape():
         record_run("Bovada Odds", "error", str(e))
 
 
+@_refreshes_views
 def scheduled_prediction_markets():
     """Refresh Kalshi and Polymarket quotes and curves for open fights.
 
@@ -341,6 +362,7 @@ def scheduled_prediction_markets():
         record_run("Prediction Markets", "error", str(e))
 
 
+@_refreshes_views
 def scheduled_reconcile():
     """Drop bouts that have been pulled from their card, then rebuild what depended on them.
 
@@ -394,6 +416,11 @@ async def lifespan(_app: FastAPI):
         replace_existing=True, coalesce=True, misfire_grace_time=3600,
     )
     scheduler.start()
+    # Build /ufc/upcoming and /ufc/rankings in the background so the first visitor
+    # after a deploy does not wait ~6s on them. A thread, not a task: the builds are
+    # blocking database work and would stall the event loop.
+    from app.services import response_cache
+    threading.Thread(target=response_cache.warm, name="cache-warm", daemon=True).start()
     yield
     scheduler.shutdown()
 

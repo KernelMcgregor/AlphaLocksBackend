@@ -57,6 +57,17 @@ def _tracked_task(task_id: str, label: str, fn, *args, **kwargs):
     finally:
         with _running_lock:
             _running_labels.discard(label)
+        # Every admin action writes something a cached view reads (odds, predictions,
+        # fights, rankings), and a failed one may have written half of it.
+        refresh_cached_views()
+
+
+def refresh_cached_views():
+    """Drop the API response cache and rebuild the hot views, so a job's writes show
+    up on the next page load instead of after the cache TTL."""
+    from app.services import response_cache
+    response_cache.invalidate()
+    response_cache.warm()
 
 
 def _start_task(background_tasks: BackgroundTasks, label: str, fn, *args, **kwargs) -> dict:
