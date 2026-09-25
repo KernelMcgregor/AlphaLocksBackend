@@ -92,6 +92,12 @@ class UFCFight(TimestampMixin, Base):
     time_format: Mapped[str | None] = mapped_column(String(50), nullable=True)
     fight_time_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_fight_time_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: Row index of this bout on the ufcstats event page: 0 = main event, ascending down
+    #: the card. ufcstats exposes no card-segment labels (main/prelim), so position is the
+    #: only signal for "this is the headline fight" — without it the API returns bouts in
+    #: whatever order Postgres hands back and a title fight can render last.
+    #: Nullable: rows scraped before this column existed keep NULL until re-scraped.
+    card_position: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     event: Mapped["UFCEvent"] = relationship(back_populates="fights")
     red_fighter: Mapped["UFCFighter"] = relationship(foreign_keys=[red_fighter_id])

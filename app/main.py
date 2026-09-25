@@ -32,6 +32,10 @@ def run_migrations():
         for col, ddl in FIGHTER_BIO_COLS:
             if col not in fighter_existing:
                 conn.execute(f"ALTER TABLE ufc_fighters ADD COLUMN {col} {ddl}")
+        # 011: card_position on ufc_fights (idempotent)
+        fight_existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_fights)").fetchall()}
+        if fight_existing and "card_position" not in fight_existing:
+            conn.execute("ALTER TABLE ufc_fights ADD COLUMN card_position INTEGER")
         # Add derived columns to ufc_fight_stats (idempotent)
         existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_fight_stats)").fetchall()}
         derived_cols = [
@@ -105,6 +109,13 @@ def run_migrations():
             cc_len = next((c.get("type").length for c in cc_len if c["name"] == "country_code"), None)
             if cc_len is not None and cc_len < 6:
                 conn.execute(text("ALTER TABLE ufc.ufc_fighters ALTER COLUMN country_code TYPE VARCHAR(6)"))
+
+        # 011: card order on ufc_fights. Nullable with no default -> metadata-only in
+        # Postgres, so no rewrite of the fights table.
+        fight_existing = {c["name"] for c in insp.get_columns("ufc_fights", schema="ufc")}
+        if "card_position" not in fight_existing:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE ufc.ufc_fights ADD COLUMN card_position INTEGER"))
 
         # Add derived columns to ufc_fight_stats
         stats_existing = {c["name"] for c in insp.get_columns("ufc_fight_stats", schema="ufc")}

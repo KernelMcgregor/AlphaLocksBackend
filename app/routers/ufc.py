@@ -4,6 +4,7 @@ import datetime as dt
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse, Response
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, aliased, joinedload
 
 from app.database import get_db
@@ -296,6 +297,7 @@ def get_event_detail(event_id: int, db: Session = Depends(get_db)):
             joinedload(UFCFight.stats),
         )
         .filter(UFCFight.event_id == event_id)
+        .order_by(UFCFight.card_position.is_(None), UFCFight.card_position, UFCFight.id)
         .all()
     )
     # Attach consensus odds (first bookmaker found) to each fight
@@ -864,6 +866,102 @@ def get_method_model_metrics(db: Session = Depends(get_db)):
     }
 
 
+def _method_label(method: str | None) -> str | None:
+    """Normalise a bout's method to the three buckets the UI colours by.
+
+    Mirrors methodLabel() in lib/fighterAnalytics.js, including the order of the tests —
+    "TKO - Doctor's Stoppage" has to match KO before anything else gets a look.
+    """
+    m = (method or "").lower()
+    if "ko" in m or "tko" in m:
+        return "KO/TKO"
+    if "sub" in m:
+        return "Submission"
+    if "dec" in m:
+        return "Decision"
+    return method or None
+
+
+def _recent_form_map(db: Session, fighter_ids: list[int], limit: int = 5) -> dict:
+    """Each fighter's last `limit` completed results, most recent first.
+
+    WHY THIS IS SERVED INLINE
+    -------------------------
+    The Upcoming dashboard draws five W/L/D chips per corner. It used to get them by
+    fetching each fighter's ENTIRE bout history from /ufc/fighters/{id}/fights and
+    slicing the first five client-side — two requests per fight, ~126 across a full
+    slate, to read ten booleans. Those requests dominated the page's prefetch queue and
+    were the reason the form chips arrived late when a new fight was selected.
+
+    Five rows per fighter ride along with the card instead, and the chips render from the
+    payload with nothing to wait for.
+
+    Draws and no-contests count: they happened, they just have no winner. That matches
+    deriveForm, which treats a completed bout as one with a winner OR a method.
+    """
+    if not fighter_ids:
+        return {}
+    # Five columns, not whole ORM rows: this sweeps every completed bout of ~25 fighters
+    # and hydrating full UFCFight objects for it was the expensive part.
+    rows = (
+        db.query(
+            UFCFight.id,
+            UFCFight.red_fighter_id,
+            UFCFight.blue_fighter_id,
+            UFCFight.winner_id,
+            UFCFight.method,
+        )
+        .filter(or_(
+            UFCFight.red_fighter_id.in_(fighter_ids),
+            UFCFight.blue_fighter_id.in_(fighter_ids),
+        ))
+        .filter(or_(UFCFight.winner_id.isnot(None), UFCFight.method.isnot(None)))
+        .filter(UFCFight.date.isnot(None))
+        .order_by(UFCFight.date.desc())
+        .all()
+    )
+    out: dict = {fid: [] for fid in fighter_ids}
+    for fight_id, red_id, blue_id, winner_id, method in rows:
+        for fid in (red_id, blue_id):
+            bucket = out.get(fid)
+            if bucket is None or len(bucket) >= limit:
+                continue
+            bucket.append({
+                "id": str(fight_id),
+                "win": winner_id == fid,
+                "draw": winner_id is None,
+                "method": _method_label(method),
+            })
+    return out
+
+
+def _upcoming_corner(fighter, recent_form: list | None = None) -> dict:
+    """One fighter as the upcoming card renders them.
+
+    height/reach/trains_at/birthplace are here for the tale of the tape on the Upcoming
+    dashboard.
+    They are plain columns on the row the query already joinedloads, so serving them adds
+    no query — and without them that panel can only ever show age and stance.
+    """
+    return {
+        "id": str(fighter.id),
+        "first_name": fighter.first_name,
+        "last_name": fighter.last_name,
+        "nickname": fighter.nickname,
+        "stance": fighter.stance,
+        "height": fighter.height,
+        "reach": fighter.reach,
+        "trains_at": fighter.trains_at,
+        "birthplace": fighter.birthplace,
+        "wins": fighter.wins,
+        "losses": fighter.losses,
+        "draws": fighter.draws,
+        "country_code": fighter.country_code,
+        "image_url": fighter.image_url,
+        "recent_form": recent_form or [],
+    }
+
+
 @router.get("/upcoming")
 def get_upcoming_events(db: Session = Depends(get_db)):
     """Get upcoming events with fights and predictions."""
@@ -879,6 +977,20 @@ def get_upcoming_events(db: Session = Depends(get_db)):
         .all()
     )
 
+    # Recent form for every corner on every card, in one query rather than one per event.
+    # It is the only lookup here that is not event-scoped — a fighter's last five results
+    # have nothing to do with which card they are on — so running it inside the loop cost
+    # eight round trips to a remote database for one answer.
+    corner_rows = (
+        db.query(UFCFight.red_fighter_id, UFCFight.blue_fighter_id)
+        .filter(
+            UFCFight.event_id.in_([e.id for e in events]),
+            UFCFight.winner_id.is_(None),
+        )
+        .all()
+    ) if events else []
+    form_map = _recent_form_map(db, list({fid for row in corner_rows for fid in row}))
+
     result = []
     for event in events:
         fights = (
@@ -888,6 +1000,9 @@ def get_upcoming_events(db: Session = Depends(get_db)):
                 joinedload(UFCFight.blue_fighter),
             )
             .filter(UFCFight.event_id == event.id, UFCFight.winner_id.is_(None))
+            # Card order as ufcstats lists it: main event first. Bouts scraped before
+            # card_position existed sort last rather than jumping to the top.
+            .order_by(UFCFight.card_position.is_(None), UFCFight.card_position, UFCFight.id)
             .all()
         )
         if not fights:
@@ -923,30 +1038,8 @@ def get_upcoming_events(db: Session = Depends(get_db)):
             fight_list.append({
                 "id": str(f.id),
                 "weight_class": f.weight_class,
-                "red_fighter": {
-                    "id": str(f.red_fighter.id),
-                    "first_name": f.red_fighter.first_name,
-                    "last_name": f.red_fighter.last_name,
-                    "nickname": f.red_fighter.nickname,
-                    "stance": f.red_fighter.stance,
-                    "wins": f.red_fighter.wins,
-                    "losses": f.red_fighter.losses,
-                    "draws": f.red_fighter.draws,
-                    "country_code": f.red_fighter.country_code,
-                    "image_url": f.red_fighter.image_url,
-                },
-                "blue_fighter": {
-                    "id": str(f.blue_fighter.id),
-                    "first_name": f.blue_fighter.first_name,
-                    "last_name": f.blue_fighter.last_name,
-                    "nickname": f.blue_fighter.nickname,
-                    "stance": f.blue_fighter.stance,
-                    "wins": f.blue_fighter.wins,
-                    "losses": f.blue_fighter.losses,
-                    "draws": f.blue_fighter.draws,
-                    "country_code": f.blue_fighter.country_code,
-                    "image_url": f.blue_fighter.image_url,
-                },
+                "red_fighter": _upcoming_corner(f.red_fighter, form_map.get(f.red_fighter_id)),
+                "blue_fighter": _upcoming_corner(f.blue_fighter, form_map.get(f.blue_fighter_id)),
                 "odds": [{
                     "bookmaker": o.bookmaker,
                     "red_odds": o.red_odds,
@@ -971,7 +1064,9 @@ def get_upcoming_events(db: Session = Depends(get_db)):
             })
 
         result.append({
-            "id": event.id,
+            # str(): event ids exceed 2**53, so a raw int arrives in JS rounded to the
+            # same float for every event on the card and the filter matches all of them.
+            "id": str(event.id),
             "name": event.name,
             "date": str(event.date),
             "location": event.location,

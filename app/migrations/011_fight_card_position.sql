@@ -1,0 +1,18 @@
+-- Add card_position to ufc_fights: the bout's row index on the ufcstats event page,
+-- 0 = main event and ascending down the card.
+--
+-- WHY
+-- ---
+-- Nothing in the schema recorded card order. /ufc/upcoming issued an unordered query, so
+-- bouts came back in whatever order the planner produced — on the upcoming page a title
+-- fight could render below a prelim. ufcstats publishes no main/prelim segment labels;
+-- the row order on the event page is the only ordering signal available, so we capture it
+-- directly (see apply_card_positions in services/ufc/scraper.py).
+--
+-- Nullable with no default, so Postgres treats this as a metadata-only change — no rewrite
+-- of the ~8k-row fights table. Rows scraped before this migration stay NULL and sort last
+-- until a re-scrape fills them in; ordering degrades to the previous behaviour rather than
+-- breaking.
+--
+-- SQLite doesn't support IF NOT EXISTS on ALTER TABLE, so the column is added by
+-- run_migrations() in main.py rather than by executescript. This file is documentation.

@@ -39,6 +39,7 @@ from app.services.ufc.scraper import (
     REQUEST_DELAY,
     Scraper,
     _scrape_fighter_listings_only,
+    apply_card_positions,
     scrape_event_fights,
     scrape_fight_details,
     upsert_fight,
@@ -128,6 +129,7 @@ def main() -> int:
                 db.rollback()
             time.sleep(REQUEST_DELAY)
 
+        apply_card_positions(db, ev.id, links)
         db.commit()
         after = db.query(UFCFight).filter(UFCFight.event_id == ev.id).count()
         after_decided = db.query(UFCFight).filter(

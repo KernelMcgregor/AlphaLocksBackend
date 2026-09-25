@@ -366,6 +366,31 @@ def scrape_event_fights(scraper: Scraper, event_link: str) -> list[str]:
     return fight_links
 
 
+def apply_card_positions(db: Session, event_db_id: int, fight_links: list[str]) -> int:
+    """Record each bout's row index on the ufcstats event page as card_position.
+
+    `fight_links` must be in page order, which is how scrape_event_fights returns them:
+    main event first. Called after the bouts have been upserted, so every link already
+    has a row; links whose fight was skipped (unknown fighter) simply match nothing.
+
+    Positions come from the link list rather than from upsert_fight so that callers which
+    re-scrape a single bout in isolation cannot stamp a bogus position on it.
+    """
+    if not fight_links:
+        return 0
+    order = {_extract_id(link): i for i, link in enumerate(fight_links)}
+    rows = (
+        db.query(UFCFight)
+        .filter(UFCFight.ufcstats_id.in_(list(order)))
+        .filter(UFCFight.event_id == event_db_id)
+        .all()
+    )
+    for row in rows:
+        row.card_position = order[row.ufcstats_id]
+    db.commit()
+    return len(rows)
+
+
 def scrape_fighter_fight_links(scraper: Scraper, fighter_link: str) -> list[dict]:
     """Get all fight detail URLs + dates from a fighter's profile page.
     Returns list of {"url": str, "date": date|None}.
@@ -793,12 +818,16 @@ def upsert_fight(db: Session, fight_data: dict, event_db_id: int) -> int | None:
 # Upcoming events scrape
 # ---------------------------------------------------------------------------
 
-def scrape_upcoming(max_events: int = 5):
+def scrape_upcoming(max_events: int | None = None):
     """Scrape upcoming events and their fight matchups into ufc_fights.
 
     Upcoming fights get inserted with winner_id=NULL and no stats.
     When the event completes and a regular scrape runs, upsert_fight
     fills in the winner, method, stats, etc. by matching ufcstats_id.
+
+    max_events=None takes every event ufcstats announces (typically 8-10, out to
+    ~2 months). The far-out cards are thin — often a single announced bout — but
+    they fill in as matchups are booked, so re-running picks up the additions.
     """
     log.info(f"Scraping upcoming events (max={max_events})")
     scraper = Scraper()
@@ -839,7 +868,8 @@ def scrape_upcoming(max_events: int = 5):
                 "link": link,
             })
 
-        events = events[:max_events]
+        if max_events:
+            events = events[:max_events]
         log.info(f"Found {len(events)} upcoming events")
         upsert_events(db, events)
 
@@ -866,6 +896,8 @@ def scrape_upcoming(max_events: int = 5):
                 upsert_fight(db, fight_data, event_db.id)
                 total_fights += 1
                 time.sleep(REQUEST_DELAY)
+
+            apply_card_positions(db, event_db.id, fight_links)
 
         db.commit()
         log.info(f"Upcoming scrape complete: {len(events)} events, {total_fights} fights")
@@ -961,6 +993,8 @@ def run_recent_update() -> list[dict]:
                         fighter_ids_to_update.add(blue_id)
                     time.sleep(REQUEST_DELAY)
 
+                apply_card_positions(db, event_db.id, fight_links)
+
             # Step 4: Update fighter records (wins/losses/draws) from listing pages
             # Only fetch the listing pages (no individual DOB pages) for speed
             log.info(f"Updating records for {len(fighter_ids_to_update)} fighters")
@@ -1051,6 +1085,8 @@ def run_scrape_last_event():
             if blue_id:
                 fighter_ids_to_update.add(blue_id)
             time.sleep(REQUEST_DELAY)
+
+        apply_card_positions(db, last_event.id, fight_links)
 
         # Update fighter records
         if fighter_ids_to_update:
@@ -1201,13 +1237,14 @@ def run_scrape(mode: str = "full"):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="UFC Stats scraper")
     parser.add_argument("--update", action="store_true", help="Only scrape new events since last in DB")
-    parser.add_argument("--upcoming", action="store_true", help="Scrape upcoming events (next 4)")
+    parser.add_argument("--upcoming", action="store_true", help="Scrape every announced upcoming event")
+    parser.add_argument("--max-events", type=int, default=0, help="With --upcoming: cap the number of events (0 = all)")
     parser.add_argument("--recent", action="store_true", help="Fast post-event update (new completed events + refresh upcoming)")
     args = parser.parse_args()
 
     if args.recent:
         run_recent_update()
     elif args.upcoming:
-        scrape_upcoming()
+        scrape_upcoming(max_events=args.max_events or None)
     else:
         run_scrape(mode="update" if args.update else "full")
