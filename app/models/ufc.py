@@ -58,6 +58,17 @@ class UFCFighter(TimestampMixin, Base):
     octagon_debut: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
     status: Mapped[str | None] = mapped_column(String(20), nullable=True)  # Active / Retired / ...
 
+    #: JSON list of field names edited by hand in the admin dashboard. The scrapers skip
+    #: these, so a corrected nationality is not reverted by the next ufc.com pass.
+    locked_fields: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    def locked(self) -> set[str]:
+        import json
+        try:
+            return set(json.loads(self.locked_fields or "[]"))
+        except ValueError:
+            return set()
+
 
 class UFCEvent(TimestampMixin, Base):
     __tablename__ = "ufc_events"
@@ -586,6 +597,8 @@ FIGHTER_BIO_COLS = [
     ("leg_reach", "VARCHAR(20)"),
     ("octagon_debut", "DATE"),
     ("status", "VARCHAR(20)"),
+    # Not a ufc.com field, but the same shape of change: a nullable column on the roster.
+    ("locked_fields", "TEXT"),
 ]
 
 

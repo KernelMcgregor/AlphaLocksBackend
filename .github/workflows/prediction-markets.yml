@@ -46,6 +46,16 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # Audit log (admin dashboard). Prints nothing if the write fails, which turns the
+      # closing step into a no-op rather than failing the workflow over bookkeeping.
+      - name: Open audit-log entry
+        id: audit
+        run: >-
+          echo "id=$(python -m app.services.audit start --action 'Prediction Markets' --source github
+          --actor '${{ github.actor }}'
+          --url '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          2>/dev/null)" >> "$GITHUB_OUTPUT"
+
       - name: Refresh prediction markets
         run: |
           python -m app.services.ufc.prediction_markets \
@@ -66,3 +76,7 @@ jobs:
         # Regeneration is skipped entirely when nothing was removed, so the usual run costs one
         # page fetch per upcoming event and nothing else.
         run: python -m app.services.ufc.reconcile_service --apply
+
+      - name: Close audit-log entry
+        if: always() && steps.audit.outputs.id != ''
+        run: python -m app.services.audit finish --id '${{ steps.audit.outputs.id }}' --status '${{ job.status }}'

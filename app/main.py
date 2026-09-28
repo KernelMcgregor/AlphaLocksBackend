@@ -160,6 +160,11 @@ def run_migrations():
                 for col, ddl in hist_missing:
                     conn.execute(text(f"ALTER TABLE ufc.ufc_ranking_history ADD COLUMN {col} {ddl}"))
 
+    # Audit log. create_all covers it on Postgres, but the SQLite branch above only runs
+    # the .sql migrations, so create it explicitly; checkfirst makes this a no-op after.
+    from app.models.shared import AdminActionRun
+    AdminActionRun.__table__.create(bind=engine, checkfirst=True)
+
 
 #: The stats chain, in dependency order. Each entry is (label, "module:function").
 #:
@@ -204,9 +209,12 @@ def refresh_after_event() -> dict[str, str]:
     from app.routers.admin import record_run
     from app.database import SessionLocal as ChainSession
 
+    from datetime import datetime
+
     results: dict[str, str] = {}
     for label, target in POST_EVENT_CHAIN:
         module_name, func_name = target.split(":")
+        started = datetime.utcnow()
         try:
             func = getattr(importlib.import_module(module_name), func_name)
             if label in _CHAIN_NEEDS_DB:
@@ -218,32 +226,89 @@ def refresh_after_event() -> dict[str, str]:
             else:
                 func()
             log.info(f"{label}: done")
-            record_run(label, "done")
+            record_run(label, "done", started=started)
             results[label] = "done"
         except Exception as e:
             log.exception(f"{label} failed")
-            record_run(label, "error", str(e))
+            record_run(label, "error", str(e), started=started)
             results[label] = f"error: {e}"
     return results
 
 
-def _refreshes_views(job):
-    """Rebuild the API response cache once a scheduled job has written.
+def refresh_event_results(event_id: int | None = None) -> dict:
+    """Fetch one event's results and rebuild everything that depends on them.
+
+    The manual counterpart to the nightly job, for when that job missed a card (the
+    backend was down, ufcstats posted late). Unlike the nightly job it targets a named
+    event rather than "anything newer than the last result we have", so it also works
+    for re-fetching a card that already has partial results.
+
+    Steps: scrape results -> derived/career stats -> rankings -> rank history ->
+    similarity -> winner and method predictions for upcoming fights.
+    """
+    import logging
+    from datetime import datetime
+    log = logging.getLogger("refresh_event_results")
+    from app.routers.admin import record_run
+    from app.services.ufc.scraper import scrape_event_results
+
+    # The scrape is the one step everything else depends on: if it fails there is
+    # nothing new to recompute, so let it raise and fail the whole run.
+    started = datetime.utcnow()
+    try:
+        scraped = scrape_event_results(event_id)
+    except Exception as e:
+        record_run("Scrape Event Results", "error", str(e), started=started)
+        raise
+    record_run("Scrape Event Results", "done", started=started)
+
+    chain = refresh_after_event()
+
+    import importlib
+    for label, target in (
+        ("Generate Predictions", "app.services.ufc.model:generate_predictions"),
+        ("Method Predictions", "app.services.ufc.method_model:generate_method_predictions"),
+    ):
+        module_name, func_name = target.split(":")
+        started = datetime.utcnow()
+        try:
+            getattr(importlib.import_module(module_name), func_name)()
+            record_run(label, "done", started=started)
+            chain[label] = "done"
+        except Exception as e:
+            log.exception(f"{label} failed")
+            record_run(label, "error", str(e), started=started)
+            chain[label] = f"error: {e}"
+
+    return {**scraped, "steps": chain}
+
+
+def _scheduled_job(label: str):
+    """Audit a scheduled job and rebuild the API response cache once it has written.
 
     The cache would pick the writes up by itself within its TTL, but a job run is the
     one moment we know the data changed, so the next page load should reflect it.
+
+    The same functions are also started from the admin dashboard (Run Full Pipeline),
+    which already opened an audit row; in that case this does not open a second one.
     """
-    @functools.wraps(job)
-    def run():
-        try:
-            return job()
-        finally:
-            from app.routers.admin import refresh_cached_views
-            refresh_cached_views()
-    return run
+    def wrap(job):
+        @functools.wraps(job)
+        def run():
+            from app.services import audit
+            try:
+                if audit.current_run() is not None:
+                    return job()
+                with audit.track(label, source="scheduled", actor="scheduler"):
+                    return job()
+            finally:
+                from app.routers.admin import refresh_cached_views
+                refresh_cached_views()
+        return run
+    return wrap
 
 
-@_refreshes_views
+@_scheduled_job("Full Pipeline")
 def scheduled_scrape():
     import logging
     log = logging.getLogger("scheduled_scrape")
@@ -322,7 +387,7 @@ def scheduled_scrape():
     record_run("Full Pipeline", "done")
 
 
-@_refreshes_views
+@_scheduled_job("Bovada Odds")
 def scheduled_bovada_scrape():
     import logging
     log = logging.getLogger("scheduled_bovada")
@@ -337,7 +402,7 @@ def scheduled_bovada_scrape():
         record_run("Bovada Odds", "error", str(e))
 
 
-@_refreshes_views
+@_scheduled_job("Prediction Markets")
 def scheduled_prediction_markets():
     """Refresh Kalshi and Polymarket quotes and curves for open fights.
 
@@ -362,7 +427,7 @@ def scheduled_prediction_markets():
         record_run("Prediction Markets", "error", str(e))
 
 
-@_refreshes_views
+@_scheduled_job("Reconcile Fights")
 def scheduled_reconcile():
     """Drop bouts that have been pulled from their card, then rebuild what depended on them.
 
@@ -387,6 +452,8 @@ def scheduled_reconcile():
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     run_migrations()
+    from app.services import audit
+    audit.mark_interrupted()
     # Anchored to the clock, not to process uptime. As an `interval` job the first
     # run was scheduled 24h after add_job, so every deploy or restart reset the
     # countdown -- on a service that redeploys daily the pipeline could go months

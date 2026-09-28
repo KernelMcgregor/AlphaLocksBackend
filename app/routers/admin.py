@@ -1,28 +1,51 @@
+import contextvars
+import json
 import logging
 import re
 import threading
-import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, Header, HTTPException, Query
-from sqlalchemy import text
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Header, HTTPException, Query, Request
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
-from app.models.shared import ModelRun, OddsSnapshot, Prediction
+from app.models.shared import AdminActionRun, ModelRun, OddsSnapshot, Prediction
 from app.models.ufc import UFCEvent, UFCFight, UFCFighter, UFCFightStats
+from app.services import audit
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/admin", tags=["admin"])
 
 # ---------------------------------------------------------------------------
-# Task tracking (in-memory)
+# Request context: who is acting, and with what parameters
 # ---------------------------------------------------------------------------
 
-_tasks: dict[str, dict] = {}
-_last_runs: dict[str, dict] = {}
+#: Set per request by admin_request_context. An async dependency runs in the request's
+#: own context, and FastAPI copies that context into the threadpool for sync endpoints,
+#: so _start_task can read it without every endpoint threading a Request through.
+_request_ctx: contextvars.ContextVar[dict | None] = contextvars.ContextVar("admin_request_ctx", default=None)
+
+
+async def admin_request_context(request: Request):
+    # Free text typed into the dashboard's connect screen. Everyone shares one admin key,
+    # so this is attribution for the audit log, not authentication.
+    actor = (request.headers.get("x-admin-actor") or "").strip()[:120] or "unknown"
+    _request_ctx.set({"actor": actor, "params": dict(request.query_params), "path": request.url.path})
+
+
+router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(admin_request_context)])
+
+
+def _actor() -> str:
+    ctx = _request_ctx.get()
+    return ctx["actor"] if ctx else "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Task tracking (audit log)
+# ---------------------------------------------------------------------------
 
 # Labels with a task currently queued or running, guarded by _running_lock.
 # Several actions (e.g. Generate Predictions) clear a table before rebuilding it,
@@ -31,29 +54,21 @@ _running_labels: set[str] = set()
 _running_lock = threading.Lock()
 
 
-def record_run(label: str, status: str, error: str | None = None):
-    """Record when an action last ran. Called by both manual triggers and scheduled jobs."""
-    _last_runs[label] = {
-        "status": status,
-        "finished": datetime.utcnow().isoformat(),
-        "error": error,
-    }
+def record_run(label: str, status: str, error: str | None = None, started: datetime | None = None):
+    """Record a finished step. Called by pipeline steps whether they were started from
+    the dashboard or by the scheduler; audit attaches it to whichever run is active."""
+    audit.record_step(label, status, error, started)
 
 
-def _tracked_task(task_id: str, label: str, fn, *args, **kwargs):
-    """Wrapper that runs fn and records completion/failure in _tasks."""
-    _tasks[task_id] = {"label": label, "status": "running", "started": datetime.utcnow().isoformat()}
+def _tracked_task(run_id: int | None, label: str, actor: str, fn, *args, **kwargs):
+    """Run fn under an already-opened audit row, storing a dict/str return as its summary."""
     try:
-        fn(*args, **kwargs)
-        _tasks[task_id]["status"] = "done"
-        _tasks[task_id]["finished"] = datetime.utcnow().isoformat()
-        record_run(label, "done")
-    except Exception as e:
-        log.exception(f"Task {label} failed")
-        _tasks[task_id]["status"] = "error"
-        _tasks[task_id]["error"] = str(e)
-        _tasks[task_id]["finished"] = datetime.utcnow().isoformat()
-        record_run(label, "error", str(e))
+        with audit.track(label, source="manual", actor=actor, run_id=run_id) as frame:
+            result = fn(*args, **kwargs)
+            if isinstance(result, (dict, str, list)):
+                frame["summary"] = result
+    except Exception:
+        log.exception(f"Task {label} failed")  # already recorded as an error by track()
     finally:
         with _running_lock:
             _running_labels.discard(label)
@@ -70,7 +85,9 @@ def refresh_cached_views():
     response_cache.warm()
 
 
-def _start_task(background_tasks: BackgroundTasks, label: str, fn, *args, **kwargs) -> dict:
+def _start_task(
+    background_tasks: BackgroundTasks, label: str, fn, *args, target: str | None = None, **kwargs,
+) -> dict:
     # Claim the label here rather than in _tracked_task: background tasks only run
     # after the response is sent, so two near-simultaneous requests would both get
     # past a check made inside the worker.
@@ -79,14 +96,19 @@ def _start_task(background_tasks: BackgroundTasks, label: str, fn, *args, **kwar
             raise HTTPException(409, f"{label} is already running")
         _running_labels.add(label)
 
-    task_id = uuid.uuid4().hex[:12]
+    ctx = _request_ctx.get() or {}
+    actor = ctx.get("actor", "unknown")
+    params = {"endpoint": ctx.get("path"), **(ctx.get("params") or {})}
     try:
-        background_tasks.add_task(_tracked_task, task_id, label, fn, *args, **kwargs)
+        # Opened now, not when the worker starts, so the caller has an id to poll and a
+        # request that is accepted but never runs still leaves a trace.
+        run_id = audit.start_run(label, "manual", actor, params, target)
+        background_tasks.add_task(_tracked_task, run_id, label, actor, fn, *args, **kwargs)
     except Exception:
         with _running_lock:
             _running_labels.discard(label)
         raise
-    return {"message": f"{label} started in background", "task_id": task_id}
+    return {"message": f"{label} started in background", "task_id": run_id}
 
 
 def require_admin_key(x_admin_key: str = Header(...)):
@@ -133,21 +155,156 @@ def get_scheduler_status():
     return {"jobs": jobs}
 
 
+#: What each in-app job does, keyed by APScheduler job id, and the audit label it runs under.
+_JOB_INFO = {
+    "ufc_scrape": ("Full Pipeline", "Nightly pipeline",
+                   "Scrapes results for any card newer than the last one with results, then (only if a "
+                   "card landed) rebuilds derived stats, career stats, rankings, rank history and "
+                   "similarity. Always regenerates winner/method predictions and fight previews."),
+    "bovada_scrape": ("Bovada Odds", "Bovada method odds", "Method-of-victory odds for upcoming fights."),
+    "prediction_markets": ("Prediction Markets", "Prediction markets",
+                           "Kalshi and Polymarket quotes and price history for open fights."),
+    "reconcile_fights": ("Reconcile Fights", "Reconcile fights",
+                         "Removes bouts that have been pulled from their card, and what depended on them."),
+}
+
+#: GitHub Actions workflows in the backend repo that write to the same database. They run
+#: outside this process, so their schedule is read from here rather than from APScheduler.
+#: Keep in sync with .github/workflows/*.yml.
+_GITHUB_WORKFLOWS = [
+    ("Post-Event Update", "post-event.yml", "0 6 * * *",
+     "If a card finished in the last few days without results: scrape results, rebuild stats, "
+     "rankings, similarity and predictions, fetch odds, settle and log picks."),
+    ("Odds Refresh", "post-event.yml", "0 6 * * *",
+     "Tuesdays and Fridays only: live bookmaker odds, then log picks for upcoming fights."),
+    ("Prediction Markets", "prediction-markets.yml", "0 */2 * * *",
+     "Kalshi/Polymarket refresh, then removes cancelled fights."),
+]
+
+
+def _last_runs_by_action(db: Session, source: str | None = None) -> dict[str, dict]:
+    """Latest run per action name, optionally from one source only: the backend scheduler
+    and a GitHub workflow can share a name ("Prediction Markets") but are separate jobs."""
+    q = db.query(AdminActionRun.action, func.max(AdminActionRun.id).label("id"))
+    if source:
+        q = q.filter(AdminActionRun.source == source)
+    latest = q.group_by(AdminActionRun.action).subquery()
+    rows = db.query(AdminActionRun).join(latest, AdminActionRun.id == latest.c.id).all()
+    return {r.action: _run_dict(r) for r in rows}
+
+
+@router.get("/schedule", dependencies=[Depends(require_admin_key)])
+def get_schedule(db: Session = Depends(get_db)):
+    """Everything that will run on its own, soonest first, with how its last run went."""
+    from apscheduler.triggers.cron import CronTrigger
+    from datetime import timezone
+    from app.main import scheduler
+
+    last_scheduled = _last_runs_by_action(db, "scheduled")
+    last_github = _last_runs_by_action(db, "github")
+    now = datetime.now(timezone.utc)
+    items = []
+    for job in scheduler.get_jobs():
+        label, name, desc = _JOB_INFO.get(job.id, (job.name or job.id, job.name or job.id, ""))
+        items.append({
+            "id": job.id, "name": name, "action": label, "runner": "backend",
+            "description": desc, "trigger": str(job.trigger),
+            "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
+            "last_run": last_scheduled.get(label),
+        })
+    for name, workflow, cron, desc in _GITHUB_WORKFLOWS:
+        nxt = CronTrigger.from_crontab(cron, timezone="UTC").get_next_fire_time(None, now)
+        items.append({
+            "id": f"github:{name}", "name": name, "action": name, "runner": "github",
+            "description": desc, "trigger": f"cron '{cron}' (UTC) · {workflow}",
+            "next_run": nxt.isoformat() if nxt else None,
+            "last_run": last_github.get(name),
+        })
+    items.sort(key=lambda i: i["next_run"] or "9999")
+    return {"items": items, "now": now.isoformat()}
+
+
 # ---------------------------------------------------------------------------
-# Task status
+# Audit log
 # ---------------------------------------------------------------------------
 
+def _loads(v):
+    if v is None:
+        return None
+    try:
+        return json.loads(v)
+    except ValueError:
+        return v
+
+
+def _run_dict(r: AdminActionRun) -> dict:
+    return {
+        "id": r.id, "parent_id": r.parent_id, "action": r.action, "source": r.source,
+        "actor": r.actor, "status": r.status, "target": r.target,
+        "params": _loads(r.params), "summary": _loads(r.summary), "error": r.error,
+        # Stored as naive UTC; the suffix lets the browser convert to local time.
+        "started_at": r.started_at.isoformat() + "Z" if r.started_at else None,
+        "finished_at": r.finished_at.isoformat() + "Z" if r.finished_at else None,
+    }
+
+
+@router.get("/runs", dependencies=[Depends(require_admin_key)])
+def list_runs(
+    status: str | None = None,
+    source: str | None = None,
+    action: str | None = None,
+    target: str | None = None,
+    before_id: int | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """Top-level runs, newest first, each with its steps. Page with before_id."""
+    q = db.query(AdminActionRun).filter(AdminActionRun.parent_id.is_(None))
+    if status:
+        q = q.filter(AdminActionRun.status == status)
+    if source:
+        q = q.filter(AdminActionRun.source == source)
+    if action:
+        q = q.filter(AdminActionRun.action.ilike(f"%{action}%"))
+    if target:
+        q = q.filter(AdminActionRun.target == target)
+    if before_id:
+        q = q.filter(AdminActionRun.id < before_id)
+    runs = q.order_by(AdminActionRun.id.desc()).limit(limit).all()
+
+    steps: dict[int, list] = {}
+    if runs:
+        for c in (
+            db.query(AdminActionRun)
+            .filter(AdminActionRun.parent_id.in_([r.id for r in runs]))
+            .order_by(AdminActionRun.id)
+            .all()
+        ):
+            steps.setdefault(c.parent_id, []).append(_run_dict(c))
+    return {
+        "runs": [{**_run_dict(r), "steps": steps.get(r.id, [])} for r in runs],
+        "has_more": len(runs) == limit,
+    }
+
+
+@router.get("/runs/{run_id}", dependencies=[Depends(require_admin_key)])
+def get_run(run_id: int, db: Session = Depends(get_db)):
+    r = db.get(AdminActionRun, run_id)
+    if not r:
+        raise HTTPException(404, "Run not found")
+    steps = db.query(AdminActionRun).filter(AdminActionRun.parent_id == run_id).order_by(AdminActionRun.id).all()
+    return {**_run_dict(r), "steps": [_run_dict(c) for c in steps]}
+
+
 @router.get("/task-status/{task_id}", dependencies=[Depends(require_admin_key)])
-def get_task_status(task_id: str):
-    task = _tasks.get(task_id)
-    if not task:
-        raise HTTPException(404, "Task not found")
-    return task
+def get_task_status(task_id: int, db: Session = Depends(get_db)):
+    """Kept for older dashboard builds; /runs/{id} carries the same plus the steps."""
+    return get_run(task_id, db)
 
 
 @router.get("/last-runs", dependencies=[Depends(require_admin_key)])
-def get_last_runs():
-    return _last_runs
+def get_last_runs(db: Session = Depends(get_db)):
+    return _last_runs_by_action(db)
 
 
 # ---------------------------------------------------------------------------
@@ -410,9 +567,13 @@ def trigger_preview_generation(
 ):
     from app.services.ufc.preview_service import generate_preview
 
-    preview = generate_preview(fight_id, db, force=force)
-    if not preview:
-        return {"message": "Preview generation failed -- check API key and fight data"}
+    with audit.track("Generate Preview", source="manual", actor=_actor(),
+                     params={"fight_id": fight_id, "force": force}, target=f"fight:{fight_id}") as frame:
+        preview = generate_preview(fight_id, db, force=force)
+        if not preview:
+            # Not an exception inside generate_preview, but still a failed action.
+            raise HTTPException(502, "Preview generation failed -- check API key and fight data")
+        frame["summary"] = {"fight_id": fight_id}
     return {"message": "Preview generated", "fight_id": fight_id}
 
 
@@ -451,3 +612,206 @@ def trigger_full_pipeline(background_tasks: BackgroundTasks):
     from app.main import scheduled_scrape
 
     return _start_task(background_tasks, "Full Pipeline", scheduled_scrape)
+
+
+# ---------------------------------------------------------------------------
+# Event results (manual "get results & stats")
+# ---------------------------------------------------------------------------
+
+@router.get("/events/recent", dependencies=[Depends(require_admin_key)])
+def recent_events(limit: int = Query(default=8, ge=1, le=50), db: Session = Depends(get_db)):
+    """Past events, newest first, with how many of their fights have results."""
+    events = (
+        db.query(UFCEvent).filter(UFCEvent.date <= date.today())
+        .order_by(UFCEvent.date.desc()).limit(limit).all()
+    )
+    ids = [e.id for e in events]
+    counts: dict[int, dict] = {i: {"fights": 0, "with_result": 0} for i in ids}
+    if ids:
+        for event_id, total, finished in (
+            db.query(
+                UFCFight.event_id, func.count(UFCFight.id),
+                # A finished bout always has a method; draws and no-contests have no winner.
+                func.count(UFCFight.method),
+            ).filter(UFCFight.event_id.in_(ids)).group_by(UFCFight.event_id).all()
+        ):
+            counts[event_id] = {"fights": total, "with_result": finished}
+
+    last = {
+        r.target: _run_dict(r) for r in (
+            db.query(AdminActionRun)
+            .filter(AdminActionRun.target.in_([f"event:{i}" for i in ids]), AdminActionRun.parent_id.is_(None))
+            .order_by(AdminActionRun.id)
+            .all()
+        )
+    } if ids else {}
+    return [
+        {
+            "id": str(e.id), "name": e.name, "date": str(e.date), "location": e.location,
+            **counts[e.id],
+            "missing_results": counts[e.id]["fights"] > counts[e.id]["with_result"],
+            "last_fetch": last.get(f"event:{e.id}"),
+        }
+        for e in events
+    ]
+
+
+@router.post("/events/{event_id}/fetch-results", dependencies=[Depends(require_admin_key)])
+def trigger_event_results(event_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Scrape one past event's results and stats, then rebuild rankings and predictions."""
+    from app.main import refresh_event_results
+
+    event = db.get(UFCEvent, event_id)
+    if not event:
+        raise HTTPException(404, "Event not found")
+    if event.date > date.today():
+        raise HTTPException(400, f"{event.name} is on {event.date} and has not happened yet")
+    # One label for every event: the rebuild steps are global (rankings, predictions),
+    # so two events fetched at once would race on the same tables.
+    return _start_task(
+        background_tasks, "Get Event Results", refresh_event_results, event_id,
+        target=f"event:{event_id}",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fighter bio edits
+# ---------------------------------------------------------------------------
+
+#: Fields the dashboard may edit, with a validator returning the value to store.
+def _text(max_len: int):
+    def v(value):
+        if value is None:
+            return None
+        value = str(value).strip()
+        if len(value) > max_len:
+            raise ValueError(f"must be at most {max_len} characters")
+        return value or None
+    return v
+
+
+def _country_code(value):
+    if value in (None, ""):
+        return None
+    value = str(value).strip().upper()
+    # ISO 3166-1 alpha-2, or a UK home-nation subdivision (GB-ENG, GB-SCT, GB-WLS, GB-NIR).
+    if not re.fullmatch(r"[A-Z]{2}(-[A-Z]{3})?", value):
+        raise ValueError("must be a 2-letter ISO code like US or BR, or GB-ENG / GB-SCT / GB-WLS / GB-NIR")
+    return value
+
+
+def _date(value):
+    if value in (None, ""):
+        return None
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        raise ValueError("must be a date as YYYY-MM-DD")
+
+
+EDITABLE_FIGHTER_FIELDS = {
+    "nickname": _text(200),
+    "country_code": _country_code,
+    "birthplace": _text(200),
+    "birth_country": _text(100),
+    "fighting_style": _text(100),
+    "trains_at": _text(200),
+    "dob": _date,
+    "status": _text(20),
+}
+
+
+def _fighter_dict(f: UFCFighter) -> dict:
+    return {
+        "id": str(f.id), "first_name": f.first_name, "last_name": f.last_name,
+        "record": f"{f.wins}-{f.losses}-{f.draws}", "image_url": f.image_url,
+        "fields": {k: (str(getattr(f, k)) if getattr(f, k) is not None else None) for k in EDITABLE_FIGHTER_FIELDS},
+        "locked_fields": sorted(f.locked()),
+    }
+
+
+@router.get("/fighters", dependencies=[Depends(require_admin_key)])
+def search_fighters(q: str = Query(min_length=2), db: Session = Depends(get_db)):
+    like = f"%{q.strip()}%"
+    full = UFCFighter.first_name + " " + UFCFighter.last_name
+    fighters = (
+        db.query(UFCFighter)
+        .filter((full.ilike(like)) | (UFCFighter.nickname.ilike(like)))
+        .order_by(UFCFighter.last_name, UFCFighter.first_name)
+        .limit(25)
+        .all()
+    )
+    return [
+        {"id": str(f.id), "name": f"{f.first_name} {f.last_name}", "nickname": f.nickname,
+         "country_code": f.country_code, "record": f"{f.wins}-{f.losses}-{f.draws}"}
+        for f in fighters
+    ]
+
+
+@router.get("/fighters/{fighter_id}", dependencies=[Depends(require_admin_key)])
+def get_fighter(fighter_id: int, db: Session = Depends(get_db)):
+    f = db.get(UFCFighter, fighter_id)
+    if not f:
+        raise HTTPException(404, "Fighter not found")
+    history = (
+        db.query(AdminActionRun)
+        .filter(AdminActionRun.target == f"fighter:{fighter_id}")
+        .order_by(AdminActionRun.id.desc()).limit(50).all()
+    )
+    return {**_fighter_dict(f), "history": [_run_dict(r) for r in history]}
+
+
+@router.patch("/fighters/{fighter_id}", dependencies=[Depends(require_admin_key)])
+def update_fighter(
+    fighter_id: int,
+    fields: dict = Body(default_factory=dict, embed=True),
+    unlock: list[str] = Body(default_factory=list, embed=True),
+    db: Session = Depends(get_db),
+):
+    """Edit bio fields. Every edited field is locked against the scrapers; `unlock`
+    hands a field back to them (its value stays until the next scrape replaces it)."""
+    f = db.get(UFCFighter, fighter_id)
+    if not f:
+        raise HTTPException(404, "Fighter not found")
+
+    unknown = (set(fields) | set(unlock)) - set(EDITABLE_FIGHTER_FIELDS)
+    if unknown:
+        raise HTTPException(400, f"Not editable: {', '.join(sorted(unknown))}")
+
+    changes: dict[str, dict] = {}
+    errors: dict[str, str] = {}
+    for key, raw in fields.items():
+        try:
+            new = EDITABLE_FIGHTER_FIELDS[key](raw)
+        except ValueError as e:
+            errors[key] = str(e)
+            continue
+        old = getattr(f, key)
+        if old != new:
+            changes[key] = {"from": str(old) if old is not None else None,
+                            "to": str(new) if new is not None else None}
+            setattr(f, key, new)
+    if errors:
+        db.rollback()
+        raise HTTPException(422, {"message": "Some fields are invalid", "fields": errors})
+
+    locked_before = f.locked()
+    locked = (locked_before | set(changes)) - set(unlock)
+    if not changes and locked == locked_before:
+        return {**_fighter_dict(f), "changed": {}}
+    f.locked_fields = json.dumps(sorted(locked)) if locked else None
+    db.commit()
+
+    name = f"{f.first_name} {f.last_name}"
+    audit.record_event(
+        "Edit Fighter", "manual", _actor(), target=f"fighter:{fighter_id}",
+        params={"fighter": name},
+        summary={"changes": changes,
+                 "locked": sorted(locked - locked_before), "unlocked": sorted(locked_before - locked)},
+    )
+    # Fighter pages and rankings are served from the response cache; rebuild it off
+    # the request thread so the save returns immediately.
+    threading.Thread(target=refresh_cached_views, name="cache-refresh", daemon=True).start()
+    db.refresh(f)
+    return {**_fighter_dict(f), "changed": changes}
+

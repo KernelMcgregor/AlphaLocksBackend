@@ -1,4 +1,4 @@
-from app.models.shared import ModelRun, OddsSnapshot, Prediction
+from app.models.shared import AdminActionRun, ModelRun, OddsSnapshot, Prediction
 from app.models.ufc import (
     UFCEvent, UFCFight, UFCFighter, UFCFightStats,
     UFCFightPrediction, UFCMethodPrediction, UFCFightOdds,
@@ -11,5 +11,5 @@ __all__ = [
     "UFCFightPrediction", "UFCMethodPrediction", "UFCFightOdds",
     "UFCFightShapValue", "UFCFightPreview",
     "UFCPredictionMarket", "UFCPredictionMarketQuote", "UFCPredictionMarketHistory",
-    "Prediction", "ModelRun", "OddsSnapshot",
+    "Prediction", "ModelRun", "OddsSnapshot", "AdminActionRun",
 ]

@@ -649,8 +649,9 @@ def upsert_fighters(db: Session, fighters: list[dict]):
     for f in fighters:
         existing = db.query(UFCFighter).filter(UFCFighter.ufcstats_id == f["ufcstats_id"]).first()
         if existing:
+            locked = existing.locked()
             for key in ("first_name", "last_name", "nickname", "height", "weight", "reach", "stance", "dob", "wins", "losses", "draws"):
-                if key in f and f[key] is not None:
+                if key in f and f[key] is not None and key not in locked:
                     setattr(existing, key, f[key])
         else:
             fighter = UFCFighter(
@@ -1034,85 +1035,108 @@ def run_recent_update() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Scrape last event (re-scrape the most recent event to fill in results)
+# Re-scrape one event's results (the manual "get results" action)
 # ---------------------------------------------------------------------------
 
-def run_scrape_last_event():
-    """Re-scrape the most recent event in the DB to fill in missing results.
+def latest_past_event(db: Session) -> UFCEvent | None:
+    """The most recent event dated today or earlier.
 
-    Finds the latest event by date, re-scrapes all its fights from ufcstats.com,
-    and upserts them (filling in winners, method, round, etc.).
+    Not simply the latest event: upcoming cards are stored too, so "order by date desc"
+    returns a card months away that has no results to fetch.
     """
-    log.info("Starting scrape of last event")
+    from datetime import date as _date
+    return (
+        db.query(UFCEvent)
+        .filter(UFCEvent.date <= _date.today())
+        .order_by(UFCEvent.date.desc())
+        .first()
+    )
+
+
+def scrape_event_results(event_id: int | None = None) -> dict:
+    """Re-scrape one event from ufcstats.com, filling in winners, methods and fight stats.
+
+    Defaults to the most recent past event. Raises rather than logging and returning, so
+    a failed scrape is recorded as a failure in the audit log instead of a success.
+
+    Returns counts for the audit log: fights found on ufcstats, fights with a result in
+    our database afterwards, and fighter records refreshed.
+    """
     scraper = Scraper()
     db = SessionLocal()
-
     try:
-        # Find the most recent event
-        last_event = db.query(UFCEvent).order_by(UFCEvent.date.desc()).first()
-        if not last_event:
-            log.info("No events in DB")
-            return
+        event = db.get(UFCEvent, event_id) if event_id is not None else latest_past_event(db)
+        if event is None:
+            raise ValueError(f"Event {event_id} not found" if event_id is not None else "No past events in the database")
 
-        log.info(f"Re-scraping event: {last_event.name} ({last_event.date})")
-
-        # Get the event page URL from ufcstats_id
-        event_url = f"{BASE_URL}/event-details/{last_event.ufcstats_id}"
-        fight_links = scrape_event_fights(scraper, event_url)
+        log.info(f"Re-scraping event: {event.name} ({event.date})")
+        fight_links = scrape_event_fights(scraper, f"{BASE_URL}/event-details/{event.ufcstats_id}")
+        if not fight_links:
+            # Fall back to the completed-events listing, whose link may differ.
+            for ev in scrape_all_events(scraper):
+                if ev["ufcstats_id"] == event.ufcstats_id:
+                    fight_links = scrape_event_fights(scraper, ev["link"])
+                    break
+        if not fight_links:
+            raise RuntimeError(f"ufcstats.com lists no fights for {event.name} — results may not be posted yet")
         log.info(f"Found {len(fight_links)} fights")
 
-        if not fight_links:
-            # Try completed events page to find the event link
-            all_completed = scrape_all_events(scraper)
-            for ev in all_completed:
-                if ev["ufcstats_id"] == last_event.ufcstats_id:
-                    fight_links = scrape_event_fights(scraper, ev["link"])
-                    log.info(f"Found {len(fight_links)} fights via completed events page")
-                    break
-
         fighter_ids_to_update = set()
+        scraped = 0
         for fight_url in fight_links:
             fight_data = scrape_fight_details(scraper, fight_url)
             if not fight_data:
                 continue
-            fight_data["date"] = last_event.date
-            upsert_fight(db, fight_data, last_event.id)
-
-            red_id = _extract_id(fight_data.get("red_url", ""))
-            blue_id = _extract_id(fight_data.get("blue_url", ""))
-            if red_id:
-                fighter_ids_to_update.add(red_id)
-            if blue_id:
-                fighter_ids_to_update.add(blue_id)
+            fight_data["date"] = event.date
+            upsert_fight(db, fight_data, event.id)
+            scraped += 1
+            for url_key in ("red_url", "blue_url"):
+                fid = _extract_id(fight_data.get(url_key, ""))
+                if fid:
+                    fighter_ids_to_update.add(fid)
             time.sleep(REQUEST_DELAY)
 
-        apply_card_positions(db, last_event.id, fight_links)
+        apply_card_positions(db, event.id, fight_links)
 
-        # Update fighter records
+        fighters_updated = 0
         if fighter_ids_to_update:
-            log.info(f"Updating records for {len(fighter_ids_to_update)} fighters")
-            fighters_from_listing = _scrape_fighter_listings_only(scraper)
             fighters_to_upsert = [
-                f for f in fighters_from_listing if f["ufcstats_id"] in fighter_ids_to_update
+                f for f in _scrape_fighter_listings_only(scraper) if f["ufcstats_id"] in fighter_ids_to_update
             ]
             if fighters_to_upsert:
                 upsert_fighters(db, fighters_to_upsert)
-                log.info(f"Updated {len(fighters_to_upsert)} fighter records")
+                fighters_updated = len(fighters_to_upsert)
 
-        log.info("Scrape last event complete")
-
+        total = db.query(UFCFight).filter(UFCFight.event_id == event.id).count()
+        with_result = db.query(UFCFight).filter(
+            UFCFight.event_id == event.id, UFCFight.winner_id.isnot(None),
+        ).count()
+        # Draws and no-contests have no winner, so a complete card can legitimately
+        # show fewer results than fights; the method column is what says it finished.
+        finished = db.query(UFCFight).filter(
+            UFCFight.event_id == event.id, UFCFight.method.isnot(None),
+        ).count()
+        result = {
+            "event": event.name, "event_date": str(event.date),
+            "fights_on_ufcstats": len(fight_links), "fights_scraped": scraped,
+            "fights_in_db": total, "fights_with_winner": with_result, "fights_finished": finished,
+            "fighter_records_updated": fighters_updated,
+        }
+        log.info(f"Event results scrape complete: {result}")
+        if finished == 0:
+            raise RuntimeError(f"Scraped {scraped} fights but none have a result yet — ufcstats may not have posted them")
+        return result
     except Exception:
-        log.exception("Scrape last event failed")
         db.rollback()
+        raise
     finally:
-        try:
-            db.close()
-        except Exception:
-            pass
-        try:
-            scraper.close()
-        except Exception:
-            pass
+        db.close()
+        scraper.close()
+
+
+def run_scrape_last_event():
+    """Re-scrape the most recent past event. Kept for the old endpoint and CLI flag."""
+    return scrape_event_results(None)
 
 
 # ---------------------------------------------------------------------------

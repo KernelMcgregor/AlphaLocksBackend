@@ -28,7 +28,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Check if event happened yesterday
+      # Any card in the last week that still has fights without a result, not just
+      # yesterday's. Checking only yesterday meant one failed night stranded a card for
+      # good: UFC Fight Night on 2026-09-26 missed its results when this job crashed on
+      # the 27th, and on the 28th "yesterday" no longer matched it.
+      - name: Check for a recent event missing results
         id: check
         run: |
           python -c "
@@ -37,21 +41,39 @@ jobs:
           from datetime import date, timedelta
 
           db = SessionLocal()
-          yesterday = date.today() - timedelta(days=1)
-
-          # Check if any event was scheduled for yesterday
-          event = db.query(UFCEvent).filter(UFCEvent.date == yesterday).first()
+          today = date.today()
+          # A finished bout always has a method; draws and no-contests have no winner.
+          event = (
+              db.query(UFCEvent)
+              .join(UFCFight, UFCFight.event_id == UFCEvent.id)
+              .filter(UFCEvent.date < today, UFCEvent.date >= today - timedelta(days=7),
+                      UFCFight.method.is_(None))
+              .order_by(UFCEvent.date.desc())
+              .first()
+          )
           db.close()
 
           if event:
-              print(f'Event found: {event.name} on {event.date}')
+              print(f'Missing results: {event.name} on {event.date}')
               with open('$GITHUB_OUTPUT', 'a') as f:
                   f.write('event_happened=true\n')
           else:
-              print(f'No event on {yesterday}')
+              print('No recent event is missing results')
               with open('$GITHUB_OUTPUT', 'a') as f:
                   f.write('event_happened=false\n')
           "
+
+      # Audit log (admin dashboard). Only when there is work, so quiet nights add no rows.
+      # Prints nothing if the write fails, which turns the closing step into a no-op
+      # rather than failing the workflow over bookkeeping.
+      - name: Open audit-log entry
+        id: audit
+        if: steps.check.outputs.event_happened == 'true'
+        run: >-
+          echo "id=$(python -m app.services.audit start --action 'Post-Event Update' --source github
+          --actor '${{ github.actor }}'
+          --url '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          2>/dev/null)" >> "$GITHUB_OUTPUT"
 
       - name: Run post-event scrape (results + upcoming)
         if: steps.check.outputs.event_happened == 'true'
@@ -126,6 +148,10 @@ jobs:
         if: steps.check.outputs.event_happened == 'true'
         run: echo "Post-event update complete - scraped results, refreshed upcoming, generated predictions, rankings, fetched odds, settled and logged picks"
 
+      - name: Close audit-log entry
+        if: always() && steps.audit.outputs.id != ''
+        run: python -m app.services.audit finish --id '${{ steps.audit.outputs.id }}' --status '${{ job.status }}'
+
   # Also refresh odds twice a week regardless of events
   refresh-odds:
     runs-on: ubuntu-latest
@@ -158,6 +184,15 @@ jobs:
           print(f'Day={day}, refresh={should_refresh}')
           "
 
+      - name: Open audit-log entry
+        id: audit
+        if: steps.odds_check.outputs.refresh == 'true'
+        run: >-
+          echo "id=$(python -m app.services.audit start --action 'Odds Refresh' --source github
+          --actor '${{ github.actor }}'
+          --url '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          2>/dev/null)" >> "$GITHUB_OUTPUT"
+
       - name: Refresh odds
         if: steps.odds_check.outputs.refresh == 'true'
         run: python -m app.services.ufc.odds_scraper --live
@@ -176,3 +211,7 @@ jobs:
       - name: Commit picks log
         if: steps.odds_check.outputs.refresh == 'true'
         uses: ./.github/actions/commit-picks
+
+      - name: Close audit-log entry
+        if: always() && steps.audit.outputs.id != ''
+        run: python -m app.services.audit finish --id '${{ steps.audit.outputs.id }}' --status '${{ job.status }}'

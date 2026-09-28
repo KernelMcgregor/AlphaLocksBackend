@@ -280,6 +280,9 @@ def scrape_profiles(limit: int = 0, recent_years: int = 0, dry_run: bool = False
                 continue
 
             updates = extract_profile(BeautifulSoup(resp.text, "html.parser"))
+            # Fields corrected by hand in the admin dashboard outrank ufc.com.
+            for field in fighter.locked():
+                updates.pop(field, None)
             if not updates:
                 not_found.append(f"{name} ({slug}) -> empty page")
                 continue
@@ -367,7 +370,7 @@ def remap_countries(dry_run: bool = False):
     still_unmapped: dict[str, int] = {}
     for fighter in fighters:
         iso = COUNTRY_TO_ISO.get(fighter.birth_country)
-        if iso:
+        if iso and "country_code" not in fighter.locked():
             if not dry_run:
                 fighter.country_code = iso
             filled += 1
