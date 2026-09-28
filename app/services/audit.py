@@ -134,6 +134,35 @@ def record_step(label: str, status: str, error: str | None = None, started: date
 
 
 @contextmanager
+def step(label: str):
+    """Run one pipeline step, visible as a "running" child row while it runs.
+
+    record_step() only writes once a step has finished, so a long step (winner
+    predictions over every fight) left the dashboard showing the run as running with no
+    hint of where. Outside any tracked run this still records the step, at the end.
+    """
+    parent = current_run()
+    if parent is None or label == parent["action"]:
+        started = datetime.utcnow()
+        try:
+            yield
+        except Exception as e:
+            record_step(label, "error", str(e), started)
+            raise
+        record_step(label, "done", None, started)
+        return
+
+    run_id = start_run(label, parent["source"], parent["actor"], parent_id=parent["id"])
+    try:
+        yield
+    except Exception as e:
+        parent["errors"].append(f"{label}: {e}")
+        finish_run(run_id, "error", str(e))
+        raise
+    finish_run(run_id, "done")
+
+
+@contextmanager
 def track(
     action: str,
     source: str,

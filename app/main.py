@@ -209,33 +209,41 @@ def refresh_after_event() -> dict[str, str]:
     import importlib
     import logging
     log = logging.getLogger("refresh_after_event")
-    from app.routers.admin import record_run
     from app.database import SessionLocal as ChainSession
-
-    from datetime import datetime
+    from app.services import audit
 
     results: dict[str, str] = {}
     for label, target in POST_EVENT_CHAIN:
         module_name, func_name = target.split(":")
-        started = datetime.utcnow()
         try:
-            func = getattr(importlib.import_module(module_name), func_name)
-            if label in _CHAIN_NEEDS_DB:
-                db = ChainSession()
-                try:
-                    func(db)
-                finally:
-                    db.close()
-            else:
-                func()
+            # A step shows as running in the audit log from the moment it starts.
+            with audit.step(label):
+                func = getattr(importlib.import_module(module_name), func_name)
+                if label in _CHAIN_NEEDS_DB:
+                    db = ChainSession()
+                    try:
+                        func(db)
+                    finally:
+                        db.close()
+                else:
+                    func()
             log.info(f"{label}: done")
-            record_run(label, "done", started=started)
             results[label] = "done"
         except Exception as e:
             log.exception(f"{label} failed")
-            record_run(label, "error", str(e), started=started)
             results[label] = f"error: {e}"
     return results
+
+
+def _event_fighter_ids(event_id: int) -> set[int]:
+    from app.database import SessionLocal
+    from app.models.ufc import UFCFight
+    db = SessionLocal()
+    try:
+        rows = db.query(UFCFight.red_fighter_id, UFCFight.blue_fighter_id).filter(UFCFight.event_id == event_id).all()
+        return {fid for pair in rows for fid in pair if fid}
+    finally:
+        db.close()
 
 
 def refresh_event_results(event_id: int | None = None) -> dict:
@@ -246,61 +254,40 @@ def refresh_event_results(event_id: int | None = None) -> dict:
     event rather than "anything newer than the last result we have", so it also works
     for re-fetching a card that already has partial results.
 
-    Steps: scrape results -> derived/career stats -> rankings -> rank history ->
-    similarity -> winner and method predictions for upcoming fights.
+    Steps: scrape results -> derived/career stats -> Glicko + rankings -> rank history ->
+    similarity -> fighter profiles -> winner and method predictions.
     """
+    import importlib
     import logging
-    from datetime import datetime
     log = logging.getLogger("refresh_event_results")
-    from app.routers.admin import record_run
+    from app.services import audit
     from app.services.ufc.scraper import scrape_event_results
+    from app.services.ufc.ufc_profile_scraper import ingest_fighter_profiles
 
     # The scrape is the one step everything else depends on: if it fails there is
     # nothing new to recompute, so let it raise and fail the whole run.
-    started = datetime.utcnow()
-    try:
+    with audit.step("Scrape Event Results"):
         scraped = scrape_event_results(event_id)
-    except Exception as e:
-        record_run("Scrape Event Results", "error", str(e), started=started)
-        raise
-    record_run("Scrape Event Results", "done", started=started)
 
     chain = refresh_after_event()
 
-    # New fighters on this card (debuts) and anyone recent still missing a bio or photo.
-    started = datetime.utcnow()
-    try:
-        from app.database import SessionLocal
-        from app.models.ufc import UFCFight
-        from app.services.ufc.ufc_profile_scraper import ingest_fighter_profiles
-        db = SessionLocal()
+    # Debuts on this card, plus anyone recent still missing a bio or photo, then the two
+    # prediction passes. Each is independent, so one failing does not skip the others.
+    steps = [
+        ("Fighter Profiles", lambda: ingest_fighter_profiles(
+            recent_days=60, fighter_ids=_event_fighter_ids(int(scraped["event_id"])))),
+        ("Generate Predictions",
+         lambda: importlib.import_module("app.services.ufc.model").generate_predictions()),
+        ("Method Predictions",
+         lambda: importlib.import_module("app.services.ufc.method_model").generate_method_predictions()),
+    ]
+    for label, fn in steps:
         try:
-            ids = {fid for pair in db.query(UFCFight.red_fighter_id, UFCFight.blue_fighter_id)
-                   .filter(UFCFight.event_id == int(scraped["event_id"])).all() for fid in pair if fid}
-        finally:
-            db.close()
-        ingest_fighter_profiles(recent_days=60, fighter_ids=ids)
-        record_run("Fighter Profiles", "done", started=started)
-        chain["Fighter Profiles"] = "done"
-    except Exception as e:
-        log.exception("Fighter Profiles failed")
-        record_run("Fighter Profiles", "error", str(e), started=started)
-        chain["Fighter Profiles"] = f"error: {e}"
-
-    import importlib
-    for label, target in (
-        ("Generate Predictions", "app.services.ufc.model:generate_predictions"),
-        ("Method Predictions", "app.services.ufc.method_model:generate_method_predictions"),
-    ):
-        module_name, func_name = target.split(":")
-        started = datetime.utcnow()
-        try:
-            getattr(importlib.import_module(module_name), func_name)()
-            record_run(label, "done", started=started)
+            with audit.step(label):
+                fn()
             chain[label] = "done"
         except Exception as e:
             log.exception(f"{label} failed")
-            record_run(label, "error", str(e), started=started)
             chain[label] = f"error: {e}"
 
     return {**scraped, "steps": chain}
