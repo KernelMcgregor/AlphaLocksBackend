@@ -45,6 +45,8 @@ class FakeFight:
     winner_id: int | None
     weight_class: str
     method: str | None = "Decision - Unanimous"
+    red_result: str | None = None
+    blue_result: str | None = None
 
 
 class _Query:
@@ -235,6 +237,40 @@ class TestPublisherRefusesBadRankings:
         profiles = {(1, "lightweight"): {}, (2, "lightweight"): {}}
         result = RankingResult(order={"lightweight": [1, 2]}, scores={1: 5.0, 2: 4.0})
         _check(result, profiles, reg, TODAY, Eligibility())  # must not raise
+
+
+class TestTapologyCountsEveryResult:
+    """Ilimbek Akylbek's only UFC bout was a DQ win (2026-09-26). The Tapology ranker
+    counted it — a DQ win is a win on the record — and ranked him; the publisher's check
+    counted only rating-bearing results, saw zero fights, and refused the whole publish."""
+
+    def _dq_debut(self):
+        return FighterState("bantamweight", TODAY, decided_fights=0, rounds=0, result_bouts=1)
+
+    def test_a_dq_win_debut_is_rankable_under_tapology_rules(self):
+        from app.services.ufc.tapology_rankings import TAPOLOGY_ELIGIBILITY
+        assert is_rankable(self._dq_debut(), TODAY, TAPOLOGY_ELIGIBILITY)
+
+    def test_glicko_criteria_still_ignore_it(self):
+        assert not is_rankable(self._dq_debut(), TODAY, Eligibility(min_decided_fights=1, min_rounds=0))
+
+    def test_publisher_accepts_the_ranker_ranking_him(self):
+        from app.services.ufc.tapology_rankings import TAPOLOGY_ELIGIBILITY
+        reg = {1: FighterState("bantamweight", TODAY, decided_fights=5, rounds=15, result_bouts=5),
+               2: self._dq_debut()}
+        result = RankingResult(order={"bantamweight": [1, 2]}, scores={1: 5.0, 2: 1.0},
+                               eligible_divisions={1: {"bantamweight"}, 2: {"bantamweight"}})
+        _check(result, {(1, "bantamweight"): {}}, reg, TODAY, TAPOLOGY_ELIGIBILITY)
+
+    def test_registry_counts_result_codes_not_methods(self):
+        fights = [
+            FakeFight(3, date(2026, 3, 1), 10, 40, None, "Bantamweight Bout", "Overturned", "NC", "NC"),
+            FakeFight(2, date(2026, 5, 1), 10, 30, None, "Bantamweight Bout", "Decision - Majority", "D", "D"),
+            FakeFight(1, date(2026, 8, 29), 10, 20, 20, "Bantamweight Bout", "DQ", "L", "W"),
+        ]
+        reg = build_fighter_registry(FakeDB(fights, []), as_of=TODAY)
+        assert reg[20].result_bouts == 1 and reg[20].decided_fights == 0
+        assert reg[10].result_bouts == 2  # the DQ loss and the draw, not the NC
 
 
 class TestServedRanksAreNeverZero:

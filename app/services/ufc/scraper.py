@@ -1117,7 +1117,7 @@ def scrape_event_results(event_id: int | None = None) -> dict:
             UFCFight.event_id == event.id, UFCFight.method.isnot(None),
         ).count()
         result = {
-            "event": event.name, "event_date": str(event.date),
+            "event": event.name, "event_date": str(event.date), "event_id": str(event.id),
             "fights_on_ufcstats": len(fight_links), "fights_scraped": scraped,
             "fights_in_db": total, "fights_with_winner": with_result, "fights_finished": finished,
             "fighter_records_updated": fighters_updated,

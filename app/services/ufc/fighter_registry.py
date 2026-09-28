@@ -110,6 +110,10 @@ class FighterState:
     decided_fights: int    #: bouts with a rating-bearing result
     rounds: int            #: scored rounds in decided bouts
     last_decided: date | None = None  #: for diagnostics; never used for eligibility
+    #: Bouts with a W/L/D result for this fighter's corner — everything except no-contests
+    #: and overturned results. Wider than decided_fights: a DQ win or a draw counts here.
+    #: This is what Tapology counts, so it is what Tapology eligibility must read.
+    result_bouts: int = 0
 
 
 @dataclass(frozen=True)
@@ -135,11 +139,19 @@ class Eligibility:
     #: check caught it. That disagreement between two eligibility opinions is the original
     #: rank=0 defect; there is one predicate here on purpose.
     max_days_inactive: int = 699
+    #: Count bouts toward min_decided_fights by result code (W/L/D) rather than by
+    #: is_decided. The Tapology ranker selects bouts that way — a DQ win is a win on the
+    #: record — so an eligibility check counting only rating-bearing results rejected
+    #: fighters the ranker had correctly ranked. Ilimbek Akylbek, whose one UFC bout was a
+    #: DQ win, blocked the whole publish on 2026-09-28. Glicko-based criteria keep False:
+    #: a rating engine has nothing to update from a DQ or a draw.
+    count_all_results: bool = False
 
 
 def is_rankable(st: FighterState, today: date, crit: Eligibility = Eligibility()) -> bool:
+    fights = st.result_bouts if crit.count_all_results else st.decided_fights
     return (
-        st.decided_fights >= crit.min_decided_fights
+        fights >= crit.min_decided_fights
         and st.rounds >= crit.min_rounds
         and st.division != "unknown"
         and (today - st.last_activity).days <= crit.max_days_inactive
@@ -162,6 +174,7 @@ def build_fighter_registry(db, as_of: date | None = None) -> dict[int, FighterSt
     last_decided: dict[int, date] = {}
     recent_divisions: dict[int, list[str]] = defaultdict(list)
     decided_fights: dict[int, int] = defaultdict(int)
+    result_bouts: dict[int, int] = defaultdict(int)
 
     decided_fight_ids: set[int] = set()
 
@@ -189,6 +202,11 @@ def build_fighter_registry(db, as_of: date | None = None) -> dict[int, FighterSt
                 if f.date >= last_decided.get(fid, date.min):
                     last_decided[fid] = f.date
 
+        # Same per-corner rule as tapology_rankings.build_history: skip NC and blank codes.
+        for fid, code in ((f.red_fighter_id, f.red_result), (f.blue_fighter_id, f.blue_result)):
+            if fid is not None and code and code != "NC":
+                result_bouts[fid] += 1
+
     # Rounds: only those actually scored in decided bouts, matching what the rating
     # engines consume. round_number 0 is the per-fight totals row, not a round.
     rounds: dict[int, int] = defaultdict(int)
@@ -209,6 +227,7 @@ def build_fighter_registry(db, as_of: date | None = None) -> dict[int, FighterSt
             decided_fights=decided_fights.get(fid, 0),
             rounds=rounds.get(fid, 0),
             last_decided=last_decided.get(fid),
+            result_bouts=result_bouts.get(fid, 0),
         )
         for fid, act in last_activity.items()
     }

@@ -437,10 +437,23 @@ def trigger_reconcile(
 def trigger_profile_scrape(
     background_tasks: BackgroundTasks,
     images: bool = Query(default=True),
+    recent_days: int = Query(default=60, ge=0,
+                             description="Fighters with a bout in the last N days or booked "
+                                         "on an upcoming card. 0 = the whole roster (slow)."),
 ):
-    from app.services.ufc.ufc_profile_scraper import run as run_profiles
+    from app.services.ufc.ufc_profile_scraper import ingest_fighter_profiles, scrape_profiles
 
-    return _start_task(background_tasks, "Fighter Profiles", run_profiles, images=images)
+    if recent_days == 0:
+        # Whole roster: every fighter still missing a bio or photo, then cache photos.
+        def _all():
+            result = {"all_fighters": scrape_profiles()}
+            if images:
+                from scripts.cache_fighter_images import run as cache_images
+                result["images"] = cache_images()
+            return result
+        return _start_task(background_tasks, "Fighter Profiles", _all)
+    return _start_task(background_tasks, "Fighter Profiles", ingest_fighter_profiles,
+                       recent_days=recent_days, images=images)
 
 
 # ---------------------------------------------------------------------------
@@ -502,7 +515,7 @@ def trigger_rankings(background_tasks: BackgroundTasks):
         finally:
             db.close()
 
-    return _start_task(background_tasks, "Generate Rankings", _run_all)
+    return _start_task(background_tasks, "Glicko Ratings + Rankings", _run_all)
 
 
 @router.post("/generate-derived-stats", dependencies=[Depends(require_admin_key)])

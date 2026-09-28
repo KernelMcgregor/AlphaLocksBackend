@@ -123,6 +123,13 @@ jobs:
         if: steps.check.outputs.event_happened == 'true'
         run: python -m app.services.ufc.style_service
 
+      # Debuting fighters arrive from ufcstats with a bare record: no photo, flag or bio.
+      # Fills those from ufc.com for anyone recent or booked who is still missing them,
+      # then caches the photos. Skips fields locked in the admin dashboard.
+      - name: Fighter profiles and photos
+        if: steps.check.outputs.event_happened == 'true'
+        run: python -m app.services.ufc.ufc_profile_scraper --recent-days 60
+
       - name: Scrape live odds
         if: steps.check.outputs.event_happened == 'true'
         run: python -m app.services.ufc.odds_scraper --live

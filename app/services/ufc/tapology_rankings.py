@@ -103,6 +103,7 @@ TAPOLOGY_ELIGIBILITY = Eligibility(
     min_decided_fights=1,
     min_rounds=0,
     max_days_inactive=ELIGIBILITY_DAYS + GRACE_DAYS,
+    count_all_results=True,
 )
 
 

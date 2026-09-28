@@ -221,14 +221,22 @@ def extract_profile(soup: BeautifulSoup) -> dict:
 # Scrape
 # ---------------------------------------------------------------------------
 
-def _select_fighters(db, recent_years: int, limit: int) -> list[UFCFighter]:
-    """Fighters still missing profile data, newest-relevant first."""
+def _select_fighters(db, recent_years: int, limit: int, recent_days: int = 0,
+                     fighter_ids: set[int] | None = None) -> list[UFCFighter]:
+    """Fighters still missing profile data, newest-relevant first.
+
+    recent_days/recent_years limit it to fighters with a bout on or after the cutoff,
+    which includes every bout booked on an upcoming card. fighter_ids narrows it further.
+    """
     query = db.query(UFCFighter).filter(
         or_(*[getattr(UFCFighter, f).is_(None) for f in PROFILE_SENTINEL_FIELDS])
     )
+    if fighter_ids is not None:
+        query = query.filter(UFCFighter.id.in_(fighter_ids))
 
-    if recent_years > 0:
-        cutoff = date.today() - timedelta(days=recent_years * 365)
+    days = recent_days or recent_years * 365
+    if days > 0:
+        cutoff = date.today() - timedelta(days=days)
         recent_ids = set()
         for red_id, blue_id in (
             db.query(UFCFight.red_fighter_id, UFCFight.blue_fighter_id)
@@ -246,13 +254,14 @@ def _select_fighters(db, recent_years: int, limit: int) -> list[UFCFighter]:
     return fighters
 
 
-def scrape_profiles(limit: int = 0, recent_years: int = 0, dry_run: bool = False):
+def scrape_profiles(limit: int = 0, recent_years: int = 0, dry_run: bool = False,
+                    recent_days: int = 0, fighter_ids: set[int] | None = None) -> dict:
     """Fetch UFC.com athlete pages and fill bio fields + image_url."""
     mode = "DRY RUN — no writes" if dry_run else "writing to database"
     log.info(f"Scraping UFC.com athlete profiles ({mode})...")
     db = SessionLocal()
 
-    fighters = _select_fighters(db, recent_years, limit)
+    fighters = _select_fighters(db, recent_years, limit, recent_days, fighter_ids)
     log.info(f"  {len(fighters)} fighters need profile data")
 
     client = httpx.Client(
@@ -275,6 +284,13 @@ def scrape_profiles(limit: int = 0, recent_years: int = 0, dry_run: bool = False
         slug = _fighter_slug(fighter.first_name, fighter.last_name)
         try:
             resp = client.get(f"https://www.ufc.com/athlete/{slug}")
+            # A 301 to another athlete page is ufc.com's canonical slug for the same person
+            # (king-green -> bobby-green, rongzhu -> rong-zhu). A 302 goes to site search,
+            # which means no such athlete — that is why redirects are not followed blindly.
+            location = resp.headers.get("location", "")
+            if resp.status_code == 301 and re.search(r"ufc\.com/athlete/[a-z0-9-]+/?$", location):
+                slug = location.rstrip("/").rsplit("/", 1)[-1]
+                resp = client.get(f"https://www.ufc.com/athlete/{slug}")
             if resp.status_code != 200:
                 not_found.append(f"{name} ({slug}) -> {resp.status_code}")
                 continue
@@ -347,6 +363,32 @@ def scrape_profiles(limit: int = 0, recent_years: int = 0, dry_run: bool = False
         if len(not_found) > 50:
             log.warning(f"    ... and {len(not_found) - 50} more")
 
+    # Returned so the audit log shows who still lacks data — typically a debut whose
+    # ufc.com slug does not match their ufcstats name.
+    return {"selected": len(fighters), "updated": updated,
+            "not_found_on_ufc_com": not_found[:25], "unmapped_countries": sorted(unmapped_countries)}
+
+
+def ingest_fighter_profiles(recent_days: int = 60, fighter_ids: set[int] | None = None,
+                            images: bool = True) -> dict:
+    """Bring new and recently active fighters up to date: ufc.com bio and photo, then a
+    cached copy of the photo.
+
+    Runs in the nightly pipeline and in "Get results & stats". Without it a debuting
+    fighter kept a bare ufcstats record — no photo, flag or bio — until someone ran the
+    profile scraper by hand. Only fighters still missing data are fetched, so a quiet
+    night costs a handful of requests. Fields locked in the admin dashboard are skipped.
+    """
+    result: dict = {}
+    if fighter_ids:
+        result["event_fighters"] = scrape_profiles(fighter_ids=set(fighter_ids))
+    if recent_days:
+        result["recent_fighters"] = scrape_profiles(recent_days=recent_days)
+    if images:
+        from scripts.cache_fighter_images import run as cache_images
+        result["images"] = cache_images()
+    return result
+
 
 def remap_countries(dry_run: bool = False):
     """Re-derive country_code from the stored birth_country, with no HTTP at all.
@@ -396,12 +438,13 @@ def remap_countries(dry_run: bool = False):
 # Main
 # ---------------------------------------------------------------------------
 
-def run(limit: int = 0, recent_years: int = 0, dry_run: bool = False):
+def run(limit: int = 0, recent_years: int = 0, dry_run: bool = False) -> dict:
     log.info("=" * 60)
     log.info("UFC PROFILE SCRAPER")
     log.info("=" * 60)
-    scrape_profiles(limit=limit, recent_years=recent_years, dry_run=dry_run)
+    result = scrape_profiles(limit=limit, recent_years=recent_years, dry_run=dry_run)
     log.info("\nDone.")
+    return result
 
 
 if __name__ == "__main__":
@@ -413,8 +456,13 @@ if __name__ == "__main__":
                         help="Fetch and parse but commit nothing — safe against production")
     parser.add_argument("--remap-countries", action="store_true",
                         help="Only re-derive country_code from stored birth_country (no HTTP)")
+    parser.add_argument("--recent-days", type=int, default=0,
+                        help="Ingest mode: fighters with a bout in the last N days or booked "
+                             "on an upcoming card, still missing data; then cache photos")
     args = parser.parse_args()
     if args.remap_countries:
         remap_countries(dry_run=args.dry_run)
+    elif args.recent_days:
+        ingest_fighter_profiles(recent_days=args.recent_days)
     else:
         run(limit=args.limit, recent_years=args.recent_years, dry_run=args.dry_run)

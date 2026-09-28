@@ -274,7 +274,7 @@ class TestPostEventChain:
             "career aggregates read the derived per-fight columns"
         assert labels.index("Career Stats") < labels.index("Fighter Similarity"), \
             "Block A of the style vector reads career stats"
-        assert labels.index("Generate Rankings") < labels.index("Fighter Similarity"), \
+        assert labels.index("Glicko Ratings + Rankings") < labels.index("Fighter Similarity"), \
             "similarity runs after rankings so both read the same Glicko state"
 
     def test_every_chain_target_resolves(self):
