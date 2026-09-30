@@ -154,6 +154,10 @@ class Ensemble:
     train_means: pd.Series
     stack: dict | None = None  # {"a", "b_mkt", "b_model", "n"}
     meta: dict = field(default_factory=dict)
+    #: Blend weights fit against OPENING lines (BestFightOdds history). An opener is less
+    #: informed than a day-before line, so the model earns more weight against it. Used
+    #: when the market price being blended is an opening line (forward test, line watcher).
+    stack_open: dict | None = None
 
     @property
     def features(self) -> list[str]:
@@ -171,11 +175,12 @@ class Ensemble:
         f = self._impute(frame)
         return _sigmoid(np.mean([_logit(m.predict(f)) for m in self.members], axis=0))
 
-    def final_prob(self, model_prob: np.ndarray, market_prob: np.ndarray) -> np.ndarray:
+    def final_prob(self, model_prob: np.ndarray, market_prob: np.ndarray,
+                   opening: bool = False) -> np.ndarray:
         market_prob = np.asarray(market_prob, dtype=float)
-        if not self.stack:
+        s = (getattr(self, "stack_open", None) or self.stack) if opening else self.stack
+        if not s:
             return model_prob
-        s = self.stack
         blended = _sigmoid(s["a"] + s["b_mkt"] * _logit(market_prob)
                            + s["b_model"] * _logit(model_prob))
         return np.where(np.isnan(market_prob), model_prob, blended)
@@ -228,6 +233,31 @@ def fit_stack(oof: pd.DataFrame) -> dict:
             "b_model": float(m.coef_[0][1]), "n": int(len(priced))}
 
 
+def fit_open_stack(oof: pd.DataFrame) -> dict | None:
+    """Blend weights against BFO consensus OPENING lines, on the same out-of-sample
+    model predictions. None when no opening-line history is available."""
+    from sqlalchemy import inspect
+
+    from app.database import SessionLocal, engine
+    from app.models.ufc import UFCFightOpenClose
+
+    t = UFCFightOpenClose.__table__
+    if not inspect(engine).has_table(t.name, schema=t.schema):
+        return None
+    db = SessionLocal()
+    try:
+        opens = {fid: p for fid, p in db.query(UFCFightOpenClose.fight_id,
+                                               UFCFightOpenClose.red_open_prob)
+                 .filter(UFCFightOpenClose.bookmaker == "Consensus",
+                         UFCFightOpenClose.red_open_prob.isnot(None))}
+    finally:
+        db.close()
+    o = oof.copy()
+    o["odds_red_prob"] = [opens.get(int(f)) for f in o["fight_id"]]
+    o = o[o["odds_red_prob"].notna()]
+    return fit_stack(o) if len(o) >= 200 else None
+
+
 def expanding_stack_eval(oof: pd.DataFrame, n_blocks: int = 8) -> dict:
     """Honest estimate of the blend: each block is scored by a stack fit only on the
     blocks before it. Returns log losses on the scored priced fights."""
@@ -272,6 +302,7 @@ def train_and_save(fresh_glicko: bool = True) -> Ensemble:
     log.info("Fitting final ensemble on all fights...")
     ens = fit_ensemble(matchup, features)
     ens.stack = fit_stack(oof)
+    ens.stack_open = fit_open_stack(oof)
     ens.meta = {"trained_at": datetime.now().isoformat(timespec="seconds"),
                 "n_train": int(len(matchup)), "last_fight": str(matchup["date"].max()),
                 "eval": report, "members": [m[0] for m in MEMBERS]}

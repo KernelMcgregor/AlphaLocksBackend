@@ -1,8 +1,25 @@
-# Pre-registration v2.0: ensemble forward test
+# Pre-registration v2.1: ensemble forward test at the opening line
 
 **Registered 2026-09-28, before any fight it applies to.**
 **Implementation: `scripts/forward_track.py`. Log: `forward_log_v2.jsonl`.**
 **Settled fights under v2.0: 0. The count starts here.**
+
+## v2.1 amendment (2026-09-30, before any row was logged)
+
+v2.0 would have logged each fight ~3-7 days out at US sportsbook prices. The backtest edge
+is at the **opening** line (+3.3% CLV there, ~0 at the close), so v2.1 changes what is
+measured, before the first row:
+
+- **When:** each fight is logged at the first snapshot the line watcher
+  (`app/services/ufc/line_watcher.py`, every two hours) recorded for it from BestFightOdds.
+- **Price:** consensus of the sportsbooks in that first snapshot (exchanges excluded).
+- **Blend:** the opening-line weights (`Ensemble.stack_open`: b_model 0.45 vs 0.26 for
+  day-before lines), fit on out-of-sample predictions against BFO opening lines.
+- **Rule:** bet only when EV >= 5% at that price (backtest: ~0 CLV below 5%, positive
+  above). This replaces EV > 0 below, and was set before any forward data.
+- **Close:** the watcher's last snapshot before the card (same books as the open).
+- **Backlog:** fights already priced when the watcher first ran are logged but flagged
+  `backlog` and excluded from the bet test; they were not seen at their open.
 
 ## Why a new log
 

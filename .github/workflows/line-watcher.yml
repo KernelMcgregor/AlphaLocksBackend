@@ -1,0 +1,99 @@
+name: Line Watcher
+
+# Every two hours: record new opening lines from BestFightOdds, look up newly booked
+# fighters on Sherdog, and (only when something changed) refresh predictions and log the
+# forward test at the opening price. See app/services/ufc/line_watcher.py and
+# PREREGISTRATION_V2.md (v2.1).
+#
+# Off the hour on purpose: GitHub delays top-of-the-hour schedules the most.
+on:
+  schedule:
+    - cron: '17 */2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # commits forward_log_v2.jsonl
+
+# Never run alongside the nightly pipeline: both write predictions and the forward log.
+concurrency:
+  group: ufc-pipeline
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      # Just what the scrapers need. The model stack (torch, catboost, shap) is only
+      # installed below when predictions actually have to be refreshed.
+      - name: Install light dependencies
+        run: >-
+          pip install "sqlalchemy>=2.0,<2.1" psycopg2-binary pydantic pydantic-settings
+          python-dotenv requests httpx beautifulsoup4 numpy
+
+      # New bookings only reach ufc_fights through a ufcstats scrape; without this the
+      # watcher cannot match a bout whose line opens between weekly post-event runs.
+      # Every third run (~6 hourly), which is plenty for announcements.
+      - name: Is this a bookings refresh run?
+        id: slot
+        run: |
+          h=$(date -u +%H)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ $((10#$h % 6)) -eq 0 ]; then
+            echo "refresh=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "refresh=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Refresh upcoming bookings (ufcstats)
+        if: steps.slot.outputs.refresh == 'true'
+        run: python -m app.services.ufc.scraper --upcoming
+
+      # Records every pulled bout in ufc_cancelled_bouts before deleting it.
+      - name: Remove (and record) cancelled bouts
+        if: steps.slot.outputs.refresh == 'true'
+        run: python -m app.services.ufc.reconcile_service --apply --no-previews
+
+      - name: Record new opening lines (BestFightOdds)
+        id: watch
+        run: python -m app.services.ufc.line_watcher
+
+      - name: Sherdog records for new fighters
+        if: steps.watch.outputs.unlinked != '0' && steps.watch.outputs.unlinked != ''
+        continue-on-error: true
+        run: python -m app.services.ufc.external_records --sync-debutants --max-requests 100
+
+      # ---- Only when a fight was priced for the first time ----
+
+      - name: Install model dependencies
+        if: steps.watch.outputs.changed == 'true'
+        run: pip install -r requirements.txt
+
+      # New upcoming bouts need Glicko snapshots, or their Glicko features are zero-filled.
+      - name: Refresh Glicko snapshots
+        if: steps.watch.outputs.changed == 'true'
+        run: python -m app.services.ufc.ranking_service
+
+      - name: Refresh winner predictions
+        if: steps.watch.outputs.changed == 'true'
+        run: python -m app.services.ufc.model --predict
+
+      - name: Refresh method predictions
+        if: steps.watch.outputs.changed == 'true'
+        run: python -m app.services.ufc.method_model --predict
+
+      - name: Forward test - log fights at their opening line
+        if: steps.watch.outputs.changed == 'true'
+        run: python -m scripts.forward_track --log
+
+      - name: Commit forward log
+        if: steps.watch.outputs.changed == 'true'
+        uses: ./.github/actions/commit-picks

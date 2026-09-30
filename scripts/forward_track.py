@@ -12,8 +12,12 @@ Two things are measured on fights the model has never seen:
    at the logged consensus price, flat stakes. Graded on profit AND closing line value
    (CLV: did the price we logged beat the price at the close).
 
-Each fight is logged once, on the first run that finds it priced within LOG_WINDOW_DAYS
-of the event, and that row is never re-priced. Settlement only fills result columns.
+v2.1: each fight is logged once, at its OPENING line: the first snapshot the line watcher
+(line_watcher.py, every two hours) recorded for it from BestFightOdds. The model is blended
+with that opener using the opening-line weights, and a bet is flagged only at >= 5% EV,
+where backtests at the open showed positive closing-line value. The row is never
+re-priced. Settlement fills the result and the closing line (the watcher's last snapshot
+before the card).
 
 Usage:
     python -m scripts.forward_track --log      # log upcoming priced fights
@@ -42,10 +46,10 @@ LOG_PATH = Path(os.environ.get("FORWARD_LOG_PATH")
                 or Path(__file__).resolve().parents[1] / "forward_log_v2.jsonl")
 
 # ---- Pre-registered rule (PREREGISTRATION_V2.md). Frozen. ----
-RULE_VERSION = "v2.0-2026-09-28"
-MIN_EV = 0.0          # bet when expected value per $1 at the logged price exceeds this
+RULE_VERSION = "v2.1-2026-09-30"
+MIN_EV = 0.05         # bet when expected value per $1 at the opening consensus is >= 5%
 STAKE = 100.0         # flat
-LOG_WINDOW_DAYS = 7   # log a fight once it is priced and within this many days
+BFO_PREFIX = "BFO:"   # line-watcher snapshots in ufc_fight_odds_history
 BOOKS = ("FanDuel", "DraftKings", "BetMGM", "Bovada", "BetRivers", "Caesars")
 
 
@@ -65,7 +69,7 @@ def _decimal(american: float) -> float:
 
 def _consensus(rows) -> tuple[float, float] | None:
     rows = [r for r in rows if r.red_odds and r.blue_odds]
-    preferred = [r for r in rows if r.bookmaker in BOOKS] or rows
+    preferred = [r for r in rows if r.bookmaker.removeprefix(BFO_PREFIX) in BOOKS] or rows
     if not preferred:
         return None
     return (consensus_american([r.red_odds for r in preferred]),
@@ -104,6 +108,21 @@ def _short_notice_tags(db, fights, dates) -> dict[int, dict]:
             for i, fid in enumerate(base["fight_id"])}
 
 
+def _opening_snapshot(db, fight_ids) -> dict[int, tuple[list, "datetime"]]:
+    """fight id -> (rows of the watcher's FIRST snapshot, its time)."""
+    rows = (db.query(UFCFightOddsHistory)
+            .filter(UFCFightOddsHistory.fight_id.in_(list(fight_ids)),
+                    UFCFightOddsHistory.bookmaker.like(f"{BFO_PREFIX}%"))
+            .order_by(UFCFightOddsHistory.captured_at).all())
+    first: dict[int, tuple[list, datetime]] = {}
+    for r in rows:
+        if r.fight_id not in first:
+            first[r.fight_id] = ([r], r.captured_at)
+        elif r.captured_at == first[r.fight_id][1]:
+            first[r.fight_id][0].append(r)
+    return first
+
+
 def log_upcoming() -> int:
     from app.services.ufc import ensemble as ens_mod
     from app.services.ufc.model import build_features, build_serving_matchup, load_fight_data
@@ -117,12 +136,16 @@ def log_upcoming() -> int:
         today = date.today()
         fights = (db.query(UFCFight, UFCEvent)
                   .join(UFCEvent, UFCEvent.id == UFCFight.event_id)
-                  .filter(UFCEvent.date > today,
-                          UFCEvent.date <= today + timedelta(days=LOG_WINDOW_DAYS),
-                          UFCFight.winner_id.is_(None))
+                  .filter(UFCEvent.date > today, UFCFight.winner_id.is_(None))
                   .all())
         logged = {e["fight_id"] for e in _read()}
-        todo = [(f, e) for f, e in fights if f.id not in logged]
+        opening = _opening_snapshot(db, [f.id for f, _ in fights if f.id not in logged])
+        # Fights already priced when the watcher first ran were seen late, not at their
+        # open. They are logged (accuracy tracking) but flagged and kept out of the bet test.
+        from sqlalchemy import func
+        watcher_start = db.query(func.min(UFCFightOddsHistory.captured_at)).filter(
+            UFCFightOddsHistory.bookmaker.like(f"{BFO_PREFIX}%")).scalar()
+        todo = [(f, e) for f, e in fights if f.id not in logged and f.id in opening]
         if not todo:
             print("Nothing new to log.")
             return 0
@@ -135,14 +158,16 @@ def log_upcoming() -> int:
         for f, e in todo:
             if f.id not in matchup.index:
                 continue
-            cons = _consensus(db.query(UFCFightOdds).filter(UFCFightOdds.fight_id == f.id).all())
+            snap_rows, opened_at = opening[f.id]
+            cons = _consensus(snap_rows)
             if cons is None:
-                continue  # not priced yet; a later run will log it
+                continue
             red_am, blue_am = cons
             mkt = goto_devig(american_to_prob(red_am), american_to_prob(blue_am))
             row = matchup.loc[[f.id]]
             model_p = float(ens.model_prob(row)[0])
-            final_p = float(ens.final_prob(np.array([model_p]), np.array([mkt]))[0])
+            final_p = float(ens.final_prob(np.array([model_p]), np.array([mkt]),
+                                           opening=True)[0])
             ev_red = final_p * _decimal(red_am) - 1
             ev_blue = (1 - final_p) * _decimal(blue_am) - 1
             side = "red" if ev_red >= ev_blue else "blue"
@@ -157,6 +182,9 @@ def log_upcoming() -> int:
                 "final_prob_red": round(final_p, 4),
                 "market_prob_red": round(mkt, 4),
                 "red_american": round(red_am, 1), "blue_american": round(blue_am, 1),
+                "opened_at": opened_at.isoformat(timespec="seconds"),
+                "backlog": bool(watcher_start and opened_at - watcher_start < timedelta(hours=3)),
+                "open_books": sorted(r.bookmaker.removeprefix(BFO_PREFIX) for r in snap_rows),
                 "bet": ev > MIN_EV, "bet_side": side if ev > MIN_EV else None,
                 "bet_ev": round(ev, 4), "stake": STAKE if ev > MIN_EV else 0.0,
                 # Secondary hypothesis H2 (PREREGISTRATION_V2.md): short-notice tags.
@@ -194,6 +222,9 @@ def _closing(db, fight: UFCFight, event_date: date):
     latest = {}
     for h in hist:  # ascending, so the last capture per book wins
         latest[h.bookmaker] = h
+    # Prefer the line watcher's books (same source as the opening price) when present.
+    bfo = {k: v for k, v in latest.items() if k.startswith(BFO_PREFIX)}
+    latest = bfo or latest
     rows = list(latest.values()) or db.query(UFCFightOdds).filter(UFCFightOdds.fight_id == fight.id).all()
     return _consensus(rows)
 
@@ -285,7 +316,11 @@ def report(entries: list[dict] | None = None) -> int:
         v, n = ll(k)
         if v is not None:
             print(f"    {label:22s} {v:.4f}  (n={n})")
-    bets = [e for e in done if e["bet"]]
+    backlog = sum(1 for e in done if e.get("backlog"))
+    if backlog:
+        print(f"  ({backlog} settled fights were already priced when the watcher started: "
+              f"kept in the accuracy numbers above, excluded from the bet test)")
+    bets = [e for e in done if e["bet"] and not e.get("backlog")]
     if bets:
         staked = STAKE * len(bets)
         profit = sum(e["profit"] for e in bets)

@@ -37,6 +37,9 @@ BACKEND = Path(__file__).resolve().parent.parent
 SPORTSBOOK_WRITERS = {
     "app/services/ufc/odds_scraper.py",      # The Odds API: DraftKings, FanDuel, BetMGM
     "app/services/ufc/bovada_scraper.py",    # Bovada method markets
+    # BestFightOdds sportsbook lines (opening-line watcher). Skips Polymarket/Kalshi, which
+    # BFO also lists, and tags rows "BFO:<book>" so they are distinguishable.
+    "app/services/ufc/line_watcher.py",
 }
 
 
