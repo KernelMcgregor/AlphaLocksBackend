@@ -161,9 +161,12 @@ jobs:
       # v2.0 forward test (PREREGISTRATION_V2.md): settle last night's rows with results
       # and closing lines, then log newly priced fights against the fresh odds. v1.2 is
       # retired, so the step above only settles its open picks and none are added.
-      - name: Forward test - settle and log
+      # Logging is paused until the opening-line watcher is live: the pre-registered test
+      # logs each fight at its first-seen OPENING price, which only the watcher observes.
+      # Settling is harmless (it only fills rows that exist).
+      - name: Forward test - settle
         if: steps.check.outputs.event_happened == 'true'
-        run: python -m scripts.forward_track --settle --log
+        run: python -m scripts.forward_track --settle
 
       - name: Commit picks log
         if: steps.check.outputs.event_happened == 'true'
@@ -236,8 +239,9 @@ jobs:
       # A missed card is evidence permanently lost: the rule needs ~150 settled picks to
       # reach a verdict at roughly 70/year, so the sample is the binding constraint on
       # this whole experiment. Automating it is what stops that sample leaking.
+      # Paused: see "Forward test - settle" above.
       - name: Forward test - log newly priced fights
-        if: steps.odds_check.outputs.refresh == 'true'
+        if: false
         run: python -m scripts.forward_track --log
 
       - name: Commit picks log
