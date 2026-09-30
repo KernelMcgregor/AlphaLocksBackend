@@ -42,7 +42,9 @@ from sklearn.metrics import (
 from sklearn.preprocessing import StandardScaler
 
 from app.database import SessionLocal
-from app.services.ufc.market_anchor import MarketAnchor, devig, logit
+from app.services.ufc.market_anchor import (
+    MarketAnchor, american_to_prob, consensus_american, devig, goto_devig, logit,
+)
 from app.services.ufc.glicko_service import run_glicko_inmemory
 from app.services.ufc.simulator import (
     HazardRateModel, attach_fit_targets, build_simulator_frame, simulate,
@@ -63,6 +65,10 @@ def _decorrelated_model():
     from app.services.ufc.decorrelated import DecorrelatedModel
     return DecorrelatedModel
 from app.models.ufc import UFCEvent, UFCFight, UFCFighter, UFCFightStats
+from app.services.ufc.fighter_registry import is_decided, is_draw as _is_draw
+from app.services.ufc.outcome_types import (
+    DRAW as OUTCOME_DRAW, VOID as OUTCOME_VOID, classify_outcome,
+)
 
 MODEL_DIR = Path(__file__).parent.parent.parent.parent / "models" / "ufc" / "h2h"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -134,7 +140,15 @@ def _assert_ids_exact(df: pd.DataFrame) -> None:
             )
 
 
-def load_fight_data() -> pd.DataFrame:
+def load_fight_data(include_upcoming: bool = False) -> pd.DataFrame:
+    """Load one row per fighter per fight.
+
+    `include_upcoming` appends unplayed bouts (no winner, no method, no stats) as rows
+    with NaN stats. Serving needs them so `build_features` computes their features the
+    same way as training: every shifted window, streak, Elo and Glicko value then
+    describes the fighter AFTER their latest bout. Training callers leave it off; the
+    rows would be dropped anyway because their label is NaN.
+    """
     log.info("Loading data from database...")
     db = SessionLocal()
 
@@ -145,8 +159,15 @@ def load_fight_data() -> pd.DataFrame:
             "height": f.height, "weight": f.weight,
             "reach": f.reach, "stance": f.stance, "dob": f.dob,
             "lifetime_wins": f.wins or 0, "lifetime_losses": f.losses or 0,
+            # ufc.com bio fields (current snapshot; stable traits only, so no gym)
+            "leg_reach": getattr(f, "leg_reach", None),
+            "fighting_style": getattr(f, "fighting_style", None),
+            "birth_country": getattr(f, "birth_country", None),
         }
         for f in fighters_q
+    }
+    event_country = {
+        e.id: _event_country(e.location) for e in db.query(UFCEvent).all()
     }
     log.info(f"  Loaded {len(fighters)} fighters")
 
@@ -160,7 +181,10 @@ def load_fight_data() -> pd.DataFrame:
             | (UFCFightStats.sig_str_attempted > 0)
             | (UFCFightStats.td_attempted > 0)
         )
-        .order_by(UFCFight.date)
+        # Tie-break on id: early tournament nights put one fighter in several bouts on
+        # the same date, and an unordered tie let Postgres return them in a different
+        # order per query, silently changing those fighters' rolling features run to run.
+        .order_by(UFCFight.date, UFCFight.id, UFCFightStats.fighter_id)
         .all()
     )
 
@@ -172,7 +196,8 @@ def load_fight_data() -> pd.DataFrame:
             "red_fighter_id": fight.red_fighter_id,
             "blue_fighter_id": fight.blue_fighter_id,
             "winner_id": fight.winner_id,
-            "method": fight.method, "weight_class": fight.weight_class,
+            "method": fight.method, "details": fight.details,
+            "weight_class": fight.weight_class,
             # time_format is the only source of the 3-vs-5-round flag; it was previously
             # read by glicko_service but never reached the winner model.
             "time_format": fight.time_format,
@@ -195,7 +220,52 @@ def load_fight_data() -> pd.DataFrame:
             "fighter_dob": f.get("dob"),
             "lifetime_wins": f.get("lifetime_wins", 0),
             "lifetime_losses": f.get("lifetime_losses", 0),
+            "fighter_leg_reach": f.get("leg_reach"),
+            "fighter_style_raw": f.get("fighting_style"),
+            "fighter_birth_country": f.get("birth_country"),
+            "event_country": event_country.get(fight.event_id),
         })
+
+    if include_upcoming:
+        played = {r["fight_id"] for r in rows}
+        # Only bouts after the latest played fight. Earlier unplayed rows are cancelled
+        # bouts that were never cleaned up; inserted mid-history they would shift every
+        # later window for those fighters.
+        last_played = max((r["date"] for r in rows if r["date"]), default=None)
+        upcoming = (
+            db.query(UFCFight)
+            .filter(UFCFight.winner_id.is_(None))
+            .filter((UFCFight.method.is_(None)) | (UFCFight.method == ""))
+            .all()
+        )
+        n_up = 0
+        for fight in upcoming:
+            if fight.id in played or not fight.date or (last_played and fight.date <= last_played):
+                continue
+            n_up += 1
+            for corner, fid in (("red", fight.red_fighter_id), ("blue", fight.blue_fighter_id)):
+                f = fighters.get(fid, {})
+                rows.append({
+                    "fight_id": fight.id, "date": fight.date,
+                    "red_fighter_id": fight.red_fighter_id,
+                    "blue_fighter_id": fight.blue_fighter_id,
+                    "winner_id": None, "method": None, "details": None,
+                    "weight_class": fight.weight_class,
+                    "time_format": fight.time_format or _expected_time_format(fight),
+                    "fight_time_seconds": 0, "max_fight_time_seconds": 0,
+                    "stats_fighter_id": fid, "corner": corner, "_unplayed": True,
+                    "fighter_height": f.get("height"), "fighter_weight": f.get("weight"),
+                    "fighter_reach": f.get("reach"), "fighter_stance": f.get("stance"),
+                    "fighter_dob": f.get("dob"),
+                    "lifetime_wins": f.get("lifetime_wins", 0),
+                    "lifetime_losses": f.get("lifetime_losses", 0),
+                    "fighter_leg_reach": f.get("leg_reach"),
+                    "fighter_style_raw": f.get("fighting_style"),
+                    "fighter_birth_country": f.get("birth_country"),
+                    "event_country": event_country.get(fight.event_id),
+                })
+        rows.sort(key=lambda r: (r["date"], r["fight_id"]))
+        log.info(f"  Added {n_up} upcoming fights")
 
     db.close()
     df = pd.DataFrame(rows)
@@ -252,6 +322,16 @@ def _parse_reach_inches(r) -> float | None:
     m = re.search(r"([\d.]+)", r)
     return float(m.group(1)) if m else None
 
+def _decided_mask(method: pd.Series, winner_id: pd.Series) -> np.ndarray:
+    return np.array([is_decided(m if isinstance(m, str) else None, w if pd.notna(w) else None)
+                     for m, w in zip(method, winner_id)], dtype=bool)
+
+
+def _draw_mask(method: pd.Series, winner_id: pd.Series) -> np.ndarray:
+    return np.array([_is_draw(m if isinstance(m, str) else None, w if pd.notna(w) else None)
+                     for m, w in zip(method, winner_id)], dtype=bool)
+
+
 def _safe_divide(a, b):
     return np.where(b > 0, a / b, 0.0)
 
@@ -290,6 +370,37 @@ def _is_title_bout(wc: str | None) -> bool:
     """Title fights are 5 rounds, higher stakes, and better-scouted matchups.
     Derived the same way glicko_service does, but never reached the model before."""
     return isinstance(wc, str) and "title" in wc.lower()
+
+
+_COUNTRY_ALIASES = {"USA": "United States", "UK": "United Kingdom"}
+
+#: ufc.com "Fighting style" -> base discipline. "MMA", "Freestyle" and "Striker" are too
+#: vague to place and stay unassigned (61% of eval-window rows with a style).
+_STYLE_BASE = {
+    "Wrestling": "wrestler", "Wrestler": "wrestler", "Judo": "wrestler", "Sambo": "wrestler",
+    "Jiu-Jitsu": "grappler", "Brazilian Jiu-Jitsu": "grappler", "Grappler": "grappler",
+    "Muay Thai": "striker", "Kickboxer": "striker", "Boxing": "striker", "Boxer": "striker",
+    "Karate": "striker", "Brawler": "striker", "Kung Fu": "striker", "Kung-Fu": "striker",
+    "Taekwondo": "striker",
+}
+
+
+def _event_country(location: str | None) -> str | None:
+    if not isinstance(location, str) or "," not in location:
+        return None
+    c = location.rsplit(",", 1)[1].strip()
+    return _COUNTRY_ALIASES.get(c, c)
+
+
+def _expected_time_format(fight) -> str:
+    """Scheduled format for a bout ufcstats has not published a time_format for yet.
+
+    Upcoming bouts arrive without one, which left every upcoming title fight and main
+    event looking like a 3-rounder. Title fights and main events (card position 1) are
+    five rounds; everything else is three.
+    """
+    five = _is_title_bout(fight.weight_class) or getattr(fight, "card_position", None) == 1
+    return "5-5-5-5-5" if five else "5-5-5"
 
 
 def _round_lengths(time_format: str | None) -> list[int]:
@@ -331,6 +442,38 @@ def _is_five_round(time_format: str | None) -> bool:
 # FIGHTER STYLE CLUSTERING
 # ===========================================================================
 
+# Elo outcome scoring, fitted by scripts/fit_elo_outcomes.py (tune 2015-21, holdout
+# 2022+; results in models/ufc/elo_outcomes.json, variant "deserved_fm"). The winner's
+# score is the Fight Matrix weight for how they won, blended ~50/50 with a stats-based
+# probability that they actually won the fight. Holdout log loss of Elo alone: 0.6689 vs
+# 0.6820 for plain win=1 Elo. The blend is what discounts fluke finishes: a round-one
+# injury stoppage has near-even stats, so it moves ratings far less than a beating.
+ELO_K = 105.7
+ELO_W_RESULT = 0.48
+ELO_OUTCOME_SCORES = {"ko": 1.0, "sub": 1.0, "ud": 0.91, "md": 0.61, "sd": 0.55,
+                      "doctor": 1.0, "injury": 1.0}
+# Logistic on red-minus-blue per-minute differentials, fit on pre-2015 decisions.
+ELO_DESERVED_COEF = {"sig_str_landed": 1.2764, "kd": 1.6954, "td_landed": 3.0158,
+                     "ctrl_seconds": 2.9809 / 60.0, "sub_att": 1.7987}
+
+
+#: Sherdog whole-career features (pro_elo, pro_fights, ...). On by default: walk-forward
+#: with the full crawl (2,514 fights) improved ensemble log loss 0.6357 -> 0.6297,
+#: 95% CI [-0.0113, -0.0007], most on debutant fights. ALOCKS_CAREER_FEATURES=0 disables.
+import os as _os
+CAREER_FEATURES_ENABLED = _os.environ.get("ALOCKS_CAREER_FEATURES", "1") != "0"
+SHORT_NOTICE_ENABLED = _os.environ.get("ALOCKS_SHORT_NOTICE") == "1"
+
+
+#: Every caller fits the style clusterer on played bouts strictly before this date.
+#: A single fixed boundary keeps cluster labels identical across training, walk-forward
+#: and serving. Each used to fit on a different slice (training on the first 60% of
+#: fights at train time, serving on everything), and KMeans labels are arbitrary, so a
+#: style_3 at serve time need not have been style_3 in training. It sits before the
+#: walk-forward eval window, which walk_forward_eval asserts.
+STYLE_FIT_CUTOFF = date(2022, 6, 1)
+
+
 def compute_fighter_styles(
     df: pd.DataFrame, n_clusters: int = 6, cutoff_date=None
 ) -> tuple[np.ndarray, tuple]:
@@ -367,15 +510,21 @@ def compute_fighter_styles(
 
     X = df[avg_cols].astype(float)
 
+    # Unplayed serving rows are assigned a style but never shape the fit, so adding
+    # upcoming bouts cannot relabel the clusters the model was trained on.
+    played = (
+        ~df["_unplayed"].fillna(False).astype(bool).values
+        if "_unplayed" in df.columns else np.ones(len(df), dtype=bool)
+    )
     if cutoff_date is None:
-        fit_mask = np.ones(len(df), dtype=bool)
+        fit_mask = played.copy()
     else:
-        fit_mask = (pd.to_datetime(df["date"]) < pd.Timestamp(cutoff_date)).values
+        fit_mask = (pd.to_datetime(df["date"]) < pd.Timestamp(cutoff_date)).values & played
         if fit_mask.sum() < n_clusters * 10:
             log.warning(
                 f"    Only {fit_mask.sum()} rows before {cutoff_date}; fitting styles on all rows"
             )
-            fit_mask = np.ones(len(df), dtype=bool)
+            fit_mask = played.copy()
 
     # Debut fights have no prior history — impute from the fit slice only
     medians = X[fit_mask].median()
@@ -434,7 +583,7 @@ def compute_style_matchup_features(
 
     fights_chrono = (
         df[["fight_id", "date", "red_fighter_id", "blue_fighter_id", "winner_id"]]
-        .drop_duplicates("fight_id").sort_values("date")
+        .drop_duplicates("fight_id").sort_values(["date", "fight_id"], kind="stable")
     )
 
     for fight in fights_chrono.itertuples(index=False):
@@ -481,6 +630,32 @@ def build_features(
     df["height_inches"] = df["fighter_height"].apply(_parse_height_inches)
     df["weight_lbs"] = df["fighter_weight"].apply(_parse_weight_lbs)
     df["reach_inches"] = df["fighter_reach"].apply(_parse_reach_inches)
+    # Whole-career rating across every promotion (career_rating.py). Computed only when
+    # enabled: it needs the Sherdog crawl loaded, and stays out of the served feature set
+    # until a walk-forward shows it helps.
+    if CAREER_FEATURES_ENABLED:
+        from app.services.ufc.career_rating import FEATURES as _CAREER_FEATS, compute as _career
+        _cf = _career(df)
+        for _c in _CAREER_FEATS:
+            df[_c] = _cf[_c].values if _cf is not None else np.nan
+    # Short-notice / opponent-change features from BFO matchup history (short_notice.py).
+    # Experimental: enabled with ALOCKS_SHORT_NOTICE=1 until a walk-forward shows they help.
+    if SHORT_NOTICE_ENABLED:
+        from app.services.ufc.short_notice import FEATURES as _SN_FEATS, compute as _sn
+        _snf = _sn(df)
+        for _c in _SN_FEATS:
+            df[_c] = _snf[_c].values if _snf is not None else np.nan
+    # ufc.com bio fields. Absent on frames built before they existed.
+    if "fighter_leg_reach" in df.columns:
+        df["leg_reach_inches"] = pd.to_numeric(df["fighter_leg_reach"], errors="coerce")
+        base = df["fighter_style_raw"].map(_STYLE_BASE)
+        known = df["fighter_style_raw"].notna() & (df["fighter_style_raw"] != "")
+        for b in ("wrestler", "grappler", "striker"):
+            df[f"bio_base_{b}"] = np.where(known, (base == b).astype(float), np.nan)
+        country_known = df["fighter_birth_country"].notna() & df["event_country"].notna()
+        df["bio_is_home"] = np.where(
+            country_known,
+            (df["fighter_birth_country"] == df["event_country"]).astype(float), np.nan)
     df["stance_orthodox"] = (df["fighter_stance"] == "Orthodox").astype(float)
     df["stance_southpaw"] = (df["fighter_stance"] == "Southpaw").astype(float)
     df["stance_switch"] = (df["fighter_stance"] == "Switch").astype(float)
@@ -543,8 +718,16 @@ def build_features(
     )
 
     # --- Win/result flags ---
-    df["won"] = (df["stats_fighter_id"] == df["winner_id"]).astype(int)
-    df["lost"] = ((df["winner_id"].notna()) & (df["stats_fighter_id"] != df["winner_id"])).astype(int)
+    # `won` is 1/0 for decided bouts, 0.5 for draws and NaN for no-contests/DQs/overturned
+    # results. Previously it was a plain int, so every NC and draw counted as a loss in
+    # the streak, win-rate windows and the training label. Rolling means skip NaN.
+    decided = _decided_mask(df["method"], df["winner_id"])
+    drawn = _draw_mask(df["method"], df["winner_id"])
+    df["won"] = np.where(
+        decided, (df["stats_fighter_id"] == df["winner_id"]).astype(float),
+        np.where(drawn, 0.5, np.nan),
+    )
+    df["lost"] = (df["won"] == 0).astype(int)
     df["ko_win"] = ((df["won"] == 1) & df["method"].str.contains("KO", na=False)).astype(int)
     df["sub_win"] = ((df["won"] == 1) & df["method"].str.contains("Sub", case=False, na=False)).astype(int)
     df["dec_win"] = ((df["won"] == 1) & df["method"].str.contains("Dec", case=False, na=False)).astype(int)
@@ -566,24 +749,45 @@ def build_features(
 
     opp_idx = [opp_map.get(i, i) for i in df.index]
 
-    # --- Elo (K-factor scaled by method) ---
+    # --- Elo (fitted outcome scores + stats-based "deserved" blend) ---
     log.info("  Computing Elo ratings...")
+    # Per-minute stat differential for each fighter's row in a played bout.
+    minutes = (df["fight_time_seconds"].astype(float) / 60.0).clip(lower=0.5)
+    z = np.zeros(len(df))
+    for col, coef in ELO_DESERVED_COEF.items():
+        own = df[col].astype(float).values
+        opp = df.loc[opp_idx, col].astype(float).values
+        z += coef * (own - opp) / minutes.values
+    deserved_by_row = {
+        (fid, pid): 1.0 / (1.0 + np.exp(-zz))
+        for fid, pid, zz in zip(df["fight_id"], df["stats_fighter_id"], z)
+        if zz == zz
+    }
     elo = {}
     elo_at_fight = {}
     for _, row in (
-        df[["fight_id", "date", "red_fighter_id", "blue_fighter_id", "winner_id", "method"]]
-        .drop_duplicates("fight_id").sort_values("date")
+        df[["fight_id", "date", "red_fighter_id", "blue_fighter_id", "winner_id", "method",
+            "details"]]
+        .drop_duplicates("fight_id").sort_values(["date", "fight_id"], kind="stable")
     ).iterrows():
         r_id, b_id = row["red_fighter_id"], row["blue_fighter_id"]
         r_elo, b_elo = elo.get(r_id, 1500.0), elo.get(b_id, 1500.0)
         elo_at_fight[(row["fight_id"], r_id)] = r_elo
         elo_at_fight[(row["fight_id"], b_id)] = b_elo
         expected_r = 1 / (1 + 10 ** ((b_elo - r_elo) / 400))
-        actual_r = 1.0 if row["winner_id"] == r_id else (0.0 if row["winner_id"] == b_id else 0.5)
-        method = str(row.get("method", ""))
-        K = 40 if ("KO" in method or "Sub" in method) else 28 if "Dec" in method else 32
-        elo[r_id] = r_elo + K * (actual_r - expected_r)
-        elo[b_id] = b_elo + K * ((1 - actual_r) - (1 - expected_r))
+        otype = classify_outcome(row["method"], row["details"], row["winner_id"])
+        if otype == OUTCOME_VOID:
+            continue  # NC / DQ / overturned / unplayed: no rating-bearing result
+        if otype == OUTCOME_DRAW:
+            actual_r = 0.5
+        else:
+            s_win = ELO_OUTCOME_SCORES[otype]
+            actual_r = s_win if row["winner_id"] == r_id else 1.0 - s_win
+            deserved = deserved_by_row.get((row["fight_id"], r_id))
+            if deserved is not None:
+                actual_r = ELO_W_RESULT * actual_r + (1 - ELO_W_RESULT) * deserved
+        elo[r_id] = r_elo + ELO_K * (actual_r - expected_r)
+        elo[b_id] = b_elo - ELO_K * (actual_r - expected_r)
 
     df["elo"] = df.apply(lambda r: elo_at_fight.get((r["fight_id"], r["stats_fighter_id"]), 1500.0), axis=1)
     # Elo-based expected win probability (from this fighter's perspective)
@@ -609,7 +813,7 @@ def build_features(
 
     fights_chrono = (
         df[["fight_id", "date", "red_fighter_id", "blue_fighter_id", "winner_id", "method"]]
-        .drop_duplicates("fight_id").sort_values("date")
+        .drop_duplicates("fight_id").sort_values(["date", "fight_id"], kind="stable")
     )
     fight_list = list(fights_chrono.itertuples(index=False))
 
@@ -757,6 +961,12 @@ def build_features(
     result_cols = ["won", "ko_win", "sub_win", "finished_opp", "was_finished"]
     all_stat_cols = offensive_cols + defensive_cols + elo_adj_cols + result_cols
 
+    # Unplayed (serving-only) rows have no stats; _safe_divide would turn them into
+    # zero rates that then count as a real fight in every later window.
+    if "_unplayed" in df.columns:
+        unplayed = df["_unplayed"].fillna(False).astype(bool)
+        df.loc[unplayed, all_stat_cols] = np.nan
+
     for col in all_stat_cols:
         df[f"avg_{col}"] = (
             df.groupby("stats_fighter_id")[col]
@@ -785,11 +995,12 @@ def build_features(
             current = max(0, current) + 1 if val == 1 else min(0, current) - 1
         return streak
 
+    # Draws and NCs neither extend nor break a streak.
     df["streak"] = df.groupby("stats_fighter_id")["won"].transform(
-        lambda x: pd.Series(_compute_streak(x.values), index=x.index)
+        lambda x: pd.Series(_compute_streak(x.where(x != 0.5).values), index=x.index)
     )
 
-    df["career_wins"] = df.groupby("stats_fighter_id")["won"].apply(
+    df["career_wins"] = (df["won"] == 1).astype(int).groupby(df["stats_fighter_id"]).apply(
         lambda x: x.expanding().sum().shift(1).fillna(0)).reset_index(level=0, drop=True)
     df["career_losses"] = df.groupby("stats_fighter_id")["lost"].apply(
         lambda x: x.expanding().sum().shift(1).fillna(0)).reset_index(level=0, drop=True)
@@ -1038,39 +1249,14 @@ def build_features(
         lambda s: pd.Series(_cum_distinct(s.values), index=s.index)
     )
 
-    log.info("  Computing pre-UFC records...")
-    ufc_w, ufc_l = {}, {}
-    for fight in df[["fight_id", "red_fighter_id", "blue_fighter_id", "winner_id"]] \
-            .drop_duplicates("fight_id").itertuples(index=False):
-        if not fight.winner_id or pd.isna(fight.winner_id):
-            continue
-        for fid in (fight.red_fighter_id, fight.blue_fighter_id):
-            if fid == fight.winner_id:
-                ufc_w[fid] = ufc_w.get(fid, 0) + 1
-            else:
-                ufc_l[fid] = ufc_l.get(fid, 0) + 1
-
-    ids = df["stats_fighter_id"]
-    df["pre_ufc_wins"] = (
-        df["lifetime_wins"].fillna(0) - ids.map(lambda i: ufc_w.get(i, 0))
-    ).clip(lower=0)
-    df["pre_ufc_losses"] = (
-        df["lifetime_losses"].fillna(0) - ids.map(lambda i: ufc_l.get(i, 0))
-    ).clip(lower=0)
-    df["pre_ufc_fights"] = df["pre_ufc_wins"] + df["pre_ufc_losses"]
-    df["pre_ufc_win_pct"] = _safe_divide(
-        df["pre_ufc_wins"].values, df["pre_ufc_fights"].clip(lower=1).values
-    )
-    # Experience-weighted quality: 12-0 should outrank 2-0. Mirrors the Glicko seed
-    # shape so the two agree rather than fight each other.
-    df["pre_ufc_quality"] = (
-        (df["pre_ufc_win_pct"] - 0.5) * 2 * (df["pre_ufc_fights"] / 20).clip(upper=1.0)
-    )
-    # How much of what we know about this fighter is UFC evidence vs pre-UFC hearsay.
-    df["ufc_experience_share"] = _safe_divide(
-        df["career_fights"].values,
-        (df["career_fights"] + df["pre_ufc_fights"]).clip(lower=1).values,
-    )
+    # Share of a fighter's pro career spent in the UFC, point-in-time from Sherdog. The old
+    # pre_ufc_* features used today's lifetime record minus UFC results, which counts
+    # non-UFC fights that happened after the bout being predicted (a leak); removed.
+    if "pro_nonufc_fights" in df.columns:
+        df["ufc_experience_share"] = _safe_divide(
+            df["career_fights"].values,
+            (df["career_fights"] + df["pro_nonufc_fights"].fillna(0)).clip(lower=1).values,
+        )
 
     # --- Skill decay: performance relative to age-expected ---
     # Built on PERFORMANCE, not win rate. Win rates conflate ability with matchmaking —
@@ -1089,7 +1275,7 @@ def build_features(
         ("sig_str_def", "defense"),             # can they still avoid damage
         ("opp_sig_str_landed_per5", "absorbed"),  # how much they now take
     ]
-    fights_chrono_idx = df.sort_values("date").index
+    fights_chrono_idx = df.sort_values(["date", "fight_id"], kind="stable").index
 
     for src, label in DECAY_METRICS:
         recent_col = f"recent_{src}"
@@ -1120,10 +1306,31 @@ def build_features(
 
         df[f"age_resid_{label}"] = residuals
 
+    # --- Opponent-adjusted expected stats (xs_*), fit only on earlier bouts ---
+    log.info("  Computing opponent-adjusted expected stats...")
+    from app.services.ufc.expected_stats import compute_expected_stats
+    xs = compute_expected_stats(df)
+    xs_cols = [c for c in xs.columns if c.startswith(("xs_", "xsres_"))]
+    df = df.drop(columns=[c for c in xs_cols if c in df.columns]).merge(
+        xs, on=["fight_id", "stats_fighter_id"], how="left", validate="one_to_one")
+    # Persistent over-performance vs expectation. Split-half reliability of a fighter's
+    # residual is ~0.49 for takedowns and ~0.33 for sub attempts (vs ~0 for results
+    # against the market), so the shrunk mean of PRIOR residuals carries skill the
+    # shrunk GLM misses. Shrinkage n/(n+k) toward 0, previous bouts only.
+    XS_PERF_K = 3.0
+    df = df.sort_values(["stats_fighter_id", "date", "fight_id"], kind="stable")
+    for stat in ("sig", "td", "sub", "ctrl"):
+        r = df[f"xsres_{stat}"]
+        g = r.groupby(df["stats_fighter_id"])
+        prev_sum = g.transform(lambda x: x.fillna(0).cumsum().shift(1).fillna(0))
+        prev_n = g.transform(lambda x: x.notna().cumsum().shift(1).fillna(0))
+        df[f"xs_perf_{stat}"] = prev_sum / (prev_n + XS_PERF_K)
+    df = df.reset_index(drop=True)
+
     # --- Fighter style clustering (per-fight, from pre-fight rolling profiles) ---
     N_STYLES = 6
     style_labels, style_artifacts = compute_fighter_styles(
-        df, n_clusters=N_STYLES, cutoff_date=style_cutoff_date
+        df, n_clusters=N_STYLES, cutoff_date=style_cutoff_date or STYLE_FIT_CUTOFF
     )
     df["fighter_style"] = style_labels.astype(int)
 
@@ -1180,11 +1387,16 @@ def winner_feature_columns(df: pd.DataFrame) -> list[str]:
     cols += [
         "elo", "elo_expected", "resume_score",
         "height_inches", "weight_lbs", "reach_inches", "age",
+        "leg_reach_inches", "bio_base_wrestler", "bio_base_grappler", "bio_base_striker",
+        "bio_is_home",
+        # Sherdog whole-career (present only when CAREER_FEATURES_ENABLED)
+        "pro_elo", "pro_fights", "pro_win_pct", "pro_opp_elo", "pro_nonufc_fights", "pro_known",
+        # BFO short-notice (present only when SHORT_NOTICE_ENABLED)
+        "sn_replacement", "sn_opp_changed",
         "stance_orthodox", "stance_southpaw", "stance_switch",
         "career_win_pct", "career_fights", "finish_rate", "been_finished_rate",
         "streak", "days_since_last", "style_matchup_adv",
-        "pre_ufc_wins", "pre_ufc_losses", "pre_ufc_fights", "pre_ufc_win_pct",
-        "pre_ufc_quality", "ufc_experience_share",
+        "ufc_experience_share",
         # Age curve
         "age_sq", "years_past_peak", "years_to_peak",
         "age_resid_output", "age_resid_defense", "age_resid_absorbed",
@@ -1223,9 +1435,45 @@ def winner_feature_columns(df: pd.DataFrame) -> list[str]:
     cols += [c for c in FIGHT_LEVEL_COLS if c not in cols]
     # Glicko multi-dimensional ratings
     cols += [c for c in df.columns if c.startswith("glicko_") and c not in cols]
+    # Opponent-adjusted expected stats. `xs_` only: `xsres_` is actual-minus-expected
+    # for the bout itself, a post-fight quantity.
+    cols += [c for c in df.columns if c.startswith("xs_") and c not in cols]
     # Only keep what actually exists on this frame, deduplicated, order preserved
     present = set(df.columns)
     return [c for c in dict.fromkeys(cols) if c in present]
+
+
+def _attach_odds(matchup: pd.DataFrame, odds_rows) -> int:
+    """Fill the market columns in place from UFCFightOdds rows; returns fights matched.
+
+    Shared by training (build_matchup_df) and serving so the two cannot drift.
+    """
+    # Several books per fight exist since live odds collection began. Keeping "whichever
+    # row came last" made the feature depend on query order, so take a consensus.
+    odds_map = {}
+    for o in odds_rows:
+        if not o.red_odds or not o.blue_odds:
+            continue
+        odds_map.setdefault(o.fight_id, []).append(o)
+
+    odds_matched = 0
+    matchup["odds_red_prob"] = np.nan
+    matchup["odds_blue_prob"] = np.nan
+    matchup["odds_red_american"] = np.nan
+    matchup["odds_blue_american"] = np.nan
+    for fight_id in matchup.index:
+        books = odds_map.get(fight_id)
+        if books:
+            # Devig from the raw prices rather than the stored (normalised) probabilities.
+            red_raw = float(np.mean([american_to_prob(o.red_odds) for o in books]))
+            blue_raw = float(np.mean([american_to_prob(o.blue_odds) for o in books]))
+            red_p = goto_devig(red_raw, blue_raw)
+            matchup.loc[fight_id, "odds_red_prob"] = red_p
+            matchup.loc[fight_id, "odds_blue_prob"] = 1.0 - red_p
+            matchup.loc[fight_id, "odds_red_american"] = consensus_american([o.red_odds for o in books])
+            matchup.loc[fight_id, "odds_blue_american"] = consensus_american([o.blue_odds for o in books])
+            odds_matched += 1
+    return odds_matched
 
 
 def build_matchup_df(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
@@ -1246,7 +1494,9 @@ def build_matchup_df(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     matchup = pd.DataFrame(index=common)
     matchup.index.name = "fight_id"
     matchup["date"] = red["date"].values
-    matchup["red_wins"] = (red["stats_fighter_id"].values == red["winner_id"].values).astype(int)
+    # NaN for draws/NCs/DQs so the dropna below removes them. They used to be labelled 0,
+    # i.e. "blue won".
+    matchup["red_wins"] = red["won"].where(red["won"].isin([0.0, 1.0])).values
 
     # Realised outcomes, carried for the simulator's hazard fitting. Prefixed
     # `outcome_` so they can never be mistaken for features — note that a name starting
@@ -1285,23 +1535,7 @@ def build_matchup_df(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     odds_rows = odds_db.query(UFCFightOdds).all()
     odds_db.close()
 
-    odds_map = {}
-    for o in odds_rows:
-        odds_map[o.fight_id] = o
-
-    odds_matched = 0
-    matchup["odds_red_prob"] = np.nan
-    matchup["odds_blue_prob"] = np.nan
-    matchup["odds_red_american"] = np.nan
-    matchup["odds_blue_american"] = np.nan
-    for fight_id in matchup.index:
-        o = odds_map.get(fight_id)
-        if o:
-            matchup.loc[fight_id, "odds_red_prob"] = o.red_implied_prob
-            matchup.loc[fight_id, "odds_blue_prob"] = o.blue_implied_prob
-            matchup.loc[fight_id, "odds_red_american"] = o.red_odds
-            matchup.loc[fight_id, "odds_blue_american"] = o.blue_odds
-            odds_matched += 1
+    odds_matched = _attach_odds(matchup, odds_rows)
 
     log.info(f"  Odds matched: {odds_matched}/{len(matchup)} fights ({odds_matched/len(matchup)*100:.1f}%)")
 
@@ -2306,6 +2540,10 @@ def walk_forward_eval(
     matchup = matchup.sort_values("date").reset_index()
     n = len(matchup)
     eval_start = int(n * (1 - eval_frac))
+    first_eval_date = pd.Timestamp(matchup.sort_values("date")["date"].iloc[eval_start])
+    assert first_eval_date >= pd.Timestamp(STYLE_FIT_CUTOFF), (
+        f"eval window starts {first_eval_date.date()}, before STYLE_FIT_CUTOFF "
+        f"{STYLE_FIT_CUTOFF}; the style clusterer would see eval-period data")
     bounds = np.linspace(eval_start, n, n_folds + 1).astype(int)
 
     log.info(f"  {n} fights | {n_folds} folds over the last {eval_frac:.0%} "
@@ -2821,17 +3059,9 @@ def run(phases=None, walk_forward=False, n_folds=8, fresh_glicko=False):
         log.info(f"  Computed {len(snaps)} snapshots")
 
     if walk_forward:
-        # Two passes. The first only locates the date where the eval window starts;
-        # the second rebuilds features with the style clusterer restricted to data
-        # before that date, so no eval-period distribution reaches the KMeans fit.
-        probe = build_matchup_df(
-            build_features(df.copy(), round_data.copy(), glicko_snapshots=snaps)
-        )[0]
-        cutoff = probe.sort_values("date")["date"].iloc[int(len(probe) * 0.6)]
-        log.info(f"\n  Style-cluster cutoff set to eval start: {cutoff}")
-
-        df = build_features(df, round_data, style_cutoff_date=cutoff,
-                            glicko_snapshots=snaps)
+        # The style clusterer fits before STYLE_FIT_CUTOFF, which precedes the eval
+        # window (asserted in walk_forward_eval), so no eval-period data reaches it.
+        df = build_features(df, round_data, glicko_snapshots=snaps)
         matchup, features = build_matchup_df(df)
 
         wf = walk_forward_eval(matchup, features, n_folds=n_folds)
@@ -2905,10 +3135,7 @@ def train_mlp(fresh_glicko: bool = True, gamma: float = 0.0,
         log.info(f"  Recomputed {len(snaps)} Glicko snapshots (fixed newcomer seed)")
 
     df, round_data = load_fight_data()
-    probe = build_matchup_df(build_features(df.copy(), round_data.copy(),
-                                            glicko_snapshots=snaps))[0]
-    cutoff = probe.sort_values("date")["date"].iloc[int(len(probe) * 0.6)]
-    df = build_features(df, round_data, style_cutoff_date=cutoff, glicko_snapshots=snaps)
+    df = build_features(df, round_data, glicko_snapshots=snaps)
     matchup, features = build_matchup_df(df)
     matchup = matchup.sort_values("date").reset_index()
 
@@ -2954,8 +3181,13 @@ def build_serving_matchup(df: pd.DataFrame) -> pd.DataFrame:
 
     Differs from `build_matchup_df()` in one essential way: that function is for
     TRAINING, so it keeps only decided fights from 2015 on. Serving has to cover fights
-    that have not happened yet — which is the entire point of a prediction — so upcoming
-    bouts are added here from each fighter's most recent feature snapshot.
+    that have not happened yet — which is the entire point of a prediction.
+
+    Pass a frame built from `load_fight_data(include_upcoming=True)`: upcoming bouts are
+    then ordinary rows whose features `build_features` computed exactly as in training,
+    including each fighter's most recent fight. The fallback below, which copies a
+    fighter's last historical row, only covers bouts that frame lacks; that row's
+    features are pre-fight, so it omits the fighter's latest bout.
 
     Extracted so `generate_predictions()` and the picks pipeline share one construction.
     Two frames built by two similar-looking code paths is exactly how train/serve skew
@@ -3098,21 +3330,7 @@ def build_serving_matchup(df: pd.DataFrame) -> pd.DataFrame:
     odds_rows = odds_db.query(UFCFightOdds).all()
     odds_db.close()
 
-    odds_map = {o.fight_id: o for o in odds_rows}
-
-    odds_matched = 0
-    matchup["odds_red_prob"] = np.nan
-    matchup["odds_blue_prob"] = np.nan
-    matchup["odds_red_american"] = np.nan
-    matchup["odds_blue_american"] = np.nan
-    for fight_id in matchup.index:
-        o = odds_map.get(fight_id)
-        if o:
-            matchup.loc[fight_id, "odds_red_prob"] = o.red_implied_prob
-            matchup.loc[fight_id, "odds_blue_prob"] = o.blue_implied_prob
-            matchup.loc[fight_id, "odds_red_american"] = o.red_odds
-            matchup.loc[fight_id, "odds_blue_american"] = o.blue_odds
-            odds_matched += 1
+    odds_matched = _attach_odds(matchup, odds_rows)
 
     log.info(f"  Odds matched: {odds_matched}/{len(matchup)} fights ({odds_matched/len(matchup)*100:.1f}%)")
 
@@ -3135,18 +3353,27 @@ def generate_predictions():
     log.info("GENERATING PREDICTIONS FOR ALL FIGHTS")
     log.info("=" * 60)
 
-    # Prefer the MLP if it has been trained. The ablation (5 seeds, identical folds)
-    # found it the only configuration with a positive backtested ROI (+2.5% at the 15%
-    # edge rung vs -7% for the GBT), despite being slightly LESS accurate (66.2% vs
-    # 67.9%). It agrees with the market less (corr 0.76 vs 0.82), and agreeing with the
-    # market is worth exactly zero.
+    # Serve the calibrated GBT. The "decorrelated" MLP used to be preferred on a
+    # backtested-ROI ablation, but on probability quality it is the worst arm by far:
+    # walk-forward log loss 0.70-1.08 vs ~0.60 for the GBT on the same priced fights
+    # (2026-09-28 evals). ROI on a few hundred bets is noise; log loss is what the site
+    # displays. Set ALOCKS_SERVE_MLP=1 to serve the MLP anyway.
+    import os
+    if os.environ.get("ALOCKS_SERVE_MLP") != "1":
+        from app.services.ufc import ensemble as _ensemble
+        ens = _ensemble.load()
+        if ens is not None:
+            return _generate_predictions_ensemble(ens)
+        log.warning("  No ensemble_v1.pkl — falling back to the single GBT. Run "
+                    "`python -m app.services.ufc.ensemble --train`.")
     mlp_path = MODEL_DIR / "mlp_v1.pkl"
     cal_path = MODEL_DIR / "calibrated_model.pkl"
 
     # torch may be absent in a deployment or CI image. Serving stale-but-real GBT
     # predictions beats failing the nightly job and serving nothing, so treat a missing
     # torch as "no MLP available" rather than letting ImportError escape.
-    mlp_available = mlp_path.exists()
+    mlp_available = mlp_path.exists() and (
+        os.environ.get("ALOCKS_SERVE_MLP") == "1" or not cal_path.exists())
     if mlp_available:
         try:
             DecorrelatedModel = _decorrelated_model()
@@ -3178,7 +3405,7 @@ def generate_predictions():
             f"No model found. Run `--train-mlp` (preferred) or `--phase 1`."
         )
 
-    df, round_data = load_fight_data()
+    df, round_data = load_fight_data(include_upcoming=True)
     df = build_features(df, round_data)
     matchup = build_serving_matchup(df)
 
@@ -3205,13 +3432,17 @@ def generate_predictions():
     else:
         raw_proba = base_model.predict_proba(X)[:, 1]
 
-    # Use raw GBT probabilities for all-fights predictions (frontend display).
-    # Calibrated model (VA) is saved separately for future picks/betting page.
+    # Apply the calibrator training chose (best_method), instead of always serving raw.
     cal_proba = raw_proba
+    method = cal.get("best_method", "") if model_kind == "gbt" else ""
+    if "Isotonic" in method and cal.get("isotonic") is not None:
+        cal_proba = cal["isotonic"].predict(raw_proba)
+    elif "Platt" in method and cal.get("platt") is not None:
+        cal_proba = cal["platt"].predict_proba(raw_proba.reshape(-1, 1))[:, 1]
     va_low = None
     va_high = None
-    log.info(f"  Using raw {model_kind.upper()} probabilities for {len(raw_proba)} "
-             f"predictions (uncalibrated)")
+    log.info(f"  Serving {model_kind.upper()} probabilities for {len(raw_proba)} fights "
+             f"(calibration: {method or 'none'})")
 
     # Compute SHAP values for the GBT model
     import shap
@@ -3256,8 +3487,23 @@ def generate_predictions():
 
     log.info(f"  SHAP values shape: {shap_values_arr.shape}")
 
-    # Store predictions and SHAP values in DB
+    _store_predictions(matchup.index, cal_proba, shap_values_arr, features, X,
+                       va_low=va_low, va_high=va_high)
+
+def _store_predictions(fight_ids, probs, shap_values_arr, features, X,
+                       va_low=None, va_high=None, model_probs=None) -> None:
+    """Replace ufc_fight_predictions / ufc_fight_shap_values with a fresh run."""
+    from sqlalchemy import inspect as _inspect
+    from app.database import engine
     from app.models.ufc import UFCFightPrediction, UFCFightShapValue
+
+    # model_prob arrives with the ensemble. The prediction job can run before the API
+    # has applied the startup migration that adds the column, so only write it once
+    # the column exists.
+    has_model_prob = model_probs is not None and "model_prob" in {
+        c["name"] for c in _inspect(engine).get_columns(
+            UFCFightPrediction.__tablename__, schema=UFCFightPrediction.__table__.schema)}
+
     db = SessionLocal()
     try:
         for Model in [UFCFightShapValue, UFCFightPrediction]:
@@ -3267,26 +3513,25 @@ def generate_predictions():
 
         count = 0
         shap_count = 0
-        for i, (fight_id, prob) in enumerate(zip(matchup.index, cal_proba)):
-            predicted_winner = "red" if prob >= 0.5 else "blue"
-            confidence = abs(prob - 0.5)
+        for i, (fight_id, prob) in enumerate(zip(fight_ids, probs)):
             pred = UFCFightPrediction(
                 fight_id=int(fight_id),
-                predicted_winner=predicted_winner,
-                confidence=round(float(confidence), 4),
+                predicted_winner="red" if prob >= 0.5 else "blue",
+                confidence=round(float(abs(prob - 0.5)), 4),
                 red_prob=round(float(prob), 4),
             )
             if va_low is not None:
                 pred.va_prob_low = round(float(va_low[i]), 4)
                 pred.va_prob_high = round(float(va_high[i]), 4)
+            if has_model_prob:
+                pred.model_prob = round(float(model_probs[i]), 4)
             db.add(pred)
             count += 1
 
             # Store top 20 SHAP values for this fight
             fight_shap = shap_values_arr[i]
             abs_shap = abs(fight_shap)
-            top_indices = abs_shap.argsort()[-20:][::-1]
-            for idx in top_indices:
+            for idx in abs_shap.argsort()[-20:][::-1]:
                 db.add(UFCFightShapValue(
                     fight_id=int(fight_id),
                     feature_name=features[idx],
@@ -3304,6 +3549,44 @@ def generate_predictions():
         log.info(f"Stored {count} fight predictions, {shap_count} SHAP values")
     finally:
         db.close()
+
+
+def _generate_predictions_ensemble(ens) -> None:
+    """Serve the four-model ensemble (see ensemble.py).
+
+    red_prob   = the market blend where the fight is priced, else the model alone
+    model_prob = the model alone (never sees odds)
+    SHAP comes from the CatBoost member and explains the model's own view.
+    """
+    from catboost import Pool
+
+    log.info(f"  Serving ensemble trained {ens.meta.get('trained_at')} "
+             f"(members: {[m.name for m in ens.members]}, stack: {ens.stack})")
+    df, round_data = load_fight_data(include_upcoming=True)
+    df = build_features(df, round_data)
+    matchup = build_serving_matchup(df)
+
+    model_p = ens.model_prob(matchup)
+    # Past fights in the walk-forward window get their OUT-OF-SAMPLE prediction (made by a
+    # model that had not seen them), so the site's track record is honest. The final
+    # ensemble was trained on every fight, so its prediction for a past fight is in-sample.
+    oof_path = MODEL_DIR / "ensemble_oof.csv"
+    if oof_path.exists():
+        oof = pd.read_csv(oof_path, dtype={"fight_id": str}).dropna(subset=["model_prob"])
+        oof_map = {int(f): p for f, p in zip(oof["fight_id"], oof["model_prob"])}
+        ids = [int(i) for i in matchup.index]
+        model_p = np.array([oof_map.get(i, p) for i, p in zip(ids, model_p)])
+        log.info(f"  {sum(i in oof_map for i in ids)} past fights use out-of-sample predictions")
+    final_p = ens.final_prob(model_p, matchup["odds_red_prob"].to_numpy(float))
+
+    member = next(m for m in ens.members if m.name == "catboost")
+    feats = member.features
+    X = ens._impute(matchup)[feats].to_numpy(float)
+    cb = member.model.model
+    shap_arr = cb.get_feature_importance(Pool(X), type="ShapValues")[:, :-1]
+    log.info(f"  {len(final_p)} fights; {int(np.isfinite(matchup['odds_red_prob']).sum())} "
+             f"blended with the market")
+    _store_predictions(matchup.index, final_p, shap_arr, feats, X, model_probs=model_p)
 
 
 if __name__ == "__main__":

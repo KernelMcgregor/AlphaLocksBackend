@@ -400,6 +400,8 @@ def _build_fight(db: Session, fight_id: int):
         "predicted_winner": pred.predicted_winner,
         "confidence": pred.confidence,
         "red_prob": pred.red_prob,
+        # The model's own probability with no odds in its inputs; red_prob is the market blend.
+        "model_prob": pred.model_prob,
         # Venn-Abers calibration bounds. Stored since the model was calibrated but
         # never serialized, so the UI had no way to show how wide the interval is.
         "va_prob_low": pred.va_prob_low,
@@ -809,6 +811,7 @@ def get_event_predictions(event_id: int, db: Session = Depends(get_db)):
             "predicted_winner": p.predicted_winner,
             "confidence": p.confidence,
             "red_prob": p.red_prob,
+            "model_prob": p.model_prob,
         }
         for p in preds
     }
@@ -1086,6 +1089,7 @@ def _build_upcoming(db: Session):
                     "predicted_winner": p.predicted_winner,
                     "confidence": p.confidence,
                     "red_prob": p.red_prob,
+                    "model_prob": p.model_prob,
                 } if p else None,
                 "method_prediction": {
                     "predicted_method": mp.predicted_method,
@@ -1221,9 +1225,13 @@ def _get_picks_data(db: Session):
         edge_model_prob = None
         edge_implied_prob = None
         if prediction and odds_rows:
-            # Use average implied prob across all books as consensus
+            # Use average implied prob across all books as consensus, with the margin removed.
+            # Raw implied probabilities sum to ~1.04, which understated every edge by ~2 points.
             avg_red_ip = sum(implied_prob(o.red_odds) for o in odds_rows) / len(odds_rows)
             avg_blue_ip = sum(implied_prob(o.blue_odds) for o in odds_rows) / len(odds_rows)
+            ip_total = avg_red_ip + avg_blue_ip
+            if ip_total > 0:
+                avg_red_ip, avg_blue_ip = avg_red_ip / ip_total, avg_blue_ip / ip_total
 
             model_red_prob = prediction.red_prob
             model_blue_prob = 1 - prediction.red_prob
@@ -1245,6 +1253,18 @@ def _get_picks_data(db: Session):
                 edge = round(blue_edge * 100, 1)
                 edge_model_prob = round(model_blue_prob * 100, 1)
                 edge_implied_prob = round(avg_blue_ip * 100, 1)
+
+        # Expected value of the edge side at the best available price. Backtests at the
+        # opening line showed real value (positive closing-line value) only from ~5% EV up,
+        # so the page flags that threshold.
+        edge_ev = None
+        if edge_side and prediction:
+            side_prob = prediction.red_prob if edge_side == "red" else 1 - prediction.red_prob
+            best = best_red.red_odds if (edge_side == "red" and best_red) else (
+                best_blue.blue_odds if best_blue else None)
+            if best:
+                dec = 1 + (best / 100 if best > 0 else 100 / abs(best))
+                edge_ev = round((side_prob * dec - 1) * 100, 1)
 
         all_books = [{
             "bookmaker": o.bookmaker,
@@ -1317,6 +1337,8 @@ def _get_picks_data(db: Session):
             "edge": edge,
             "edge_model_prob": edge_model_prob,
             "edge_implied_prob": edge_implied_prob,
+            "edge_ev": edge_ev,
+            "edge_qualifies": edge_ev is not None and edge_ev >= 5.0,
             # Odds
             "all_odds": all_books,
             # Prediction markets, deliberately namespaced apart from the sportsbook fields above.

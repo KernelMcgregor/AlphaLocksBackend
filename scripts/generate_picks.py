@@ -58,13 +58,15 @@ def _append_log(entries: list[dict]) -> None:
 
 
 def _consensus_odds(db, fight_id: int):
-    """Average the American odds across available books, preferring CONSENSUS_BOOKS."""
+    """Consensus American odds across available books, preferring CONSENSUS_BOOKS."""
+    from app.services.ufc.market_anchor import consensus_american
+
     rows = db.query(UFCFightOdds).filter(UFCFightOdds.fight_id == fight_id).all()
     if not rows:
         return None, None
     preferred = [r for r in rows if r.bookmaker in CONSENSUS_BOOKS] or rows
-    return (float(np.mean([r.red_odds for r in preferred])),
-            float(np.mean([r.blue_odds for r in preferred])))
+    return (consensus_american([r.red_odds for r in preferred]),
+            consensus_american([r.blue_odds for r in preferred]))
 
 
 def _build_probs(db, fights: list[UFCFight]) -> dict[int, float]:
@@ -81,7 +83,7 @@ def _build_probs(db, fights: list[UFCFight]) -> dict[int, float]:
     # The SAME serving frame the site's predictions use. build_matchup_df() would be
     # wrong here: it keeps only decided fights, so every upcoming bout — the only ones
     # a pick can be made on — would be silently dropped.
-    df, rd = load_fight_data()
+    df, rd = load_fight_data(include_upcoming=True)
     df = build_features(df, rd)
     matchup = build_serving_matchup(df)
 

@@ -57,6 +57,39 @@ def devig(red_prob: np.ndarray, blue_prob: np.ndarray) -> np.ndarray:
     return np.where(total > 0, red_prob / np.where(total > 0, total, 1.0), 0.5)
 
 
+def american_to_prob(odds: float) -> float:
+    """Raw (vigged) implied probability of an American price."""
+    return 100.0 / (odds + 100.0) if odds > 0 else -odds / (-odds + 100.0)
+
+
+def prob_to_american(p: float) -> float:
+    return -100.0 * p / (1.0 - p) if p >= 0.5 else 100.0 * (1.0 - p) / p
+
+
+def goto_devig(red_raw: float, blue_raw: float) -> float:
+    """P(red) from raw two-way implied probabilities via goto_conversion.
+
+    Removes the margin in proportion to each side's standard error, so longshots are
+    shaded down more than favourites. On UFC moneylines this beat plain normalisation
+    (scripts/compare_devig.py: -0.0014 log loss, CI excluding 0) because favourites of
+    70-80% have won more often than their normalised price implies.
+    """
+    p = np.array([red_raw, blue_raw], dtype=float)
+    se = np.sqrt(p * (1 - p) / p)
+    q = np.clip(p - se * (p.sum() - 1) / se.sum(), 1e-6, 1 - 1e-6)
+    return float(q[0] / q.sum())
+
+
+def consensus_american(prices: list[float]) -> float:
+    """Consensus of several books' American prices for one side.
+
+    Averages in implied-probability space. Averaging the American numbers directly
+    breaks across the +/-100 discontinuity (-110 and +105 average to -2.5), which lands
+    exactly on the near-even fights the picks rule bets on.
+    """
+    return prob_to_american(float(np.mean([american_to_prob(o) for o in prices])))
+
+
 class MarketAnchor:
     """Learns how much of a model's disagreement with the market to trust.
 

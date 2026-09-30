@@ -1,3 +1,8 @@
+> **RETIRED 2026-09-28 with 2 settled picks.** The winner-model pipeline under this rule
+> was rebuilt (see PREREGISTRATION_V2.md), so the frozen v1.2 model would now receive
+> inputs it was not trained on. No new v1.2 picks are made; open ones are still settled;
+> `picks_log.jsonl` is kept unchanged. The forward test continues as v2.0.
+
 # Pre-registration: UFC moneyline picks rule v1.2
 
 **Registered 2026-09-06, before any fight it applies to.**
