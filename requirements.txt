@@ -9,6 +9,8 @@ psycopg2-binary>=2.9.0
 python-dotenv>=1.0.0
 aiosqlite>=0.20.0
 httpx>=0.27.0
+# Sherdog scraper (app/services/ufc/sherdog_scraper.py), run nightly for new bookings.
+requests>=2.31.0
 beautifulsoup4>=4.12.0
 # Downscales cached fighter headshots in scripts/cache_fighter_images.py. Storing the
 # source PNGs verbatim would put ~0.76 GB of portraits in the database.
@@ -20,6 +22,10 @@ scikit-learn==1.8.0
 shap>=0.43.0
 optuna>=4.0.0
 venn-abers>=1.5.0
+# Two of the four members of the served ensemble (app/services/ufc/ensemble.py).
+# Pinned: models/ufc/h2h/ensemble_v1.pkl is a pickle and must load with the version
+# that wrote it.
+catboost==1.2.10
 openai>=1.30.0
 
 # Required by app/services/ufc/decorrelated.py, which backs the served MLP

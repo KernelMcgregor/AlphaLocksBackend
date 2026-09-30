@@ -29,7 +29,7 @@ from sqlalchemy import delete
 
 from app.database import SessionLocal
 from app.models.ufc import (
-    UFCEvent, UFCFight, UFCFightOdds, UFCFightOddsHistory, UFCFightPrediction,
+    UFCCancelledBout, UFCEvent, UFCFight, UFCFightOdds, UFCFightOddsHistory, UFCFightPrediction,
     UFCFightPreview, UFCFightShapValue, UFCFightStats, UFCGlickoSnapshot,
     UFCMethodOdds, UFCMethodPrediction,
     UFCPredictionMarket, UFCPredictionMarketHistory, UFCPredictionMarketQuote,
@@ -76,6 +76,19 @@ def _delete_fight(db, fight: UFCFight) -> None:
     db.execute(delete(UFCFight).where(UFCFight.id == fight.id))
 
 
+def _record_cancellation(db, fight: UFCFight, event: UFCEvent) -> None:
+    """Keep a record of the pulled bout before it is deleted (see UFCCancelledBout)."""
+    if db.query(UFCCancelledBout).filter(UFCCancelledBout.ufcstats_id == fight.ufcstats_id).first():
+        return
+    db.add(UFCCancelledBout(
+        ufcstats_id=fight.ufcstats_id, event_id=event.id, event_date=event.date,
+        red_fighter_id=fight.red_fighter_id, blue_fighter_id=fight.blue_fighter_id,
+        weight_class=fight.weight_class, booked_at=fight.created_at,
+        removed_at=dt.datetime.now(dt.timezone.utc).replace(tzinfo=None),
+    ))
+    db.flush()
+
+
 def reconcile_event(db, scraper: Scraper, event: UFCEvent, dry_run: bool = True) -> list[UFCFight]:
     """Diff one event against its live page and drop bouts that are no longer on it."""
     live = live_fight_ids(scraper, event.ufcstats_id)
@@ -105,6 +118,7 @@ def reconcile_event(db, scraper: Scraper, event: UFCEvent, dry_run: bool = True)
             log.warning("      skipped: has a recorded winner, refusing to delete")
             continue
         if not dry_run:
+            _record_cancellation(db, fight, event)
             _delete_fight(db, fight)
 
     if not dry_run:
@@ -157,6 +171,9 @@ def run_reconcile(days_back: int = 30, days_forward: int = 120, dry_run: bool = 
     Defaults span announced-but-unfought cards plus the recent past, since a bout is usually
     pulled in the weeks before the event and the removal should be picked up on the next pass.
     """
+    # New table; the nightly job can run before the API redeploys and creates it.
+    from app.database import engine
+    UFCCancelledBout.__table__.create(bind=engine, checkfirst=True)
     db = SessionLocal()
     scraper = Scraper()
     today = dt.date.today()

@@ -21,3 +21,11 @@ build/
 .DS_Store
 export_to_sqlite.py
 sync_from_cockroach.py
+
+# Scraper caches and crawl outputs (large, regenerable)
+data/sherdog/
+data/bfo/
+# fast_wf feature-matrix cache
+models/ufc/h2h/fast_wf_matchup.pkl
+models/ufc/h2h/fast_wf_matchup_career.pkl
+models/ufc/h2h/fast_wf_matchup*.pkl

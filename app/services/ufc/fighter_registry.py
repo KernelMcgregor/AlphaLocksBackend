@@ -80,6 +80,24 @@ def is_decided(method: str | None, winner_id: int | None) -> bool:
     return not any(marker in m for marker in UNDECIDED_METHOD_MARKERS)
 
 
+#: Methods that mark a bout as void rather than drawn.
+VOID_METHOD_MARKERS = ("No Contest", "DQ", "Overturned", "Could Not Continue")
+
+
+def is_draw(method: str | None, winner_id: int | None) -> bool:
+    """A scored draw: no winner, and the bout went to the judges (or says Draw).
+
+    ufcstats stores a draw as the decision that produced it ("Decision - Majority") with a
+    NULL winner, so a missing winner alone cannot tell a draw from a no-contest.
+    """
+    if winner_id:
+        return False
+    m = method or ""
+    if any(marker in m for marker in VOID_METHOD_MARKERS):
+        return False
+    return "Dec" in m or "Draw" in m
+
+
 def current_division(divisions: list[str]) -> str:
     """Which division a fighter belongs to, given their bouts oldest-first.
 

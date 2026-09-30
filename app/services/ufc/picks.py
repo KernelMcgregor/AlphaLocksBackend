@@ -188,10 +188,7 @@ def train_picks_model(fresh_glicko: bool = True) -> dict:
 
     snaps = run_glicko_inmemory() if fresh_glicko else None
     df, round_data = load_fight_data()
-    probe = build_matchup_df(build_features(df.copy(), round_data.copy(),
-                                            glicko_snapshots=snaps))[0]
-    cutoff = probe.sort_values("date")["date"].iloc[int(len(probe) * 0.6)]
-    df = build_features(df, round_data, style_cutoff_date=cutoff, glicko_snapshots=snaps)
+    df = build_features(df, round_data, glicko_snapshots=snaps)
     matchup, features = build_matchup_df(df)
     matchup = matchup.sort_values("date").reset_index(drop=True)
     matchup = matchup[matchup["red_wins"].notna()].reset_index(drop=True)

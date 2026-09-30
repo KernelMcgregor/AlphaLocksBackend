@@ -261,6 +261,9 @@ class UFCFightPrediction(TimestampMixin, Base):
     red_prob: Mapped[float] = mapped_column(Float)  # calibrated probability red wins
     va_prob_low: Mapped[float | None] = mapped_column(Float, nullable=True)  # Venn-Abers p0 (lower bound)
     va_prob_high: Mapped[float | None] = mapped_column(Float, nullable=True)  # Venn-Abers p1 (upper bound)
+    # The model's own P(red), from fight data only (no odds). red_prob is the market blend
+    # where the fight is priced. Added by migration 012.
+    model_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     fight: Mapped["UFCFight"] = relationship()
 
@@ -833,3 +836,117 @@ class UFCFightPreview(TimestampMixin, Base):
     completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     fight: Mapped["UFCFight"] = relationship()
+
+
+# ---------------------------------------------------------------------------
+# External records: full pro histories (Sherdog) and historical lines (BestFightOdds)
+# ---------------------------------------------------------------------------
+
+
+class SherdogFighter(TimestampMixin, Base):
+    """A fighter's Sherdog profile. Most rows are NOT UFC fighters: they are the regional
+    opponents (Bellator, PFL, ACA, KSW, Cage Warriors, LFA, local shows...) whose records
+    let a debutant's wins be weighed by who they beat. Linked to ufc_fighters when the
+    fighter has a UFC bout. Kept out of ufc_fighters on purpose: everything reading that
+    table assumes UFCStats data exists for the fighter."""
+
+    __tablename__ = "sherdog_fighters"
+    __table_args__ = {"schema": UFC_SCHEMA}
+
+    sherdog_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    url: Mapped[str] = mapped_column(String(300))
+    name: Mapped[str] = mapped_column(String(200))
+    nickname: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    birth_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    nationality: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    locality: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    height: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    weight: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    association: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    weight_class: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    crawl_tier: Mapped[str | None] = mapped_column(String(20), nullable=True)  # ufc | opponent_1hop
+    ufc_fighter_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey(_fk("ufc_fighters.id")), nullable=True, unique=True, index=True)
+    # matched_dob | matched_ufc_dates | matched_name_only
+    match_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    fetched_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class SherdogBout(TimestampMixin, Base):
+    """One pro bout as listed on one fighter's Sherdog page. A bout between two fetched
+    fighters appears twice (once per side); consumers de-duplicate on (pair, date)."""
+
+    __tablename__ = "sherdog_bouts"
+    __table_args__ = (
+        UniqueConstraint("fighter_sherdog_id", "opponent_key", "date", "event_key",
+                         name="uq_sherdog_bout"),
+        Index("ix_sherdog_bouts_opp", "opponent_sherdog_id"),
+        Index("ix_sherdog_bouts_date", "date"),
+        {"schema": UFC_SCHEMA},
+    )
+
+    fighter_sherdog_id: Mapped[int] = mapped_column(Integer, index=True)
+    opponent_sherdog_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    opponent_name: Mapped[str] = mapped_column(String(200))
+    opponent_key: Mapped[str] = mapped_column(String(220))  # opponent id, or folded name
+    result: Mapped[str] = mapped_column(String(4))           # W / L / D / NC
+    date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    event_name: Mapped[str] = mapped_column(String(300))
+    event_sherdog_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    event_key: Mapped[str] = mapped_column(String(320))       # event id, or event name
+    promotion: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    method: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    method_detail: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    method_class: Mapped[str] = mapped_column(String(10))    # KO/TKO|SUB|DEC|DQ|DRAW|NC|OTHER
+    referee: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    round: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    time: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
+
+class UFCFightOpenClose(TimestampMixin, Base):
+    """Opening and closing moneyline per fight and book from a historical source
+    (BestFightOdds backfill, 2007+). bookmaker="Consensus" is BFO's cross-book mean
+    series (open) and median sportsbook close; exchanges are excluded."""
+
+    __tablename__ = "ufc_fight_odds_open_close"
+    __table_args__ = (
+        UniqueConstraint("fight_id", "source", "bookmaker"),
+        {"schema": UFC_SCHEMA},
+    )
+
+    fight_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_fights.id")), index=True)
+    source: Mapped[str] = mapped_column(String(20))              # "bfo"
+    bookmaker: Mapped[str] = mapped_column(String(100))
+    red_open: Mapped[int | None] = mapped_column(Integer, nullable=True)   # American, DB corners
+    blue_open: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    red_close: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    blue_close: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    red_open_prob: Mapped[float | None] = mapped_column(Float, nullable=True)   # vig removed
+    red_close_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
+    opened_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    closed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    close_source: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    flags: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+
+class UFCCancelledBout(TimestampMixin, Base):
+    """A bout that was announced and later pulled from its card.
+
+    reconcile_service deletes cancelled bouts from ufc_fights (they would otherwise get
+    predictions and show as upcoming). It records them here first, because the removal
+    itself is information: if A was booked against B, B's bout was removed and A now faces
+    C, then C stepped in on short notice and A's camp was built for a different opponent.
+    short_notice.py reads this table for upcoming/recent fights.
+    """
+
+    __tablename__ = "ufc_cancelled_bouts"
+    __table_args__ = {"schema": UFC_SCHEMA}
+
+    ufcstats_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    event_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    event_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True, index=True)
+    red_fighter_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    blue_fighter_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    weight_class: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    booked_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    removed_at: Mapped[dt.datetime] = mapped_column(DateTime)

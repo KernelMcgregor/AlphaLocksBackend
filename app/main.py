@@ -38,6 +38,10 @@ def run_migrations():
         fight_existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_fights)").fetchall()}
         if fight_existing and "card_position" not in fight_existing:
             conn.execute("ALTER TABLE ufc_fights ADD COLUMN card_position INTEGER")
+        # 012: model_prob (odds-free model probability) on ufc_fight_predictions
+        pred_existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_fight_predictions)").fetchall()}
+        if pred_existing and "model_prob" not in pred_existing:
+            conn.execute("ALTER TABLE ufc_fight_predictions ADD COLUMN model_prob REAL")
         # Add derived columns to ufc_fight_stats (idempotent)
         existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_fight_stats)").fetchall()}
         derived_cols = [
@@ -118,6 +122,12 @@ def run_migrations():
         if "card_position" not in fight_existing:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE ufc.ufc_fights ADD COLUMN card_position INTEGER"))
+
+        # 012: the ensemble's odds-free probability. Nullable, no default -> metadata-only.
+        pred_existing = {c["name"] for c in insp.get_columns("ufc_fight_predictions", schema="ufc")}
+        if "model_prob" not in pred_existing:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE ufc.ufc_fight_predictions ADD COLUMN model_prob FLOAT"))
 
         # Add derived columns to ufc_fight_stats
         stats_existing = {c["name"] for c in insp.get_columns("ufc_fight_stats", schema="ufc")}

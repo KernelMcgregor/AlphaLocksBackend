@@ -4,6 +4,10 @@ on:
   schedule:
     # Run daily at 6am UTC (1am EST / 10pm PST)
     - cron: '0 6 * * *'
+    # Fight-day odds snapshot (Sat 21:00 UTC, before US prelims). The forward test's
+    # closing line comes from the last capture before the event; without this the
+    # "close" was Friday 06:00 UTC, a day and a half early.
+    - cron: '0 21 * * 6'
   workflow_dispatch: # Allow manual trigger
 
 # The picks job commits picks_log.jsonl back to the repo, so it needs write access.
@@ -13,6 +17,8 @@ permissions:
 jobs:
   check-and-update:
     runs-on: ubuntu-latest
+    # Not on the fight-day cron: mid-event, "recent event missing results" is true.
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 6 * * *'
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
@@ -84,6 +90,14 @@ jobs:
       # --recent), and compute_all_career_stats had no automated call site at all. So
       # last night's fight had empty derived columns and every career aggregate was as
       # stale as the last manual run, and rankings below were computed on top of that.
+      # Newly booked fighters (debutants, short-notice replacements) get their full pro
+      # record from Sherdog, plus their regional opponents' records. Budgeted at ~10 min;
+      # anything left over carries to the next run. Before features are built.
+      - name: Sherdog records for newly booked fighters
+        if: steps.check.outputs.event_happened == 'true'
+        continue-on-error: true
+        run: python -m app.services.ufc.external_records --sync-debutants --max-requests 300
+
       - name: Compute derived fight stats
         if: steps.check.outputs.event_happened == 'true'
         run: python -m app.services.ufc.fight_stats_derived_service
@@ -104,6 +118,13 @@ jobs:
         if: steps.check.outputs.event_happened == 'true'
         run: python -m app.services.ufc.reconcile_service --apply --no-previews
 
+      # Must precede the prediction steps: ranking_service rewrites ufc_glicko_snapshots,
+      # which serving reads. Run after, last night's fighters had no snapshot for their
+      # newest bout and the model saw zero-filled Glicko features.
+      - name: Generate fighter rankings
+        if: steps.check.outputs.event_happened == 'true'
+        run: python -m app.services.ufc.ranking_service
+
       - name: Generate winner predictions
         if: steps.check.outputs.event_happened == 'true'
         run: python -m app.services.ufc.model --predict
@@ -111,10 +132,6 @@ jobs:
       - name: Generate method predictions
         if: steps.check.outputs.event_happened == 'true'
         run: python -m app.services.ufc.method_model --predict
-
-      - name: Generate fighter rankings
-        if: steps.check.outputs.event_happened == 'true'
-        run: python -m app.services.ufc.ranking_service
 
       # Reads career stats and the Glicko profiles, so it runs last. No --refit: the
       # embedding space stays frozen so scores remain comparable across events and
@@ -141,11 +158,12 @@ jobs:
         if: steps.check.outputs.event_happened == 'true'
         run: python -m scripts.generate_picks --settle
 
-      # Fresh odds just landed for the NEXT card, so log picks against them. Must run
-      # after the odds scrape or it would price against a stale line.
-      - name: Log picks for upcoming fights
+      # v2.0 forward test (PREREGISTRATION_V2.md): settle last night's rows with results
+      # and closing lines, then log newly priced fights against the fresh odds. v1.2 is
+      # retired, so the step above only settles its open picks and none are added.
+      - name: Forward test - settle and log
         if: steps.check.outputs.event_happened == 'true'
-        run: python -m scripts.generate_picks --upcoming
+        run: python -m scripts.forward_track --settle --log
 
       - name: Commit picks log
         if: steps.check.outputs.event_happened == 'true'
@@ -204,6 +222,13 @@ jobs:
         if: steps.odds_check.outputs.refresh == 'true'
         run: python -m app.services.ufc.odds_scraper --live
 
+      # Bookings are announced any day, so debutants are looked up on the odds cadence
+      # too, not only after events.
+      - name: Sherdog records for newly booked fighters
+        if: steps.odds_check.outputs.refresh == 'true'
+        continue-on-error: true
+        run: python -m app.services.ufc.external_records --sync-debutants --max-requests 300
+
       # Picks are logged on the SAME cadence as the odds they are priced against.
       # Decoupling the two would mean picking against a line that has since moved, and
       # the pre-registered rule keys off the market price at pick time.
@@ -211,9 +236,9 @@ jobs:
       # A missed card is evidence permanently lost: the rule needs ~150 settled picks to
       # reach a verdict at roughly 70/year, so the sample is the binding constraint on
       # this whole experiment. Automating it is what stops that sample leaking.
-      - name: Log picks for upcoming fights
+      - name: Forward test - log newly priced fights
         if: steps.odds_check.outputs.refresh == 'true'
-        run: python -m scripts.generate_picks --upcoming
+        run: python -m scripts.forward_track --log
 
       - name: Commit picks log
         if: steps.odds_check.outputs.refresh == 'true'
@@ -222,3 +247,21 @@ jobs:
       - name: Close audit-log entry
         if: always() && steps.audit.outputs.id != ''
         run: python -m app.services.audit finish --id '${{ steps.audit.outputs.id }}' --status '${{ job.status }}'
+
+  # Fight-day snapshot so the forward test has a real closing line. Odds only.
+  closing-odds:
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 21 * * 6'
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Snapshot odds
+        run: python -m app.services.ufc.odds_scraper --live

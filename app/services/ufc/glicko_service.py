@@ -23,6 +23,7 @@ from dataclasses import dataclass, asdict
 from datetime import date
 
 from app.database import SessionLocal
+from app.services.ufc.fighter_registry import is_decided, is_draw
 from app.models.ufc import (
     GLICKO_META_COLS,
     UFCEvent, UFCFight, UFCFighter, UFCFightStats,
@@ -562,8 +563,97 @@ def _compute_baselines(fight_map, rounds_by_fight):
 # CORE GLICKO COMPUTATION
 # ---------------------------------------------------------------------------
 
+def _seed_newcomer(ratings, fid, fighter_seeded, fighter_info, ufc_w, ufc_l,
+                   pre_ufc: dict | None = None) -> None:
+    """Seed a fighter's first rating from their pre-UFC record, once.
+
+    `pre_ufc` (fighter id -> (wins, losses) dated before their first UFC bout, from
+    Sherdog) is the point-in-time record and is used whenever given; fighters missing
+    from it get no seed. The fallback, lifetime minus UFC results, still leaks non-UFC
+    fights that happened AFTER the debut, so it is used only without Sherdog data.
+    """
+    if fid in fighter_seeded:
+        return
+    fighter_seeded.add(fid)
+    if pre_ufc is not None:
+        pre_w, pre_l = pre_ufc.get(fid, (0, 0))
+        seed = _newcomer_seed(pre_w, pre_l)
+        if seed != 0:
+            for dim in DIMENSIONS:
+                ratings[fid][dim][0] += seed
+        return
+    fi = fighter_info.get(fid)
+    if fi:
+        pre_w = max(0, (fi.wins or 0) - ufc_w.get(fid, 0))
+        pre_l = max(0, (fi.losses or 0) - ufc_l.get(fid, 0))
+        seed = _newcomer_seed(pre_w, pre_l)
+        if seed != 0:
+            for dim in DIMENSIONS:
+                ratings[fid][dim][0] += seed
+
+
+def _snapshot(ratings, fid, mean_sigma, fighter_round_count, fighter_fight_count,
+              days_since) -> dict:
+    """Pre-fight ratings plus confidence metadata for one fighter.
+
+    Without the metadata the model cannot tell a rating built on 40 rounds from one built
+    on 2, despite 17.8% of fighter-fight rows being debuts and 53.6% of fighters having 3
+    or fewer career fights. `_meta_` prefixed so the DIMENSIONS loop that consumes this
+    dict elsewhere is unaffected.
+    """
+    snap = {d: ratings[fid][d][0] for d in DIMENSIONS}
+    snap["_meta_sigma"] = mean_sigma
+    snap["_meta_rounds_seen"] = float(fighter_round_count.get(fid, 0))
+    snap["_meta_fights_seen"] = float(fighter_fight_count.get(fid, 0))
+    snap["_meta_days_since"] = float(days_since)
+    return snap
+
+
+def sherdog_pre_ufc_records(fight_map: dict) -> dict | None:
+    """fighter id -> (wins, losses) in pro bouts dated before their first UFC bout.
+
+    From the Sherdog tables; None when they do not exist or are empty. Point-in-time by
+    construction, unlike UFCFighter.wins/losses (today's lifetime record).
+    """
+    from sqlalchemy import inspect as _inspect
+
+    from app.database import engine
+    from app.models.ufc import SherdogBout, SherdogFighter
+
+    t = SherdogBout.__table__
+    if not _inspect(engine).has_table(t.name, schema=t.schema):
+        return None
+    first = {}
+    for f in fight_map.values():
+        if f.get("date") is None:
+            continue
+        for fid in (f.get("red_id"), f.get("blue_id")):
+            if fid is not None and (fid not in first or f["date"] < first[fid]):
+                first[fid] = f["date"]
+    db = SessionLocal()
+    try:
+        link = {s: u for s, u in db.query(SherdogFighter.sherdog_id, SherdogFighter.ufc_fighter_id)
+                if u is not None}
+        if not link:
+            return None
+        rows = (db.query(SherdogBout.fighter_sherdog_id, SherdogBout.date, SherdogBout.result)
+                .filter(SherdogBout.fighter_sherdog_id.in_(list(link))).all())
+    finally:
+        db.close()
+    out: dict = {u: (0, 0) for u in link.values()}
+    seen = set()
+    for sid, d, res in rows:
+        u = link[sid]
+        if d is None or u not in first or d >= first[u] or (sid, d, res) in seen:
+            continue
+        seen.add((sid, d, res))
+        w, l = out[u]
+        out[u] = (w + (res == "W"), l + (res == "L"))
+    return out
+
+
 def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
-                params: GlickoParams | None = None):
+                params: GlickoParams | None = None, pre_ufc: dict | None = None):
     """Run the full Glicko rating computation over all fights. Returns ratings and metadata."""
     if params is None:
         params = GlickoParams()
@@ -603,6 +693,26 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
             continue
 
         if not fight["winner_id"] and not fight["method"]:
+            # Unplayed (upcoming) bout: record the pre-fight snapshot so serving sees the
+            # rating AFTER each fighter's latest bout, then move on without updating.
+            if not rounds_by_fight.get(fight_id):
+                for fid in (fight["red_id"], fight["blue_id"]):
+                    _seed_newcomer(ratings, fid, fighter_seeded, fighter_info, ufc_w, ufc_l, pre_ufc)
+                    prev = fighter_last_fight_date.get(fid)
+                    days_out = (fight["date"] - prev).days if (prev and fight["date"]) else -1
+                    sigmas = [ratings[fid][d][1] for d in DIMENSIONS]
+                    if days_out > 90:
+                        sigmas = [_glicko_inflate_sigma(sg, days_out - 90, params)
+                                  for sg in sigmas]
+                    fight_rating_snapshots[(fight_id, fid)] = _snapshot(
+                        ratings, fid, sum(sigmas) / len(sigmas),
+                        fighter_round_count, fighter_fight_count, days_out)
+            continue
+        # No-contests, DQs and overturned results carry no rating-bearing result. They
+        # used to be processed, and the finish-round override below scored a NULL winner
+        # as a red loss (e.g. an eye-poke NC counted against the red corner).
+        fight_drawn = is_draw(fight["method"], fight["winner_id"])
+        if not fight_drawn and not is_decided(fight["method"], fight["winner_id"]):
             continue
 
         round_data = rounds_by_fight.get(fight_id, {})
@@ -639,33 +749,16 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
 
         # --- NEWCOMER SEEDING ---
         for fid in [red_id, blue_id]:
-            if fid not in fighter_seeded:
-                fighter_seeded.add(fid)
-                fi = fighter_info.get(fid)
-                if fi:
-                    pre_w = max(0, (fi.wins or 0) - ufc_w.get(fid, 0))
-                    pre_l = max(0, (fi.losses or 0) - ufc_l.get(fid, 0))
-                    seed = _newcomer_seed(pre_w, pre_l)
-                    if seed != 0:
-                        for dim in DIMENSIONS:
-                            ratings[fid][dim][0] += seed
+            _seed_newcomer(ratings, fid, fighter_seeded, fighter_info, ufc_w, ufc_l, pre_ufc)
 
         # --- Snapshot pre-fight ratings for ML features ---
         for fid in [red_id, blue_id]:
-            snap = {d: ratings[fid][d][0] for d in DIMENSIONS}
-            # Confidence metadata. Without it the model cannot tell a rating built on 40
-            # rounds from one built on 2, despite 17.8% of fighter-fight rows being debuts
-            # and 53.6% of fighters having 3 or fewer career fights. `_meta_` prefixed so
-            # the DIMENSIONS loop that consumes this dict elsewhere is unaffected.
-            snap["_meta_sigma"] = sum(
-                ratings[fid][d][1] for d in DIMENSIONS
-            ) / len(DIMENSIONS)
-            snap["_meta_rounds_seen"] = float(fighter_round_count.get(fid, 0))
-            snap["_meta_fights_seen"] = float(fighter_fight_count.get(fid, 0))
-            # Captured before fighter_last_fight_date was overwritten above; reading it
-            # here would always yield 0. -1 marks a debut.
-            snap["_meta_days_since"] = float(layoff_days.get(fid, -1))
-            fight_rating_snapshots[(fight_id, fid)] = snap
+            # layoff_days was captured before fighter_last_fight_date was overwritten
+            # above; reading it here would always yield 0. -1 marks a debut.
+            fight_rating_snapshots[(fight_id, fid)] = _snapshot(
+                ratings, fid,
+                sum(ratings[fid][d][1] for d in DIMENSIONS) / len(DIMENSIONS),
+                fighter_round_count, fighter_fight_count, layoff_days.get(fid, -1))
 
         # --- COMBAT AGE factors ---
         red_fi = fighter_info.get(red_id)
@@ -726,7 +819,10 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
                 red_won_round = 0.5
 
             if is_finish_round:
-                red_won_round = 1.0 if fight["winner_id"] == red_id else 0.0
+                if fight_drawn:
+                    red_won_round = 0.5
+                else:
+                    red_won_round = 1.0 if fight["winner_id"] == red_id else 0.0
 
             K_pts_r = K_red
             K_pts_b = K_blue
@@ -1068,12 +1164,14 @@ def run_glicko_inmemory(params: GlickoParams | None = None) -> dict:
         db.close()
 
     baselines = _compute_baselines(fight_map, rounds_by_fight)
-    results = _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines, params)
+    results = _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines, params,
+                          pre_ufc=sherdog_pre_ufc_records(fight_map))
     return results[6]  # fight_rating_snapshots
 
 
 def run_glicko_inmemory_cached(fight_map, rounds_by_fight, fighter_info, baselines,
-                               params: GlickoParams | None = None) -> dict:
+                               params: GlickoParams | None = None,
+                               pre_ufc: dict | None = None) -> dict:
     """Run Glicko with pre-loaded data. Used by tuner to avoid reloading data each trial.
 
     Returns:
@@ -1082,7 +1180,8 @@ def run_glicko_inmemory_cached(fight_map, rounds_by_fight, fighter_info, baselin
     if params is None:
         params = GlickoParams()
 
-    results = _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines, params)
+    results = _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines, params,
+                          pre_ufc=pre_ufc)
     return results[6]  # fight_rating_snapshots
 
 
@@ -1118,7 +1217,8 @@ def compute_and_save_snapshots(db, params: GlickoParams | None = None):
     baselines = _compute_baselines(fight_map, rounds_by_fight)
     ratings, fighter_round_count, fighter_fight_count, fighter_last_fight_date, \
         fighter_weight_class, sorted_fight_ids, fight_rating_snapshots = \
-        _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines, params)
+        _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines, params,
+                    pre_ufc=sherdog_pre_ufc_records(fight_map))
 
     # --- Persist pre-fight Glicko snapshots to DB (used by ML model) ---
     log.info(f"  Saving {len(fight_rating_snapshots)} Glicko snapshots to DB...")

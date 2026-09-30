@@ -16,30 +16,43 @@ runs:
         git config user.name  "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-        # The generator is append-only and skips fights already logged, so on most runs
-        # there is nothing new. That is the normal case, not a failure.
-        if git diff --quiet -- picks_log.jsonl; then
-          echo "No new picks to commit."
+        # picks_log.jsonl: retired v1.2 rule (settlement only).
+        # forward_log_v2.jsonl: v2.0 forward test (PREREGISTRATION_V2.md).
+        LOGS="picks_log.jsonl forward_log_v2.jsonl"
+        total_added=0
+        for f in $LOGS; do
+          [ -e "$f" ] || continue
+          # A new, untracked log has nothing to diff against; add it as is.
+          if ! git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
+            git add "$f"; continue
+          fi
+          # The generators are append-only and skip fights already logged, so on most
+          # runs there is nothing new. That is the normal case, not a failure.
+          git diff --quiet -- "$f" && continue
+
+          added=$(git diff --numstat -- "$f" | awk '{print $1}')
+          removed=$(git diff --numstat -- "$f" | awk '{print $2}')
+
+          # An append-only log must only ever grow. A run that deletes or rewrites lines
+          # means something is wrong -- a settle pass gone bad, a stale checkout, a
+          # regenerated file -- and silently pushing it would destroy the audit trail the
+          # experiment depends on. Settlement rewrites lines in place, so removals are
+          # expected only when they are matched one-for-one by additions.
+          if [ "${removed:-0}" -gt 0 ] && [ "${removed:-0}" -ne "${added:-0}" ]; then
+            echo "::error::$f lost ${removed} line(s) against ${added} added."
+            echo "An append-only log must not shrink. Refusing to push; inspect manually."
+            git diff -- "$f"
+            exit 1
+          fi
+          git add "$f"
+          total_added=$(( total_added + ${added:-0} ))
+        done
+
+        if git diff --cached --quiet; then
+          echo "No new log entries to commit."
           exit 0
         fi
-
-        added=$(git diff --numstat -- picks_log.jsonl | awk '{print $1}')
-        removed=$(git diff --numstat -- picks_log.jsonl | awk '{print $2}')
-
-        # An append-only log must only ever grow. A run that deletes or rewrites lines
-        # means something is wrong -- a settle pass gone bad, a stale checkout, a
-        # regenerated file -- and silently pushing it would destroy the audit trail the
-        # experiment depends on. Settlement rewrites lines in place, so removals are
-        # expected only when they are matched one-for-one by additions.
-        if [ "${removed:-0}" -gt 0 ] && [ "${removed:-0}" -ne "${added:-0}" ]; then
-          echo "::error::picks_log.jsonl lost ${removed} line(s) against ${added} added."
-          echo "An append-only log must not shrink. Refusing to push; inspect manually."
-          git diff -- picks_log.jsonl
-          exit 1
-        fi
-
-        git add picks_log.jsonl
-        git commit -m "Log picks ($(date -u +%Y-%m-%d): +${added:-0}/-${removed:-0} lines)"
+        git commit -m "Log picks/forward test ($(date -u +%Y-%m-%d): +${total_added} lines)"
 
         # Both jobs in this workflow can commit on the same morning, and they run
         # concurrently. Rebase onto whatever landed first rather than failing or, worse,

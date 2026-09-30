@@ -541,11 +541,16 @@ class TestFeatureListParity:
             "unrelated_column": [7.0],
         })
 
-    def test_includes_pre_ufc_features(self):
+    def test_leaky_pre_ufc_features_stay_out(self):
+        """pre_ufc_* used today's lifetime record minus UFC results, which counts non-UFC
+        fights that happened after the bout being predicted. Replaced by the point-in-time
+        Sherdog features (pro_*); ufc_experience_share is now built from those."""
         from app.services.ufc.model import winner_feature_columns
         cols = winner_feature_columns(self._frame())
-        for c in ["pre_ufc_wins", "pre_ufc_quality", "ufc_experience_share"]:
-            assert c in cols, f"{c} missing — this is the train/serve drift bug"
+        for c in ["pre_ufc_wins", "pre_ufc_losses", "pre_ufc_fights", "pre_ufc_win_pct",
+                  "pre_ufc_quality"]:
+            assert c not in cols, f"{c} is back in the feature list; it leaks future results"
+        assert "ufc_experience_share" in cols
 
     def test_only_returns_columns_present_on_the_frame(self):
         from app.services.ufc.model import winner_feature_columns
