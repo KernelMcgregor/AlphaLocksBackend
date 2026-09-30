@@ -40,11 +40,17 @@ from app.services.ufc.model import (
 )
 
 log = logging.getLogger("fast_wf")
-from app.services.ufc.model import CAREER_FEATURES_ENABLED, SHORT_NOTICE_ENABLED
+from app.services.ufc.model import (
+    CAREER_FEATURES_ENABLED, MATCHMAKING_ENABLED, SCORECARDS_ENABLED, SHORT_NOTICE_ENABLED,
+    WITHDRAWALS_ENABLED,
+)
 
 # Separate caches per feature configuration so runs never mix.
 CACHE = MODEL_DIR / ("fast_wf_matchup" + ("_career" if CAREER_FEATURES_ENABLED else "")
-                     + ("_sn" if SHORT_NOTICE_ENABLED else "") + ".pkl")
+                     + ("_sn" if SHORT_NOTICE_ENABLED else "")
+                     + ("_mm" if MATCHMAKING_ENABLED else "")
+                     + ("_wd" if WITHDRAWALS_ENABLED else "")
+                     + ("_sc" if SCORECARDS_ENABLED else "") + ".pkl")
 
 
 def build_matrix(rebuild: bool) -> tuple[pd.DataFrame, list[str]]:
@@ -63,8 +69,16 @@ def build_matrix(rebuild: bool) -> tuple[pd.DataFrame, list[str]]:
 
 
 def fit_predict(backend: str, X_fit, y_fit, X_eval_list, names):
-    """Returns P(red) for each matrix in X_eval_list (backends live in ensemble.py)."""
-    model = fit_backend(backend, X_fit, y_fit, names)
+    """Returns P(red) for each matrix in X_eval_list (backends live in ensemble.py).
+
+    "catboost_tuned" = CatBoost with the settings in models/ufc/h2h/catboost_tuning.json
+    (chosen by scripts/tune_ensemble.py on pre-window fights only)."""
+    params = None
+    if backend == "catboost_tuned":
+        import json
+        params = json.loads((MODEL_DIR / "catboost_tuning.json").read_text())["best_params"]
+        backend = "catboost"
+    model = fit_backend(backend, X_fit, y_fit, names, params)
     return [model.predict(X) for X in X_eval_list]
 
 

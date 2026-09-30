@@ -104,8 +104,13 @@ jobs:
         if: steps.watch.outputs.changed == 'true'
         run: python -m scripts.forward_track --log
 
-      - name: Commit forward log
-        if: steps.watch.outputs.changed == 'true'
+      # Method forward test: logs each fight once, the first run its prop prices are seen
+      # (or the day before the card without them). Runs every time, not only when a new
+      # moneyline appeared, because props usually post after the moneyline.
+      - name: Method forward test - log fights at their opening prop line
+        run: python -m scripts.method_forward_track --log
+
+      - name: Commit forward logs
         uses: ./.github/actions/commit-picks
 
       - name: Close audit-log entry

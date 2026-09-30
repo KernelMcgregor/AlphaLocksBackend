@@ -10,15 +10,20 @@ Also fits a "deserved" variant: the winner's score blends the official result wi
 stats-based probability that they won the fight (a logistic of stat differentials fit
 on pre-2015 decisions), so a round-one injury stoppage counts for what the fight showed.
 
+Also fits "judges" variants: a decision's winner score comes from the judges' mean point
+margin (scorecards.margin_score, one fitted slope) instead of the UD/MD/SD buckets.
+
 Windows: fit on decided fights 2015-2021, report on 2022+ (holdout). Ratings run from
 the first fight in the data so early careers are warmed up.
 
 Usage:
     DATABASE_URL=postgresql://localhost/alocks_local python -m scripts.fit_elo_outcomes
+    ... python -m scripts.fit_elo_outcomes --judges   # only deserved_fm vs judge variants
 """
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -30,11 +35,13 @@ from sklearn.linear_model import LogisticRegression
 from app.database import SessionLocal
 from app.models.ufc import UFCFight, UFCFightStats
 from app.services.ufc.outcome_types import DRAW, VOID, WIN_TYPES, classify_outcome
+from app.services.ufc.scorecards import margin_score, winner_margin
 
 TUNE = (date(2015, 1, 1), date(2022, 1, 1))
 HOLDOUT_FROM = date(2022, 1, 1)
 OUT = Path(__file__).resolve().parents[1] / "models" / "ufc" / "elo_outcomes.json"
 STAT_KEYS = ("sig", "kd", "td", "ctrl", "sub")
+DECISIONS = ("ud", "md", "sd")
 
 
 @dataclass
@@ -46,6 +53,7 @@ class Bout:
     otype: str
     minutes: float
     stats: dict | None  # {"red": {...}, "blue": {...}}
+    margin: float | None = None  # judges' mean winner margin (decisions only)
 
 
 def load_bouts() -> list[Bout]:
@@ -70,7 +78,8 @@ def load_bouts() -> list[Bout]:
         r, b = totals.get((f.id, f.red_fighter_id)), totals.get((f.id, f.blue_fighter_id))
         bouts.append(Bout(f.date, f.red_fighter_id, f.blue_fighter_id, red_won, otype,
                           max((f.fight_time_seconds or 0) / 60.0, 0.5),
-                          {"red": r, "blue": b} if r and b else None))
+                          {"red": r, "blue": b} if r and b else None,
+                          winner_margin(f.details) if otype in DECISIONS else None))
     return bouts
 
 
@@ -89,8 +98,10 @@ def fit_deserved(bouts: list[Bout]) -> LogisticRegression:
     return LogisticRegression(C=1.0, fit_intercept=False).fit(np.array(X), np.array(y))
 
 
-def run_elo(bouts, k: float, scores: dict[str, float], deserved=None, w: float = 1.0):
-    """Returns pre-fight P(red wins) per bout (nan where not scored)."""
+def run_elo(bouts, k: float, scores: dict[str, float], deserved=None, w: float = 1.0,
+            alpha: float | None = None):
+    """Returns pre-fight P(red wins) per bout (nan where not scored).
+    alpha: score decisions from the judges' margin (bucket score where none parsed)."""
     elo: dict[int, float] = {}
     pre = np.full(len(bouts), np.nan)
     for i, b in enumerate(bouts):
@@ -103,6 +114,8 @@ def run_elo(bouts, k: float, scores: dict[str, float], deserved=None, w: float =
             s_red = 0.5
         else:
             s_win = scores[b.otype]
+            if alpha is not None and b.margin is not None:
+                s_win = margin_score(b.margin, alpha)
             s_red = s_win if b.red_won == 1 else 1 - s_win
             if deserved is not None and b.stats is not None:
                 s_red = w * s_red + (1 - w) * deserved[i]
@@ -124,9 +137,56 @@ def evaluate(pre, bouts) -> dict:
             "holdout": _loss(pre, bouts, HOLDOUT_FROM, date(2100, 1, 1))}
 
 
+def fit_judges(bouts, deserved, fm) -> dict:
+    """deserved_fm (the production config) refit, vs the same with judge-margin scores."""
+    def unpack(x):
+        return (10 + 290 / (1 + np.exp(-x[0])), 1 / (1 + np.exp(-x[1])), np.exp(x[2]))
+    out = {}
+    for name, use_alpha in (("deserved_fm", False), ("deserved_judges", True)):
+        def obj(x):
+            k, w, a = unpack(x)
+            return _loss(run_elo(bouts, k, fm, deserved, w, a if use_alpha else None), bouts, *TUNE)
+        r = minimize(obj, np.r_[0.0, 0.0, np.log(0.5)], method="Nelder-Mead",
+                     options={"maxiter": 600, "xatol": 1e-3, "fatol": 1e-6})
+        k, w, a = unpack(r.x)
+        pre = run_elo(bouts, k, fm, deserved, w, a if use_alpha else None)
+        out[name] = {"k": k, "w_result": w, **({"alpha": a} if use_alpha else {}),
+                     **evaluate(pre, bouts)}
+        # Holdout on decisions only: where the change applies.
+        idx = [i for i, b in enumerate(bouts) if b.date >= HOLDOUT_FROM and b.otype not in (DRAW, VOID)]
+        out[name]["holdout_n"] = len(idx)
+        print(f"{name:16s} K={k:6.1f} w={w:.2f}" + (f" alpha={a:.3f}" if use_alpha else "")
+              + f"  tune={out[name]['tune']:.4f}  holdout={out[name]['holdout']:.4f}")
+    # What alpha implies for typical cards.
+    a = out["deserved_judges"]["alpha"]
+    out["deserved_judges"]["implied"] = {
+        "29-28 split (0.33)": margin_score(1 / 3, a), "29-28 x3 (1.0)": margin_score(1, a),
+        "30-27 x3 (3.0)": margin_score(3, a)}
+    print("implied winner scores:", {k: round(v, 3) for k, v in out["deserved_judges"]["implied"].items()})
+    return out
+
+
+def _deserved_probs(bouts):
+    model = fit_deserved(bouts)
+    deserved = np.full(len(bouts), 0.5)
+    for i, b in enumerate(bouts):
+        if b.stats is not None:
+            deserved[i] = model.predict_proba(_diffs(b).reshape(1, -1))[0, 1]
+    return deserved
+
+
 def main() -> None:
     bouts = load_bouts()
-    print(f"{len(bouts)} bouts")
+    print(f"{len(bouts)} bouts, {sum(b.margin is not None for b in bouts)} with judge scores")
+    if "--judges" in sys.argv:
+        fm = {"ko": 1.0, "sub": 1.0, "ud": 0.91, "md": 0.61, "sd": 0.55,
+              "doctor": 1.0, "injury": 1.0}
+        res = fit_judges(bouts, _deserved_probs(bouts), fm)
+        results = json.loads(OUT.read_text()) if OUT.exists() else {}
+        results["judges_comparison"] = res
+        OUT.write_text(json.dumps(results, indent=2, default=float))
+        print(f"saved {OUT}")
+        return
     results = {}
 
     # 1. Plain Elo, every win scored 1.0, K fitted.

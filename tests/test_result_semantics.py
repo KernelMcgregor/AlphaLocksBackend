@@ -215,3 +215,59 @@ class TestShortNoticeFlags:
                            "red_fighter_id": [1, 1], "blue_fighter_id": [3, 3]})
         f = features_from_rows(df, [(dt.date(2026, 5, 1), 1, 2)])
         assert f.sum().sum() == 0
+
+
+class TestWithdrawalsAndMatchmaking:
+    def test_withdrawer_is_the_fighter_who_did_not_fight(self):
+        import datetime as dt
+        from app.services.ufc.withdrawals import features_from_rows
+        card = dt.date(2025, 3, 1)
+        # A was booked vs B; B pulled out; A fought C that night. Later A and B fight others.
+        df = pd.DataFrame({
+            "date": [card, card, dt.date(2025, 9, 1), dt.date(2025, 9, 1)],
+            "stats_fighter_id": [1, 3, 2, 4],
+        })
+        f = features_from_rows(df, [(card, 1, 2)])
+        # B (id 2) withdrew: counted on B's later fight, not on the card itself.
+        assert f.loc[2, "wd_withdrawals_3y"] == 1
+        assert f.loc[2, "wd_days_since"] == (dt.date(2025, 9, 1) - card).days
+        assert f.loc[0, "wd_withdrawals_3y"] == 0  # A fought; not a withdrawal
+
+    def test_scrapped_bout_credits_both_as_scrapped(self):
+        import datetime as dt
+        from app.services.ufc.withdrawals import features_from_rows
+        df = pd.DataFrame({"date": [dt.date(2025, 9, 1)] * 2, "stats_fighter_id": [1, 2]})
+        f = features_from_rows(df, [(dt.date(2025, 3, 1), 1, 2)])
+        assert f["wd_scrapped_3y"].tolist() == [1.0, 1.0]
+        assert f["wd_withdrawals_3y"].tolist() == [0.0, 0.0]
+
+    def test_card_depth_and_trajectory(self):
+        import datetime as dt
+        from app.services.ufc.matchmaking import compute
+        # Fighter 9 was the last bout (prelim) on a 3-fight card, then headlined the next.
+        df = pd.DataFrame({
+            "fight_id": [1, 1, 2, 2, 3, 3, 4, 4],
+            "event_id": [10, 10, 10, 10, 10, 10, 11, 11],
+            "card_position": [0, 0, 1, 1, 2, 2, 0, 0],
+            "date": [dt.date(2025, 1, 1)] * 6 + [dt.date(2025, 6, 1)] * 2,
+            "stats_fighter_id": [5, 6, 7, 8, 9, 10, 9, 11],
+        })
+        f = compute(df)
+        assert f.loc[4, "mm_card_depth"] == 1.0 and f.loc[0, "mm_main_event"] == 1.0
+        assert f.loc[6, "mm_prev_depth"] == 1.0 and f.loc[6, "mm_depth_change"] == 1.0
+
+
+class TestScorecards:
+    def test_parse_loser_first(self):
+        from app.services.ufc.scorecards import parse, winner_margin
+        d = "Mike Bell 28 - 29. Chris Lee 29 - 28. Sal D'amato 28 - 29."
+        assert parse(d) == [("Mike Bell", 29, 28), ("Chris Lee", 28, 29), ("Sal D'amato", 29, 28)]
+        assert abs(winner_margin(d) - 1 / 3) < 1e-9
+        assert winner_margin("Derek Cleary 27 - 30. Sal D'amato 27 - 30. Junichiro Kamijo 27 - 30.") == 3.0
+        assert winner_margin(None) is None and winner_margin("Punch to the face at 4:31") is None
+
+    def test_margin_score_monotone(self):
+        from app.services.ufc.scorecards import margin_score
+        assert margin_score(0, 0.3) == 0.5
+        assert margin_score(-1, 0.3) == 0.5
+        assert 0.5 < margin_score(1 / 3, 0.3) < margin_score(1, 0.3) < margin_score(3, 0.3) < 1

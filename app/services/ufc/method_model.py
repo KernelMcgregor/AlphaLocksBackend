@@ -49,7 +49,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(METHOD_MODEL_DIR / "training.log", mode="w"),
+        logging.FileHandler(METHOD_MODEL_DIR / "training.log", mode="a"),
     ],
 )
 log = logging.getLogger("method_model")
@@ -1342,6 +1342,18 @@ def _build_prediction_matchup(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def generate_method_predictions():
+    """Serve method predictions. Prefers method_v2 (winner x method, walk-forward
+    validated) when its model file exists; falls back to the legacy hierarchical model."""
+    from app.services.ufc import method_v2
+    v2 = method_v2.load()
+    if v2 is not None:
+        log.info("Serving method_v2 (winner x method)")
+        method_v2.generate_predictions(v2)
+        return
+    _generate_legacy_predictions()
+
+
+def _generate_legacy_predictions():
     """Run ensemble method model on all fights and store in DB."""
     log.info("=" * 60)
     log.info("GENERATING METHOD PREDICTIONS FOR ALL FIGHTS")

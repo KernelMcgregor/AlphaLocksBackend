@@ -172,6 +172,10 @@ jobs:
         if: steps.check.outputs.event_happened == 'true'
         run: python -m scripts.forward_track --settle
 
+      - name: Method forward test - settle
+        if: steps.check.outputs.event_happened == 'true'
+        run: python -m scripts.method_forward_track --settle --report
+
       - name: Commit picks log
         if: steps.check.outputs.event_happened == 'true'
         uses: ./.github/actions/commit-picks

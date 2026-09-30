@@ -18,7 +18,8 @@ runs:
 
         # picks_log.jsonl: retired v1.2 rule (settlement only).
         # forward_log_v2.jsonl: v2.0 forward test (PREREGISTRATION_V2.md).
-        LOGS="picks_log.jsonl forward_log_v2.jsonl"
+        # forward_log_method_v1.jsonl: method model forward test (scripts/method_forward_track.py).
+        LOGS="picks_log.jsonl forward_log_v2.jsonl forward_log_method_v1.jsonl"
         total_added=0
         for f in $LOGS; do
           [ -e "$f" ] || continue

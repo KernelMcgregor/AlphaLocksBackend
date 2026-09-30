@@ -14,7 +14,7 @@ from app.models.ufc import (
     UFCEvent, UFCFight, UFCFighter, UFCFighterCareerStats, UFCFighterSimilarity,
     UFCFightOdds, UFCMethodOdds,
     UFCFightPrediction, UFCFightPreview, UFCMethodPrediction, UFCFightShapValue, UFCFightStats,
-    UFCRankingHistory,
+    UFCRankingHistory, METHOD_JOINT_COLS,
 )
 from app.schemas.ufc import (
     UFCEventDetailResponse,
@@ -29,6 +29,19 @@ from app.schemas.ufc import (
 )
 
 router = APIRouter(prefix="/ufc", tags=["ufc"])
+
+
+def _method_payload(mp) -> dict:
+    """Method prediction for the API: marginals plus the winner x method grid (method_v2;
+    the grid keys are None for rows written by the legacy model)."""
+    return {
+        "predicted_method": mp.predicted_method,
+        "confidence": mp.confidence,
+        "ko_prob": mp.ko_prob,
+        "sub_prob": mp.sub_prob,
+        "dec_prob": mp.dec_prob,
+        **{c: getattr(mp, c, None) for c in METHOD_JOINT_COLS},
+    }
 
 # Server-side cache lifetimes (seconds) for the views that are slow to build — see
 # app/services/response_cache.py. Past the TTL the old answer is still served while a
@@ -407,13 +420,7 @@ def _build_fight(db: Session, fight_id: int):
         "va_prob_low": pred.va_prob_low,
         "va_prob_high": pred.va_prob_high,
     } if pred else None
-    result["method_prediction"] = {
-        "predicted_method": method_pred.predicted_method,
-        "confidence": method_pred.confidence,
-        "ko_prob": method_pred.ko_prob,
-        "sub_prob": method_pred.sub_prob,
-        "dec_prob": method_pred.dec_prob,
-    } if method_pred else None
+    result["method_prediction"] = _method_payload(method_pred) if method_pred else None
     result["odds"] = [{
         "bookmaker": o.bookmaker,
         "red_odds": o.red_odds,
@@ -825,13 +832,7 @@ def get_event_method_predictions(event_id: int, db: Session = Depends(get_db)):
         return {}
     preds = db.query(UFCMethodPrediction).filter(UFCMethodPrediction.fight_id.in_(fight_ids)).all()
     return {
-        str(p.fight_id): {
-            "predicted_method": p.predicted_method,
-            "confidence": p.confidence,
-            "ko_prob": p.ko_prob,
-            "sub_prob": p.sub_prob,
-            "dec_prob": p.dec_prob,
-        }
+        str(p.fight_id): _method_payload(p)
         for p in preds
     }
 
@@ -1091,13 +1092,8 @@ def _build_upcoming(db: Session):
                     "red_prob": p.red_prob,
                     "model_prob": p.model_prob,
                 } if p else None,
-                "method_prediction": {
-                    "predicted_method": mp.predicted_method,
-                    "confidence": mp.confidence,
-                    "ko_prob": mp.ko_prob,
-                    "sub_prob": mp.sub_prob,
-                    "dec_prob": mp.dec_prob,
-                } if (mp := method_pred_map.get(f.id)) else None,
+                "method_prediction": (_method_payload(mp)
+                                      if (mp := method_pred_map.get(f.id)) else None),
             })
 
         result.append({

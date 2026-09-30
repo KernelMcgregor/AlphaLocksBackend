@@ -11,7 +11,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import Base, engine
 from app.models import *  # noqa: F401, F403 — ensure all models are registered
-from app.models.ufc import FIGHTER_BIO_COLS, GLICKO_META_COLS, RANKING_HISTORY_COLS
+from app.models.ufc import (
+    FIGHTER_BIO_COLS, GLICKO_META_COLS, METHOD_JOINT_COLS, RANKING_HISTORY_COLS,
+)
 from app.routers import admin, predictions, ufc
 
 scheduler = BackgroundScheduler()
@@ -42,6 +44,11 @@ def run_migrations():
         pred_existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_fight_predictions)").fetchall()}
         if pred_existing and "model_prob" not in pred_existing:
             conn.execute("ALTER TABLE ufc_fight_predictions ADD COLUMN model_prob REAL")
+        # 013: winner x method grid on ufc_method_predictions
+        mp_existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_method_predictions)").fetchall()}
+        for col in METHOD_JOINT_COLS:
+            if mp_existing and col not in mp_existing:
+                conn.execute(f"ALTER TABLE ufc_method_predictions ADD COLUMN {col} REAL")
         # Add derived columns to ufc_fight_stats (idempotent)
         existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_fight_stats)").fetchall()}
         derived_cols = [
@@ -128,6 +135,13 @@ def run_migrations():
         if "model_prob" not in pred_existing:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE ufc.ufc_fight_predictions ADD COLUMN model_prob FLOAT"))
+
+        # 013: winner x method grid from method_v2. Nullable, no default -> metadata-only.
+        mp_existing = {c["name"] for c in insp.get_columns("ufc_method_predictions", schema="ufc")}
+        for col in METHOD_JOINT_COLS:
+            if col not in mp_existing:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE ufc.ufc_method_predictions ADD COLUMN {col} FLOAT"))
 
         # Add derived columns to ufc_fight_stats
         stats_existing = {c["name"] for c in insp.get_columns("ufc_fight_stats", schema="ufc")}

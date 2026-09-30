@@ -101,13 +101,16 @@ def compute(df: pd.DataFrame) -> pd.DataFrame | None:
     return out
 
 
-def backfill_from_bfo(csv_path: Path = Path("data/bfo/odds.csv")) -> int:
+def backfill_from_bfo(csv_path: Path = Path("data/bfo/odds.csv"),
+                      include_scrapped: bool = False) -> int:
     """Load historical pulled bouts from the BFO crawl into ufc_cancelled_bouts.
 
     A BFO matchup that never matched a fought bout, where at least one of its fighters
-    fought someone else on the same card (within WINDOW_DAYS), is a pulled bout. Bouts
-    scrapped outright (nobody replaced) and TUF exhibitions are skipped. Fighters are
-    mapped to our ids through their BFO slugs in matched bouts.
+    fought someone else on the same card (within WINDOW_DAYS), is a pulled bout. With
+    include_scrapped, bouts scrapped outright (neither fighter fought that card) are loaded
+    too; withdrawals.py needs them. Unmatched pairs that DID fight each other that week are
+    matching failures and always skipped. Fighters are mapped to our ids through their BFO
+    slugs in matched bouts; bouts with neither fighter mapped (e.g. TUF exhibitions) skip.
     """
     from app.database import SessionLocal, engine
     from app.models.ufc import UFCCancelledBout, UFCFight
@@ -140,11 +143,22 @@ def backfill_from_bfo(csv_path: Path = Path("data/bfo/odds.csv")) -> int:
         def fought_near(fid, d):
             return any(abs((x - d).days) <= WINDOW_DAYS for x in fought_on.get(fid, []))
 
+        # Every pair that actually fought, from our own fights table (not BFO's matches:
+        # a matching failure is exactly a bout BFO did not match).
+        pair_dates: dict[frozenset, list] = defaultdict(list)
+        for fr, fb, fd in db.query(UFCFight.red_fighter_id, UFCFight.blue_fighter_id,
+                                   UFCFight.date).filter(UFCFight.date.isnot(None)):
+            pair_dates[frozenset((fr, fb))].append(fd)
+
         rows = []
         for _, r in c[c["db_fight_id"].isna()].iterrows():
             a = slug_to_id.get(r["fighter_a_bfo_slug"])
             b = slug_to_id.get(r["fighter_b_bfo_slug"])
-            if not ((a and fought_near(a, r["date"])) or (b and fought_near(b, r["date"]))):
+            if a and b and any(abs((x - r["date"]).days) <= WINDOW_DAYS
+                               for x in pair_dates.get(frozenset((a, b)), [])):
+                continue  # they did fight each other: a matching failure, not a pull
+            replaced = (a and fought_near(a, r["date"])) or (b and fought_near(b, r["date"]))
+            if not replaced and not (include_scrapped and (a or b)):
                 continue
             opened = (pd.to_datetime(r["open_ts_a"], utc=True).tz_localize(None).to_pydatetime()
                       if isinstance(r["open_ts_a"], str) else None)
@@ -167,6 +181,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     ap = argparse.ArgumentParser()
     ap.add_argument("--backfill-bfo", type=Path, nargs="?", const=Path("data/bfo/odds.csv"))
+    ap.add_argument("--include-scrapped", action="store_true")
     a = ap.parse_args()
     if a.backfill_bfo:
-        backfill_from_bfo(a.backfill_bfo)
+        backfill_from_bfo(a.backfill_bfo, include_scrapped=a.include_scrapped)

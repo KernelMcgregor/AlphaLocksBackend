@@ -1,0 +1,85 @@
+{
+  "full": 0.6732027939162933,
+  "groups": [
+    {
+      "group": "raw_rolling",
+      "n": 112,
+      "change": -0.0024692106466447372
+    },
+    {
+      "group": "composites",
+      "n": 15,
+      "change": 0.0033104191269502925
+    },
+    {
+      "group": "round_profile",
+      "n": 14,
+      "change": 0.01196160905431698
+    },
+    {
+      "group": "elo_adj_stats",
+      "n": 15,
+      "change": 0.008249952013724138
+    },
+    {
+      "group": "elo",
+      "n": 7,
+      "change": 0.005947989782169594
+    },
+    {
+      "group": "glicko",
+      "n": 57,
+      "change": 0.0034481157698315057
+    },
+    {
+      "group": "expected_stats",
+      "n": 19,
+      "change": 0.001072238634732381
+    },
+    {
+      "group": "sherdog_career",
+      "n": 7,
+      "change": -0.0003724537202539624
+    },
+    {
+      "group": "style_clusters",
+      "n": 9,
+      "change": 0.008201322575092651
+    },
+    {
+      "group": "age_curve",
+      "n": 10,
+      "change": -0.0015229352654890782
+    },
+    {
+      "group": "layoff",
+      "n": 10,
+      "change": 0.0013872741626133056
+    },
+    {
+      "group": "damage",
+      "n": 6,
+      "change": 0.011206093271960538
+    },
+    {
+      "group": "division_moves",
+      "n": 9,
+      "change": 0.015150703597830772
+    },
+    {
+      "group": "physical_bio",
+      "n": 14,
+      "change": 0.010324185508224892
+    },
+    {
+      "group": "record",
+      "n": 13,
+      "change": 0.006037278582273653
+    },
+    {
+      "group": "fight_context",
+      "n": 18,
+      "change": 0.005384613875894506
+    }
+  ]
+}

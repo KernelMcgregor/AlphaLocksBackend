@@ -1,0 +1,15 @@
+{
+  "method": "rolling-cv",
+  "default_cv_ll": 0.6720658395686631,
+  "best_cv_ll": 0.662059872900519,
+  "best_params": {
+    "depth": 7,
+    "learning_rate": 0.011173782040395886,
+    "l2_leaf_reg": 1.0082128700222404,
+    "rsm": 0.39646171612349435,
+    "min_data_in_leaf": 1,
+    "random_strength": 2.0918090755320042,
+    "subsample": 0.8574875761682003,
+    "bootstrap_type": "Bernoulli"
+  }
+}

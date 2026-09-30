@@ -11,7 +11,10 @@ which time an opener could be days old. This runs every two hours (line-watcher.
      as bookmaker "BFO:<book>". Exchanges (Polymarket/Kalshi) are skipped: they trade
      in-play and are tracked separately. The first snapshot of a fight is its observed
      opening line; the last one before the card is its closing line.
-  5. Report which fights were priced for the first time, and which of their fighters have
+  5. Parse the same page's prop rows (winner x method, goes to decision, total rounds),
+     de-vig the sportsbook consensus (bfo_props.py) and append changed values to
+     ufc_prop_odds_history. The first row of a fight is its opening prop price.
+  6. Report which fights were priced for the first time, and which of their fighters have
      no Sherdog record yet, so the workflow can look them up and refresh predictions.
 
 Writes GitHub step outputs (changed / new_fights) when GITHUB_OUTPUT is set.
@@ -25,7 +28,9 @@ import re
 from urllib.parse import urlparse
 
 from app.database import SessionLocal
-from app.models.ufc import SherdogFighter, UFCEvent, UFCFight, UFCFighter, UFCFightOddsHistory
+from app.models.ufc import (
+    SherdogFighter, UFCEvent, UFCFight, UFCFighter, UFCFightOddsHistory, UFCPropOddsHistory,
+)
 
 log = logging.getLogger("line_watcher")
 
@@ -42,6 +47,7 @@ def _normalised(a: int, b: int) -> tuple[float, float]:
 
 
 def upcoming_event_refs(client, today: dt.date):
+    from app.services.ufc import bfo_props
     from app.services.ufc import bfo_scraper as bfo
 
     refs = {e.slug: e for e in bfo.list_ufc_events(client, since=today, include_future=True)
@@ -57,6 +63,7 @@ def upcoming_event_refs(client, today: dt.date):
 
 
 def watch(max_requests: int = 40) -> dict:
+    from app.services.ufc import bfo_props
     from app.services.ufc import bfo_scraper as bfo
 
     now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
@@ -64,6 +71,10 @@ def watch(max_requests: int = 40) -> dict:
     client = bfo.BFOClient(cache_dir=bfo.DEFAULT_CACHE_DIR, max_requests=max_requests)
     if not client.robots_allows("/events/"):
         raise SystemExit("robots.txt disallows /events/; not watching")
+
+    # The prop table is new; create it if this run beats the backend's own migration.
+    from app.database import engine
+    UFCPropOddsHistory.__table__.create(engine, checkfirst=True)
 
     db = SessionLocal()
     try:
@@ -89,10 +100,18 @@ def watch(max_requests: int = 40) -> dict:
                   .order_by(UFCFightOddsHistory.captured_at)):
             last_price[(h.fight_id, h.bookmaker)] = (h.red_odds, h.blue_odds)
 
-        new_rows, priced_now = [], set()
+        last_prop = {}
+        for h in (db.query(UFCPropOddsHistory)
+                  .filter(UFCPropOddsHistory.fight_id.in_(list(by_id)),
+                          UFCPropOddsHistory.source == "bfo_watch")
+                  .order_by(UFCPropOddsHistory.captured_at)):
+            last_prop[(h.fight_id, h.market)] = h.prob
+
+        new_rows, prop_rows, priced_now = [], [], set()
         for ref in upcoming_event_refs(client, today):
             try:
-                page = bfo.parse_event_page(client.get(urlparse(ref.url).path, max_age_s=0))
+                html = client.get(urlparse(ref.url).path, max_age_s=0)
+                page = bfo.parse_event_page(html)
             except ValueError:
                 continue  # card listed but no lines posted yet; checked again next run
             date = page.date or ref.date
@@ -101,6 +120,21 @@ def watch(max_requests: int = 40) -> dict:
             mus = [{"bfo_matchup_id": m.matchup_id, "fighter_a": m.fighter_a,
                     "fighter_b": m.fighter_b, "event_date": date} for m in page.matchups]
             matches = bfo.match_matchups(mus, db_fights)
+            cons = bfo_props.consensus(bfo_props.parse_props(html))
+            for mu_id, hit in matches.items():
+                c = cons.get(mu_id)
+                if not c:
+                    continue
+                for market, (prob, over) in bfo_props.corner_markets(c, hit["swapped"]).items():
+                    prob = round(prob, 4)
+                    key = (hit["fight_id"], market)
+                    if last_prop.get(key) == prob:
+                        continue
+                    prop_rows.append(UFCPropOddsHistory(
+                        fight_id=hit["fight_id"], market=market, prob=prob, n_books=c["n_books"],
+                        overround=round(over, 4) if over else None, source="bfo_watch",
+                        captured_at=now))
+                    last_prop[key] = prob
             for m in page.matchups:
                 hit = matches.get(m.matchup_id)
                 if not hit:
@@ -125,6 +159,7 @@ def watch(max_requests: int = 40) -> dict:
                         captured_at=now, days_to_fight=(date - today).days))
                     last_price[key] = (red, blue)
         db.add_all(new_rows)
+        db.add_all(prop_rows)
         db.commit()
 
         new_fights = sorted(priced_now - seen_before)
@@ -136,9 +171,11 @@ def watch(max_requests: int = 40) -> dict:
     finally:
         db.close()
 
-    out = {"price_rows": len(new_rows), "new_fights": new_fights, "unlinked": unlinked,
+    out = {"price_rows": len(new_rows), "prop_rows": len(prop_rows), "new_fights": new_fights,
+           "unlinked": unlinked,
            "requests": client.n_network}
-    log.info(f"Line watcher: {len(new_rows)} new/changed prices, {len(new_fights)} fights priced "
+    log.info(f"Line watcher: {len(new_rows)} new/changed prices, {len(prop_rows)} prop values, "
+             f"{len(new_fights)} fights priced "
              f"for the first time, {len(unlinked)} of their fighters without Sherdog records, "
              f"{client.n_network} requests")
     gh = os.environ.get("GITHUB_OUTPUT")

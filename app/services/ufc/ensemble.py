@@ -47,6 +47,9 @@ MEMBERS = (
 CAL_FRAC = 0.15
 ARTIFACT = "ensemble_v1.pkl"
 
+#: CatBoost settings for the catboost members. Overridable for tuning experiments.
+CATBOOST_PARAMS = dict(learning_rate=0.03, depth=4, l2_leaf_reg=10)
+
 
 def _logit(p):
     p = np.clip(np.asarray(p, dtype=float), 1e-4, 1 - 1e-4)
@@ -102,7 +105,8 @@ class _Plain:
         return self.model.predict_proba(X)[:, 1]
 
 
-def fit_backend(backend: str, X: np.ndarray, y: np.ndarray, names: list[str]):
+def fit_backend(backend: str, X: np.ndarray, y: np.ndarray, names: list[str],
+                params: dict | None = None):
     """Fit one backend on chronologically ordered rows. Returns an object with
     .predict(X) -> P(red). Every backend trains on corner-swap-augmented data."""
     from app.services.ufc.model import _corner_swap_augment, fit_gbt
@@ -115,8 +119,8 @@ def fit_backend(backend: str, X: np.ndarray, y: np.ndarray, names: list[str]):
         cut = int(len(X) * 0.85)  # chronological early-stopping slice
         Xf, yf = _corner_swap_augment(X[:cut], y[:cut], names)
         Xv, yv = _corner_swap_augment(X[cut:], y[cut:], names)
-        params = dict(learning_rate=0.03, depth=4, l2_leaf_reg=10, loss_function="Logloss",
-                      random_seed=42, verbose=False, allow_writing_files=False)
+        params = {**CATBOOST_PARAMS, **(params or {}), "loss_function": "Logloss",
+                  "random_seed": 42, "verbose": False, "allow_writing_files": False}
         probe = CatBoostClassifier(iterations=3000, od_type="Iter", od_wait=150, **params)
         probe.fit(Xf, yf, eval_set=(Xv, yv), use_best_model=True)
         best = max(probe.get_best_iteration() or 100, 50)
@@ -128,6 +132,20 @@ def fit_backend(backend: str, X: np.ndarray, y: np.ndarray, names: list[str]):
         Xa, ya = _corner_swap_augment(X, y, names)
         m = make_pipeline(StandardScaler(), LogisticRegression(C=0.05, max_iter=3000))
         return _Symmetric(m.fit(Xa, ya), names)
+    if backend == "xgboost":
+        from xgboost import XGBClassifier
+        cut = int(len(X) * 0.85)
+        Xf, yf = _corner_swap_augment(X[:cut], y[:cut], names)
+        Xv, yv = _corner_swap_augment(X[cut:], y[cut:], names)
+        p = dict(n_estimators=3000, learning_rate=0.03, max_depth=3, subsample=0.8,
+                 colsample_bytree=0.6, min_child_weight=5, reg_lambda=5.0,
+                 eval_metric="logloss", random_state=42, n_jobs=4)
+        p.update(params or {})
+        probe = XGBClassifier(early_stopping_rounds=150, **p).fit(Xf, yf, eval_set=[(Xv, yv)],
+                                                                  verbose=False)
+        best = max(int(probe.best_iteration or 100), 50)
+        Xa, ya = _corner_swap_augment(X, y, names)
+        return _Symmetric(XGBClassifier(**{**p, "n_estimators": best}).fit(Xa, ya), names)
     if backend == "tabpfn":
         from tabpfn import TabPFNClassifier
         Xa, ya = _corner_swap_augment(X, y, names)

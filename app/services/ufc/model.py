@@ -193,6 +193,7 @@ def load_fight_data(include_upcoming: bool = False) -> pd.DataFrame:
         f = fighters.get(stats.fighter_id, {})
         rows.append({
             "fight_id": fight.id, "date": fight.date,
+            "event_id": fight.event_id, "card_position": fight.card_position,
             "red_fighter_id": fight.red_fighter_id,
             "blue_fighter_id": fight.blue_fighter_id,
             "winner_id": fight.winner_id,
@@ -247,6 +248,7 @@ def load_fight_data(include_upcoming: bool = False) -> pd.DataFrame:
                 f = fighters.get(fid, {})
                 rows.append({
                     "fight_id": fight.id, "date": fight.date,
+                    "event_id": fight.event_id, "card_position": fight.card_position,
                     "red_fighter_id": fight.red_fighter_id,
                     "blue_fighter_id": fight.blue_fighter_id,
                     "winner_id": None, "method": None, "details": None,
@@ -463,6 +465,15 @@ ELO_DESERVED_COEF = {"sig_str_landed": 1.2764, "kd": 1.6954, "td_landed": 3.0158
 import os as _os
 CAREER_FEATURES_ENABLED = _os.environ.get("ALOCKS_CAREER_FEATURES", "1") != "0"
 SHORT_NOTICE_ENABLED = _os.environ.get("ALOCKS_SHORT_NOTICE") == "1"
+MATCHMAKING_ENABLED = _os.environ.get("ALOCKS_MATCHMAKING") == "1"
+WITHDRAWALS_ENABLED = _os.environ.get("ALOCKS_WITHDRAWALS") == "1"
+#: Judges' scorecards (scorecards.py): decisions scored in Elo by the judges' mean point
+#: margin instead of UD/MD/SD buckets (fit_elo_outcomes.py --judges: Elo holdout log loss
+#: 0.6689 -> 0.6671), plus decision-luck / decision-margin features.
+SCORECARDS_ENABLED = _os.environ.get("ALOCKS_SCORECARDS") == "1"
+ELO_JUDGES = {"k": 116.3, "w_result": 0.50, "alpha": 0.296}
+#: Shrinkage (pseudo-decisions at 0) for the per-fighter decision features.
+DEC_LUCK_PRIOR, DEC_MARGIN_PRIOR = 3.0, 2.0
 
 
 #: Every caller fits the style clusterer on played bouts strictly before this date.
@@ -645,6 +656,18 @@ def build_features(
         _snf = _sn(df)
         for _c in _SN_FEATS:
             df[_c] = _snf[_c].values if _snf is not None else np.nan
+    # Matchmaking signals (card placement, trajectory) and withdrawal history.
+    # Experimental until a walk-forward shows they help.
+    if MATCHMAKING_ENABLED and "card_position" in df.columns:
+        from app.services.ufc.matchmaking import compute as _mm
+        _mmf = _mm(df)
+        for _c in _mmf.columns:
+            df[_c] = _mmf[_c].values
+    if WITHDRAWALS_ENABLED:
+        from app.services.ufc.withdrawals import FEATURES as _WD, compute as _wd
+        _wdf = _wd(df)
+        for _c in _WD:
+            df[_c] = _wdf[_c].values if _wdf is not None else np.nan
     # ufc.com bio fields. Absent on frames built before they existed.
     if "fighter_leg_reach" in df.columns:
         df["leg_reach_inches"] = pd.to_numeric(df["fighter_leg_reach"], errors="coerce")
@@ -765,6 +788,13 @@ def build_features(
     }
     elo = {}
     elo_at_fight = {}
+    elo_k, elo_w = ELO_K, ELO_W_RESULT
+    if SCORECARDS_ENABLED:
+        from app.services.ufc.scorecards import margin_score, winner_margin
+        elo_k, elo_w = ELO_JUDGES["k"], ELO_JUDGES["w_result"]
+    # Per-fighter running decision record (previous fights only): luck = verdict minus the
+    # stats-based probability they won; margin = judges' mean margin, signed for them.
+    dec_luck, dec_margin, dec_n, dec_at_fight = {}, {}, {}, {}
     for _, row in (
         df[["fight_id", "date", "red_fighter_id", "blue_fighter_id", "winner_id", "method",
             "details"]]
@@ -774,6 +804,12 @@ def build_features(
         r_elo, b_elo = elo.get(r_id, 1500.0), elo.get(b_id, 1500.0)
         elo_at_fight[(row["fight_id"], r_id)] = r_elo
         elo_at_fight[(row["fight_id"], b_id)] = b_elo
+        if SCORECARDS_ENABLED:
+            for f in (r_id, b_id):
+                n = dec_n.get(f, 0)
+                dec_at_fight[(row["fight_id"], f)] = (
+                    dec_luck.get(f, 0.0) / (n + DEC_LUCK_PRIOR),
+                    dec_margin.get(f, 0.0) / (n + DEC_MARGIN_PRIOR))
         expected_r = 1 / (1 + 10 ** ((b_elo - r_elo) / 400))
         otype = classify_outcome(row["method"], row["details"], row["winner_id"])
         if otype == OUTCOME_VOID:
@@ -782,12 +818,31 @@ def build_features(
             actual_r = 0.5
         else:
             s_win = ELO_OUTCOME_SCORES[otype]
+            margin = None
+            if SCORECARDS_ENABLED and otype in ("ud", "md", "sd"):
+                margin = winner_margin(row["details"])
+                if margin is not None:
+                    s_win = margin_score(margin, ELO_JUDGES["alpha"])
             actual_r = s_win if row["winner_id"] == r_id else 1.0 - s_win
             deserved = deserved_by_row.get((row["fight_id"], r_id))
             if deserved is not None:
-                actual_r = ELO_W_RESULT * actual_r + (1 - ELO_W_RESULT) * deserved
-        elo[r_id] = r_elo + ELO_K * (actual_r - expected_r)
-        elo[b_id] = b_elo - ELO_K * (actual_r - expected_r)
+                actual_r = elo_w * actual_r + (1 - elo_w) * deserved
+            if margin is not None:
+                red_won = 1.0 if row["winner_id"] == r_id else 0.0
+                luck_r = red_won - deserved if deserved is not None else 0.0
+                for f, luck, m in ((r_id, luck_r, margin if red_won else -margin),
+                                   (b_id, -luck_r, -margin if red_won else margin)):
+                    dec_luck[f] = dec_luck.get(f, 0.0) + luck
+                    dec_margin[f] = dec_margin.get(f, 0.0) + m
+                    dec_n[f] = dec_n.get(f, 0) + 1
+        elo[r_id] = r_elo + elo_k * (actual_r - expected_r)
+        elo[b_id] = b_elo - elo_k * (actual_r - expected_r)
+
+    if SCORECARDS_ENABLED:
+        _dec = [dec_at_fight.get((f, p), (0.0, 0.0))
+                for f, p in zip(df["fight_id"], df["stats_fighter_id"])]
+        df["dec_luck"] = [d[0] for d in _dec]
+        df["dec_margin_avg"] = [d[1] for d in _dec]
 
     df["elo"] = df.apply(lambda r: elo_at_fight.get((r["fight_id"], r["stats_fighter_id"]), 1500.0), axis=1)
     # Elo-based expected win probability (from this fighter's perspective)
@@ -1368,7 +1423,8 @@ WINNER_RAW_COLS = (
 # They must be emitted once as `fight_*`; a diff is identically zero and a red_/blue_
 # pair is two copies of the same number.
 FIGHT_LEVEL_PREFIXES = ("div_",)
-FIGHT_LEVEL_COLS = ("is_title_fight", "is_five_round", "scheduled_rounds", "scheduled_minutes")
+FIGHT_LEVEL_COLS = ("is_title_fight", "is_five_round", "scheduled_rounds", "scheduled_minutes",
+                    "mm_main_event", "mm_co_main", "mm_main_card", "mm_card_depth")
 
 
 def _is_fight_level(col: str) -> bool:
@@ -1393,6 +1449,11 @@ def winner_feature_columns(df: pd.DataFrame) -> list[str]:
         "pro_elo", "pro_fights", "pro_win_pct", "pro_opp_elo", "pro_nonufc_fights", "pro_known",
         # BFO short-notice (present only when SHORT_NOTICE_ENABLED)
         "sn_replacement", "sn_opp_changed",
+        # Matchmaking trajectory and withdrawal history (present only when enabled)
+        "mm_prev_depth", "mm_avg_depth_3", "mm_depth_change",
+        "wd_withdrawals_3y", "wd_scrapped_3y", "wd_days_since",
+        # Judges' scorecards (present only when SCORECARDS_ENABLED)
+        "dec_luck", "dec_margin_avg",
         "stance_orthodox", "stance_southpaw", "stance_switch",
         "career_win_pct", "career_fights", "finish_rate", "been_finished_rate",
         "streak", "days_since_last", "style_matchup_adv",

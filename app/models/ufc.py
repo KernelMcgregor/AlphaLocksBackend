@@ -281,6 +281,15 @@ class UFCMethodPrediction(TimestampMixin, Base):
     ko_prob: Mapped[float] = mapped_column(Float)
     sub_prob: Mapped[float] = mapped_column(Float)
     dec_prob: Mapped[float] = mapped_column(Float)
+    # Winner x method grid from method_v2 (migration 013). The six cells sum to 1 and
+    # red_* sums to the served P(red wins); ko/sub/dec_prob above are their marginals.
+    red_ko_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
+    red_sub_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
+    red_dec_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
+    blue_ko_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
+    blue_sub_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
+    blue_dec_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
+    distance_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     fight: Mapped["UFCFight"] = relationship()
 
@@ -300,6 +309,36 @@ class UFCFightOdds(TimestampMixin, Base):
     blue_implied_prob: Mapped[float] = mapped_column(Float)
 
     fight: Mapped["UFCFight"] = relationship()
+
+
+class UFCPropOddsHistory(Base):
+    """Append-only prop-market snapshots: BestFightOdds consensus, de-vigged.
+
+    One row per (fight, market, capture time), written by the line watcher whenever a
+    value changes (source 'bfo_watch'), plus a one-off backfill of closing prices parsed
+    from cached event pages (source 'bfo_close', captured_at = event date). The first
+    'bfo_watch' row of a fight is its observed opening prop price; the last one before the
+    card is its close. Used to benchmark the method model (scripts/method_forward_track.py).
+
+    market: red_ko, red_sub, red_dec, blue_ko, blue_sub, blue_dec (winner x method, the six
+    de-vigged together), dec_yes (goes to decision), ou_<line>_over (total rounds).
+    """
+
+    __tablename__ = "ufc_prop_odds_history"
+    __table_args__ = (
+        UniqueConstraint("fight_id", "market", "source", "captured_at"),
+        Index("ix_prop_history_fight_captured", "fight_id", "captured_at"),
+        {"schema": UFC_SCHEMA},
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, index=True)
+    fight_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_fights.id")), index=True)
+    market: Mapped[str] = mapped_column(String(30))
+    prob: Mapped[float] = mapped_column(Float)          # de-vigged consensus probability
+    n_books: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    overround: Mapped[float | None] = mapped_column(Float, nullable=True)  # of its group
+    source: Mapped[str] = mapped_column(String(20))     # bfo_watch | bfo_close
+    captured_at: Mapped[dt.datetime] = mapped_column(DateTime, index=True)
 
 
 class UFCFightOddsHistory(Base):
@@ -578,6 +617,9 @@ class UFCRankingHistory(Base):
 # quantities in its in-memory snapshot dict under a leading underscore ("_meta_sigma"),
 # so the dict key is always "_" + the column name.
 GLICKO_META_COLS = ["meta_sigma", "meta_rounds_seen", "meta_fights_seen", "meta_days_since"]
+#: Winner x method columns on ufc_method_predictions (migration 013).
+METHOD_JOINT_COLS = ["red_ko_prob", "red_sub_prob", "red_dec_prob", "blue_ko_prob",
+                     "blue_sub_prob", "blue_dec_prob", "distance_prob"]
 
 
 # (column, DDL type) for the ufc.com bio fields on ufc_fighters. Kept alongside the model
