@@ -178,7 +178,7 @@ jobs:
 
       - name: Summary
         if: steps.check.outputs.event_happened == 'true'
-        run: echo "Post-event update complete - scraped results, refreshed upcoming, generated predictions, rankings, fetched odds, settled and logged picks"
+        run: echo "Post-event update complete - scraped results, refreshed upcoming, generated predictions, rankings, fetched odds, settled forward-test rows"
 
       - name: Close audit-log entry
         if: always() && steps.audit.outputs.id != ''
@@ -267,5 +267,15 @@ jobs:
           cache: 'pip'
       - name: Install dependencies
         run: pip install -r requirements.txt
+      - name: Open audit-log entry
+        id: audit
+        run: >-
+          echo "id=$(python -m app.services.audit start --action 'Fight-Day Odds' --source github
+          --actor '${{ github.actor }}'
+          --url '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          2>/dev/null)" >> "$GITHUB_OUTPUT"
       - name: Snapshot odds
         run: python -m app.services.ufc.odds_scraper --live
+      - name: Close audit-log entry
+        if: always() && steps.audit.outputs.id != ''
+        run: python -m app.services.audit finish --id '${{ steps.audit.outputs.id }}' --status '${{ job.status }}'

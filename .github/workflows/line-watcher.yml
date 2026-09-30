@@ -40,6 +40,16 @@ jobs:
           pip install "sqlalchemy>=2.0,<2.1" psycopg2-binary pydantic pydantic-settings
           python-dotenv requests httpx beautifulsoup4 numpy
 
+      # Audit log (admin Schedule page). Every run, unlike the nightly jobs: for a job that
+      # should fire every two hours, "when did it last run" is the health signal.
+      - name: Open audit-log entry
+        id: audit
+        run: >-
+          echo "id=$(python -m app.services.audit start --action 'Line Watcher' --source github
+          --actor '${{ github.actor }}'
+          --url '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          2>/dev/null)" >> "$GITHUB_OUTPUT"
+
       # New bookings only reach ufc_fights through a ufcstats scrape; without this the
       # watcher cannot match a bout whose line opens between weekly post-event runs.
       # Every third run (~6 hourly), which is plenty for announcements.
@@ -97,3 +107,7 @@ jobs:
       - name: Commit forward log
         if: steps.watch.outputs.changed == 'true'
         uses: ./.github/actions/commit-picks
+
+      - name: Close audit-log entry
+        if: always() && steps.audit.outputs.id != ''
+        run: python -m app.services.audit finish --id '${{ steps.audit.outputs.id }}' --status '${{ job.status }}'

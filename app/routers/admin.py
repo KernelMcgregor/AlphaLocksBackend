@@ -160,12 +160,14 @@ _JOB_INFO = {
     "ufc_scrape": ("Full Pipeline", "Nightly pipeline",
                    "Scrapes results for any card newer than the last one with results, then (only if a "
                    "card landed) rebuilds derived stats, career stats, rankings, rank history and "
-                   "similarity. Always regenerates winner/method predictions and fight previews."),
+                   "similarity. Always regenerates winner predictions (four-model ensemble blended "
+                   "with the market), method predictions and fight previews."),
     "bovada_scrape": ("Bovada Odds", "Bovada method odds", "Method-of-victory odds for upcoming fights."),
     "prediction_markets": ("Prediction Markets", "Prediction markets",
                            "Kalshi and Polymarket quotes and price history for open fights."),
     "reconcile_fights": ("Reconcile Fights", "Reconcile fights",
-                         "Removes bouts that have been pulled from their card, and what depended on them."),
+                         "Records bouts that have been pulled from their card (ufc_cancelled_bouts), "
+                         "then removes them and what depended on them."),
 }
 
 #: GitHub Actions workflows in the backend repo that write to the same database. They run
@@ -173,10 +175,19 @@ _JOB_INFO = {
 #: Keep in sync with .github/workflows/*.yml.
 _GITHUB_WORKFLOWS = [
     ("Post-Event Update", "post-event.yml", "0 6 * * *",
-     "If a card finished in the last few days without results: scrape results, rebuild stats, "
-     "rankings, similarity and predictions, fetch odds, settle and log picks."),
+     "If a card finished in the last few days without results: scrape results, look up newly "
+     "booked fighters on Sherdog, rebuild stats, rankings, similarity and predictions, fetch "
+     "odds, settle forward-test rows against the closing line."),
     ("Odds Refresh", "post-event.yml", "0 6 * * *",
-     "Tuesdays and Fridays only: live bookmaker odds, then log picks for upcoming fights."),
+     "Tuesdays and Fridays only: live US bookmaker odds (The Odds API) and a Sherdog lookup "
+     "for newly booked fighters."),
+    ("Fight-Day Odds", "post-event.yml", "0 21 * * 6",
+     "Saturdays: US bookmaker odds snapshot close to the card (backup closing line)."),
+    ("Line Watcher", "line-watcher.yml", "17 */2 * * *",
+     "Records new opening lines from BestFightOdds. Every ~6h also refreshes ufcstats bookings "
+     "and records cancelled bouts. When a fight is priced for the first time: Sherdog lookup "
+     "for new fighters, Glicko + predictions refresh, and the forward test logs the fight at "
+     "its opening line."),
     ("Prediction Markets", "prediction-markets.yml", "0 */2 * * *",
      "Kalshi/Polymarket refresh, then removes cancelled fights."),
 ]
