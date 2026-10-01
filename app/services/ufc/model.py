@@ -398,10 +398,12 @@ def _expected_time_format(fight) -> str:
     """Scheduled format for a bout ufcstats has not published a time_format for yet.
 
     Upcoming bouts arrive without one, which left every upcoming title fight and main
-    event looking like a 3-rounder. Title fights and main events (card position 1) are
-    five rounds; everything else is three.
+    event looking like a 3-rounder. Title fights and main events are five rounds;
+    everything else is three. card_position is 0-based (0 = main event, as written by
+    the scraper and scripts/backfill_card_positions.py): on 2023+ cards 158 of 202 bouts at
+    position 0 were five-rounders vs 35 of 202 (all title fights) at position 1.
     """
-    five = _is_title_bout(fight.weight_class) or getattr(fight, "card_position", None) == 1
+    five = _is_title_bout(fight.weight_class) or getattr(fight, "card_position", None) == 0
     return "5-5-5-5-5" if five else "5-5-5"
 
 

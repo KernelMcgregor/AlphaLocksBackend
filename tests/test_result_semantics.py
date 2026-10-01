@@ -271,3 +271,14 @@ class TestScorecards:
         assert margin_score(0, 0.3) == 0.5
         assert margin_score(-1, 0.3) == 0.5
         assert 0.5 < margin_score(1 / 3, 0.3) < margin_score(1, 0.3) < margin_score(3, 0.3) < 1
+
+
+class TestExpectedTimeFormat:
+    def test_main_event_is_five_rounds_card_position_zero_based(self):
+        from types import SimpleNamespace
+        from app.services.ufc.model import _expected_time_format
+        f = lambda wc, pos: _expected_time_format(SimpleNamespace(weight_class=wc, card_position=pos))
+        assert f("Lightweight Bout", 0) == "5-5-5-5-5"          # main event
+        assert f("Lightweight Bout", 1) == "5-5-5"              # co-main, non-title
+        assert f("UFC Women's Flyweight Title Bout", 3) == "5-5-5-5-5"
+        assert f("Lightweight Bout", None) == "5-5-5"
