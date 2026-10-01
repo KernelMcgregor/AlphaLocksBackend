@@ -25,6 +25,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 import numpy as np
+from sqlalchemy.orm import joinedload
 import pandas as pd
 from sklearn.cluster import KMeans
 from sklearn.ensemble import HistGradientBoostingClassifier
@@ -234,7 +235,7 @@ def load_fight_data(include_upcoming: bool = False) -> pd.DataFrame:
         # later window for those fighters.
         last_played = max((r["date"] for r in rows if r["date"]), default=None)
         upcoming = (
-            db.query(UFCFight)
+            db.query(UFCFight).options(joinedload(UFCFight.event))
             .filter(UFCFight.winner_id.is_(None))
             .filter((UFCFight.method.is_(None)) | (UFCFight.method == ""))
             .all()
@@ -414,8 +415,12 @@ def _expected_time_format(fight) -> str:
         return sf
     wc = (fight.weight_class or "").lower()
     title = _is_title_bout(fight.weight_class) and "tournament" not in wc
-    event = getattr(fight, "event", None)
-    dev = any(k in ((event.name if event else "") or "").lower() for k in _DEV_SERIES)
+    try:  # the ORM relationship can be unloadable once its session is closed
+        event = getattr(fight, "event", None)
+        event_name = (event.name if event is not None else "") or ""
+    except Exception:
+        event_name = ""
+    dev = any(k in event_name.lower() for k in _DEV_SERIES)
     main = getattr(fight, "card_position", None) == 0 and not dev
     return "5-5-5-5-5" if (title or main) else "5-5-5"
 
@@ -3315,7 +3320,7 @@ def build_serving_matchup(df: pd.DataFrame) -> pd.DataFrame:
     upcoming_db = SessionLocal()
     historical_fight_ids = set(common)
     upcoming_fights = (
-        upcoming_db.query(UFCFight)
+        upcoming_db.query(UFCFight).options(joinedload(UFCFight.event))
         .filter(UFCFight.id.notin_(historical_fight_ids))
         .all()
     )
