@@ -176,6 +176,31 @@ jobs:
         if: steps.check.outputs.event_happened == 'true'
         run: python -m scripts.method_forward_track --settle --report
 
+      # Pick grades = the ROI of each market's edge bands in walk-forward backtests
+      # (app/services/ufc/grading.py). Rebuilt after every card so last night's settled
+      # closing prices count. Committed on its own: the picks-log action only accepts
+      # append-only files, and this JSON is rewritten each time.
+      - name: Rebuild pick grade table
+        if: steps.check.outputs.event_happened == 'true'
+        run: python -m scripts.build_grade_table
+
+      - name: Commit grade table
+        if: steps.check.outputs.event_happened == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add models/ufc/grade_table.json
+          if git diff --cached --quiet; then echo "Grade table unchanged."; exit 0; fi
+          git commit -m "Rebuild pick grade table ($(date -u +%Y-%m-%d))"
+          for attempt in 1 2 3; do
+            if git pull --rebase --autostash origin "${GITHUB_REF_NAME}" && \
+               git push origin "HEAD:${GITHUB_REF_NAME}"; then exit 0; fi
+            sleep $(( attempt * 5 ))
+          done
+          echo "::error::Could not push grade table"; exit 1
+
       - name: Commit picks log
         if: steps.check.outputs.event_happened == 'true'
         uses: ./.github/actions/commit-picks

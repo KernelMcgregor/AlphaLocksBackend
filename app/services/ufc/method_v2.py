@@ -415,6 +415,13 @@ def generate_predictions(model: ConditionalMethodModel | None = None) -> int:
     finally:
         db.close()
     log.info(f"  stored {len(preds)} method predictions (joint columns: {has_joint})")
+    # Fight-duration curves anchor to these decision probabilities, so they run right after.
+    try:
+        from app.services.ufc import rounds_v1
+        if rounds_v1.load() is not None:
+            rounds_v1.generate_predictions()
+    except Exception as e:  # never let the rounds layer block method predictions
+        log.error(f"  round predictions failed: {e}")
     return len(preds)
 
 

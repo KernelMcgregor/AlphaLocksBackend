@@ -97,5 +97,8 @@ def test_bfo_props_parse_and_orient():
     assert abs(sum(six) - 1) < 1e-9                              # de-vigged together
     red_is_a = corner_markets(c, swapped=False)
     red_is_b = corner_markets(c, swapped=True)
-    assert red_is_a["red_ko"][0] == red_is_b["blue_ko"][0] == c["wm_a_ko"]
-    assert 0.5 < red_is_a["ou_2.5_over"][0] < 0.6
+    assert red_is_a["red_ko"]["prob"] == red_is_b["blue_ko"]["prob"] == c["wm_a_ko"]
+    assert 0.5 < red_is_a["ou_2.5_over"]["prob"] < 0.6
+    assert abs(red_is_a["ou_2.5_under"]["prob"] + red_is_a["ou_2.5_over"]["prob"] - 1) < 1e-9
+    # real prices carried through: best price and its book per side
+    assert red_is_a["red_ko"]["best_american"] == 200 and red_is_a["red_ko"]["best_book"] == "book_21"

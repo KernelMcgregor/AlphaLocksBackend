@@ -199,3 +199,126 @@ def pro_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def compute(df: pd.DataFrame) -> pd.DataFrame:
     return pd.concat([ufc_features(df), pro_features(df)], axis=1)
+
+
+# ---------------------------------------------------------------------------
+# Fight-duration history (for the rounds / over-under models). Kept out of FEATURES so
+# method_v2's feature set is unchanged; scripts/rounds_wf.py attaches these separately.
+# ---------------------------------------------------------------------------
+
+TIMING_FEATURES = ("t_early_rate", "t_mid_rate", "t_avg_minutes", "t_r1_fin_share",
+                   "pro_t_r1_rate", "pro_t_early_rate")
+T_EARLY, T_MID = 7.5, 12.5   # the O/U 1.5 and 2.5 lines, in fight minutes
+TA = 4.0                     # pseudo-fights for the duration shares
+
+
+def timing_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Per fighter, over bouts strictly before this one (draws count; NC/DQ/overturned do not):
+      t_early_rate    share of their fights that ended before 7:30 (under 1.5)
+      t_mid_rate      share that ended before 12:30 (under 2.5)
+      t_avg_minutes   mean fight length, 3-round-equivalent (capped at 15)
+      t_r1_fin_share  share of their finishes (won or lost) that came in round 1
+      pro_t_r1_rate / pro_t_early_rate  the same from every Sherdog pro bout (NaN if unlinked)
+    Shrunk toward pre-2015 population rates."""
+    d = df.assign(_date=pd.to_datetime(df["date"]).dt.date)
+    fights = d.drop_duplicates("fight_id")
+    played = fights[fights["method"].fillna("") != ""]
+
+    def minutes(r):
+        return _num(r["fight_time_seconds"]) / 60.0
+
+    def usable(r):
+        return classify_outcome(r["method"], r["details"], r["winner_id"]) != "void"
+
+    early = played[(played["_date"] < PRIOR_CUTOFF)]
+    early = early[early.apply(usable, axis=1)]
+    em = early.apply(minutes, axis=1)
+    fin = early.apply(lambda r: method_class(r["method"], r["details"], r["winner_id"]) in ("ko", "sub"), axis=1)
+    pri = {"early": float((em < T_EARLY).mean()), "mid": float((em < T_MID).mean()),
+           "avg": float(em.clip(upper=15).mean()),
+           "r1": float((em[fin] <= 5.0).mean()) if fin.any() else 0.5}
+    log.info(f"  timing priors (pre-2015): under 1.5 {pri['early']:.3f}, under 2.5 {pri['mid']:.3f}, "
+             f"mean {pri['avg']:.1f} min, R1 share of finishes {pri['r1']:.3f}")
+
+    state = defaultdict(lambda: dict(n=0, early=0, mid=0, mins=0.0, fin=0, fin_r1=0))
+    out = np.full((len(d), 4), np.nan)
+    pos = {ix: k for k, ix in enumerate(d.index)}
+    for fid, g in d.sort_values(["_date", "fight_id"], kind="stable").groupby("fight_id", sort=False):
+        for ix, r in g.iterrows():
+            c = state[r["stats_fighter_id"]]
+            out[pos[ix]] = [(c["early"] + TA * pri["early"]) / (c["n"] + TA),
+                            (c["mid"] + TA * pri["mid"]) / (c["n"] + TA),
+                            (c["mins"] + TA * pri["avg"]) / (c["n"] + TA),
+                            (c["fin_r1"] + TA * pri["r1"]) / (c["fin"] + TA)]
+        first = g.iloc[0]
+        if not (first["method"] or "") or not usable(first):
+            continue
+        t = minutes(first)
+        is_fin = method_class(first["method"], first["details"], first["winner_id"]) in ("ko", "sub")
+        for ix, r in g.iterrows():
+            c = state[r["stats_fighter_id"]]
+            c["n"] += 1; c["early"] += t < T_EARLY; c["mid"] += t < T_MID; c["mins"] += min(t, 15.0)
+            if is_fin:
+                c["fin"] += 1; c["fin_r1"] += t <= 5.0
+    res = pd.DataFrame(out, columns=TIMING_FEATURES[:4], index=d.index)
+    return pd.concat([res, _pro_timing(df)], axis=1)
+
+
+def _pro_timing(df: pd.DataFrame) -> pd.DataFrame:
+    """Sherdog: share of pro bouts ending in round 1, and before 7:30 (R1, or R2 by 2:30)."""
+    from sqlalchemy import inspect
+
+    from app.database import SessionLocal, engine
+    from app.models.ufc import SherdogBout, SherdogFighter
+
+    cols = ["pro_t_r1_rate", "pro_t_early_rate"]
+    out = pd.DataFrame(np.nan, index=df.index, columns=cols)
+    if not inspect(engine).has_table(SherdogBout.__table__.name, schema=SherdogBout.__table__.schema):
+        return out
+    db = SessionLocal()
+    try:
+        link = {u: s for s, u in db.query(SherdogFighter.sherdog_id, SherdogFighter.ufc_fighter_id)
+                if u is not None}
+        rows = db.query(SherdogBout.fighter_sherdog_id, SherdogBout.date, SherdogBout.method_class,
+                        SherdogBout.round, SherdogBout.time).filter(SherdogBout.date.isnot(None)).all()
+    finally:
+        db.close()
+
+    def clock(s):
+        try:
+            m, sec = str(s).split(":")
+            return int(m) + int(sec) / 60.0
+        except (ValueError, AttributeError):
+            return None
+    per = defaultdict(list)
+    for sid, d, mc, rnd, tm in rows:
+        if mc not in ("KO/TKO", "SUB", "DEC", "DRAW") or rnd is None:
+            continue
+        fin = mc in ("KO/TKO", "SUB")
+        c = clock(tm)
+        r1 = fin and rnd == 1
+        early = fin and (rnd == 1 or (rnd == 2 and c is not None and c <= 2.5))
+        per[sid].append((d, r1, early))
+    tot = [x for v in per.values() for x in v]
+    p_r1 = sum(x[1] for x in tot) / max(len(tot), 1)
+    p_early = sum(x[2] for x in tot) / max(len(tot), 1)
+    hist = {}
+    for sid, v in per.items():
+        v.sort(key=lambda x: x[0])
+        dates, cum = [], []
+        n = r1 = e = 0
+        for d, a, b in v:
+            n += 1; r1 += a; e += b
+            dates.append(d); cum.append((n, r1, e))
+        hist[sid] = (dates, cum)
+    vals = []
+    for fid, d in zip(df["stats_fighter_id"], pd.to_datetime(df["date"]).dt.date):
+        sid = link.get(fid)
+        if sid is None:
+            vals.append((np.nan, np.nan)); continue
+        dates, cum = hist.get(sid, ([], []))
+        k = bisect_left(dates, d)
+        n, r1, e = cum[k - 1] if k else (0, 0, 0)
+        vals.append(((r1 + TA * p_r1) / (n + TA), (e + TA * p_early) / (n + TA)))
+    out.loc[:, :] = np.array(vals, dtype=float)
+    return out

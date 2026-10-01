@@ -105,7 +105,7 @@ def watch(max_requests: int = 40) -> dict:
                   .filter(UFCPropOddsHistory.fight_id.in_(list(by_id)),
                           UFCPropOddsHistory.source == "bfo_watch")
                   .order_by(UFCPropOddsHistory.captured_at)):
-            last_prop[(h.fight_id, h.market)] = h.prob
+            last_prop[(h.fight_id, h.market)] = (h.prob, h.best_american)
 
         new_rows, prop_rows, priced_now = [], [], set()
         for ref in upcoming_event_refs(client, today):
@@ -120,21 +120,22 @@ def watch(max_requests: int = 40) -> dict:
             mus = [{"bfo_matchup_id": m.matchup_id, "fighter_a": m.fighter_a,
                     "fighter_b": m.fighter_b, "event_date": date} for m in page.matchups]
             matches = bfo.match_matchups(mus, db_fights)
-            cons = bfo_props.consensus(bfo_props.parse_props(html))
+            cons = bfo_props.consensus(bfo_props.parse_props(html), page.books)
             for mu_id, hit in matches.items():
                 c = cons.get(mu_id)
                 if not c:
                     continue
-                for market, (prob, over) in bfo_props.corner_markets(c, hit["swapped"]).items():
-                    prob = round(prob, 4)
+                for market, q in bfo_props.corner_markets(c, hit["swapped"]).items():
+                    prob = round(q["prob"], 4)
                     key = (hit["fight_id"], market)
-                    if last_prop.get(key) == prob:
-                        continue
+                    if last_prop.get(key) == (prob, q["best_american"]):
+                        continue   # record a row only when the consensus or best price moves
                     prop_rows.append(UFCPropOddsHistory(
                         fight_id=hit["fight_id"], market=market, prob=prob, n_books=c["n_books"],
-                        overround=round(over, 4) if over else None, source="bfo_watch",
-                        captured_at=now))
-                    last_prop[key] = prob
+                        overround=round(q["overround"], 4) if q["overround"] else None,
+                        source="bfo_watch", captured_at=now, best_american=q["best_american"],
+                        best_book=q["best_book"], median_american=q["median_american"]))
+                    last_prop[key] = (prob, q["best_american"])
             for m in page.matchups:
                 hit = matches.get(m.matchup_id)
                 if not hit:

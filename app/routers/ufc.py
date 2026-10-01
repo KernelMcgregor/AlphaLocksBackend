@@ -471,6 +471,16 @@ def _build_fight(db: Session, fight_id: int):
     result["prediction_markets"] = fight_payload(db, fight_id) or None
     result["market_consensus"] = consensus_prob(db, fight_id)
 
+    # BestFightOdds prop markets (method, decision, rounds): latest de-vigged consensus with
+    # the best / median real price, plus the line-watcher history for the movement chart.
+    from app.services.ufc.prop_serving import prop_history, prop_markets
+    result["prop_markets"] = prop_markets(db, fight_id) or None
+    result["prop_history"] = prop_history(db, fight_id) or None
+
+    # Fight-duration survival curve (rounds_v1), if served for this fight.
+    from app.services.ufc.rounds_v1 import round_payload
+    result["round_prediction"] = round_payload(db, fight_id)
+
     return result
 
 
@@ -1138,6 +1148,15 @@ response_cache.register_warmer("rankings", _rankings_build, RANKINGS_TTL)
 def get_arbitrage_opportunities(db: Session = Depends(get_db)):
     """Find arbitrage opportunities across bookmakers for upcoming fights."""
     return _get_picks_data(db)
+
+
+@router.get("/picks/v2")
+def get_picks_v2(event_id: int | None = None, fight_id: int | None = None,
+                 db: Session = Depends(get_db)):
+    """A graded pick for every market on a card (default: the next event), or one fight.
+    See app/services/ufc/picks_v2.py; grades from models/ufc/grade_table.json."""
+    from app.services.ufc.picks_v2 import build
+    return build(db, event_id=event_id, fight_id=fight_id)
 
 
 @router.get("/picks")

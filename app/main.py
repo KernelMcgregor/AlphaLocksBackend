@@ -12,7 +12,7 @@ from app.config import settings
 from app.database import Base, engine
 from app.models import *  # noqa: F401, F403 — ensure all models are registered
 from app.models.ufc import (
-    FIGHTER_BIO_COLS, GLICKO_META_COLS, METHOD_JOINT_COLS, RANKING_HISTORY_COLS,
+    FIGHTER_BIO_COLS, GLICKO_META_COLS, METHOD_JOINT_COLS, PROP_PRICE_COLS, RANKING_HISTORY_COLS,
 )
 from app.routers import admin, predictions, ufc
 
@@ -49,6 +49,11 @@ def run_migrations():
         for col in METHOD_JOINT_COLS:
             if mp_existing and col not in mp_existing:
                 conn.execute(f"ALTER TABLE ufc_method_predictions ADD COLUMN {col} REAL")
+        # 014: real prices on ufc_prop_odds_history
+        pp_existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_prop_odds_history)").fetchall()}
+        for col, ddl in PROP_PRICE_COLS.items():
+            if pp_existing and col not in pp_existing:
+                conn.execute(f"ALTER TABLE ufc_prop_odds_history ADD COLUMN {col} {ddl}")
         # Add derived columns to ufc_fight_stats (idempotent)
         existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_fight_stats)").fetchall()}
         derived_cols = [
@@ -142,6 +147,14 @@ def run_migrations():
             if col not in mp_existing:
                 with engine.begin() as conn:
                     conn.execute(text(f"ALTER TABLE ufc.ufc_method_predictions ADD COLUMN {col} FLOAT"))
+
+        # 014: real prices on ufc_prop_odds_history (nullable, no default -> metadata-only).
+        if insp.has_table("ufc_prop_odds_history", schema="ufc"):
+            pp_existing = {c["name"] for c in insp.get_columns("ufc_prop_odds_history", schema="ufc")}
+            for col, ddl in PROP_PRICE_COLS.items():
+                if col not in pp_existing:
+                    with engine.begin() as conn:
+                        conn.execute(text(f"ALTER TABLE ufc.ufc_prop_odds_history ADD COLUMN {col} {ddl}"))
 
         # Add derived columns to ufc_fight_stats
         stats_existing = {c["name"] for c in insp.get_columns("ufc_fight_stats", schema="ufc")}

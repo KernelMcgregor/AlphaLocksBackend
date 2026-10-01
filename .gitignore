@@ -30,3 +30,5 @@ models/ufc/h2h/fast_wf_matchup.pkl
 models/ufc/h2h/fast_wf_matchup_career.pkl
 models/ufc/h2h/fast_wf_matchup*.pkl
 models/ufc/method/method_wf_matrix.pkl
+models/ufc/method/rounds_wf_matrix.pkl
+models/ufc/method/rounds_wf/

@@ -311,6 +311,34 @@ class UFCFightOdds(TimestampMixin, Base):
     fight: Mapped["UFCFight"] = relationship()
 
 
+class UFCRoundPrediction(TimestampMixin, Base):
+    """Fight-duration survival curve per fight (rounds_v1), anchored to method_v2's
+    P(goes the distance). Replaced on every prediction run."""
+
+    __tablename__ = "ufc_round_predictions"
+    __table_args__ = (
+        UniqueConstraint("fight_id"),
+        {"schema": UFC_SCHEMA},
+    )
+
+    fight_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_fights.id")), index=True)
+    #: JSON [{t, s, ko, sub, red_ko, blue_ko, red_sub, blue_sub}] every 1.25 minutes
+    curve: Mapped[str] = mapped_column(Text)
+    p_end_r1: Mapped[float | None] = mapped_column(Float, nullable=True)
+    p_end_r2: Mapped[float | None] = mapped_column(Float, nullable=True)
+    p_end_r3: Mapped[float | None] = mapped_column(Float, nullable=True)
+    p_end_r4: Mapped[float | None] = mapped_column(Float, nullable=True)
+    p_end_r5: Mapped[float | None] = mapped_column(Float, nullable=True)
+    p_decision: Mapped[float | None] = mapped_column(Float, nullable=True)
+    over_1_5: Mapped[float | None] = mapped_column(Float, nullable=True)
+    over_2_5: Mapped[float | None] = mapped_column(Float, nullable=True)
+    over_3_5: Mapped[float | None] = mapped_column(Float, nullable=True)
+    over_4_5: Mapped[float | None] = mapped_column(Float, nullable=True)
+    expected_minutes: Mapped[float | None] = mapped_column(Float, nullable=True)
+    median_finish_minute: Mapped[float | None] = mapped_column(Float, nullable=True)
+    peak_bin_start: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
 class UFCPropOddsHistory(Base):
     """Append-only prop-market snapshots: BestFightOdds consensus, de-vigged.
 
@@ -339,6 +367,11 @@ class UFCPropOddsHistory(Base):
     overround: Mapped[float | None] = mapped_column(Float, nullable=True)  # of its group
     source: Mapped[str] = mapped_column(String(20))     # bfo_watch | bfo_close
     captured_at: Mapped[dt.datetime] = mapped_column(DateTime, index=True)
+    # Real prices behind the consensus (migration 014): the best American price across
+    # sportsbooks, which book, and the median book's price. Edges / EV need these.
+    best_american: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    best_book: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    median_american: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class UFCFightOddsHistory(Base):
@@ -617,6 +650,8 @@ class UFCRankingHistory(Base):
 # quantities in its in-memory snapshot dict under a leading underscore ("_meta_sigma"),
 # so the dict key is always "_" + the column name.
 GLICKO_META_COLS = ["meta_sigma", "meta_rounds_seen", "meta_fights_seen", "meta_days_since"]
+#: Price columns on ufc_prop_odds_history (migration 014).
+PROP_PRICE_COLS = {"best_american": "INTEGER", "best_book": "VARCHAR(40)", "median_american": "INTEGER"}
 #: Winner x method columns on ufc_method_predictions (migration 013).
 METHOD_JOINT_COLS = ["red_ko_prob", "red_sub_prob", "red_dec_prob", "blue_ko_prob",
                      "blue_sub_prob", "blue_dec_prob", "distance_prob"]
