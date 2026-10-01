@@ -394,17 +394,30 @@ def _event_country(location: str | None) -> str | None:
     return _COUNTRY_ALIASES.get(c, c)
 
 
+_DEV_SERIES = ("dwcs", "contender series", "road to ufc")
+
+
 def _expected_time_format(fight) -> str:
     """Scheduled format for a bout ufcstats has not published a time_format for yet.
 
-    Upcoming bouts arrive without one, which left every upcoming title fight and main
-    event looking like a 3-rounder. Title fights and main events are five rounds;
-    everything else is three. card_position is 0-based (0 = main event, as written by
-    the scraper and scripts/backfill_card_positions.py): on 2023+ cards 158 of 202 bouts at
-    position 0 were five-rounders vs 35 of 202 (all title fights) at position 1.
+    1. `scheduled_format`, set by the line watcher from BestFightOdds props: books post
+       O/U 3.5/4.5 and "starts round 4/5" only on five-round fights (289 of 290 such
+       fights were five rounds; none of 2,599 without them were).
+    2. Before props are posted: title fights (not tournament "title" bouts such as Road to
+       UFC / TUF finals) and main events (card_position 0 -- positions are 0-based) are
+       five rounds, except on Contender Series / Road to UFC cards; everything else three.
+       On 2023+ cards this rule alone was right ~75% of the time for title fights and main
+       events, which is why the props signal comes first.
     """
-    five = _is_title_bout(fight.weight_class) or getattr(fight, "card_position", None) == 0
-    return "5-5-5-5-5" if five else "5-5-5"
+    sf = getattr(fight, "scheduled_format", None)
+    if sf:
+        return sf
+    wc = (fight.weight_class or "").lower()
+    title = _is_title_bout(fight.weight_class) and "tournament" not in wc
+    event = getattr(fight, "event", None)
+    dev = any(k in ((event.name if event else "") or "").lower() for k in _DEV_SERIES)
+    main = getattr(fight, "card_position", None) == 0 and not dev
+    return "5-5-5-5-5" if (title or main) else "5-5-5"
 
 
 def _round_lengths(time_format: str | None) -> list[int]:
@@ -3349,7 +3362,7 @@ def build_serving_matchup(df: pd.DataFrame) -> pd.DataFrame:
             return float(_classify_weight_class(fight.weight_class) == col[len("div_"):])
         if col == "is_title_fight":
             return float(_is_title_bout(fight.weight_class))
-        tf = getattr(fight, "time_format", None)
+        tf = getattr(fight, "time_format", None) or _expected_time_format(fight)
         if col == "is_five_round":
             return float(_is_five_round(tf))
         if col == "scheduled_rounds":

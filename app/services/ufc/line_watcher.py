@@ -62,6 +62,23 @@ def upcoming_event_refs(client, today: dt.date):
     return list(refs.values())
 
 
+FIVE_ROUND_MARKETS = ("ou_3.5", "ou_4.5", "sr_4", "sr_5", "er_4", "er_5")
+THREE_ROUND_EVIDENCE = ("ou_1.5", "ou_2.5", "sr_2", "sr_3", "er_1")
+
+
+def scheduled_format_from_props(markets) -> str | None:
+    """'5-5-5-5-5' if any five-round-only market is posted; '5-5-5' if round props are
+    posted without one; None if no round props yet. Books post O/U 3.5/4.5 and
+    "starts round 4/5" only on five-round fights (289/290 on 2021+ BFO closes; 0/2,599
+    fights without them were five rounds)."""
+    keys = set(markets)
+    if any(k.startswith(FIVE_ROUND_MARKETS) for k in keys):
+        return "5-5-5-5-5"
+    if any(k.startswith(THREE_ROUND_EVIDENCE) for k in keys):
+        return "5-5-5"
+    return None
+
+
 def watch(max_requests: int = 40) -> dict:
     from app.services.ufc import bfo_props
     from app.services.ufc import bfo_scraper as bfo
@@ -108,6 +125,7 @@ def watch(max_requests: int = 40) -> dict:
             last_prop[(h.fight_id, h.market)] = (h.prob, h.best_american)
 
         new_rows, prop_rows, priced_now = [], [], set()
+        formats_set = 0
         for ref in upcoming_event_refs(client, today):
             try:
                 html = client.get(urlparse(ref.url).path, max_age_s=0)
@@ -125,7 +143,13 @@ def watch(max_requests: int = 40) -> dict:
                 c = cons.get(mu_id)
                 if not c:
                     continue
-                for market, q in bfo_props.corner_markets(c, hit["swapped"]).items():
+                cm = bfo_props.corner_markets(c, hit["swapped"])
+                fmt = scheduled_format_from_props(cm)
+                fight_row = by_id.get(hit["fight_id"])
+                if fmt and fight_row is not None and fight_row.scheduled_format != fmt:
+                    fight_row.scheduled_format = fmt
+                    formats_set += 1
+                for market, q in cm.items():
                     prob = round(q["prob"], 4)
                     key = (hit["fight_id"], market)
                     if last_prop.get(key) == (prob, q["best_american"]):
@@ -172,7 +196,8 @@ def watch(max_requests: int = 40) -> dict:
     finally:
         db.close()
 
-    out = {"price_rows": len(new_rows), "prop_rows": len(prop_rows), "new_fights": new_fights,
+    out = {"price_rows": len(new_rows), "prop_rows": len(prop_rows), "formats_set": formats_set,
+           "new_fights": new_fights,
            "unlinked": unlinked,
            "requests": client.n_network}
     log.info(f"Line watcher: {len(new_rows)} new/changed prices, {len(prop_rows)} prop values, "

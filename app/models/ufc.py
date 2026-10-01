@@ -109,6 +109,11 @@ class UFCFight(TimestampMixin, Base):
     #: whatever order Postgres hands back and a title fight can render last.
     #: Nullable: rows scraped before this column existed keep NULL until re-scraped.
     card_position: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: Scheduled format for an UPCOMING bout (ufcstats publishes time_format only after the
+    #: fight). Set by the line watcher from BestFightOdds props: books post O/U 3.5/4.5 and
+    #: "starts round 4/5" only on five-round fights (289 of 290 such fights were 5 rounds;
+    #: 0 of 2,599 without them). Migration 015.
+    scheduled_format: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     event: Mapped["UFCEvent"] = relationship(back_populates="fights")
     red_fighter: Mapped["UFCFighter"] = relationship(foreign_keys=[red_fighter_id])

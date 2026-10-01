@@ -40,6 +40,9 @@ def run_migrations():
         fight_existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_fights)").fetchall()}
         if fight_existing and "card_position" not in fight_existing:
             conn.execute("ALTER TABLE ufc_fights ADD COLUMN card_position INTEGER")
+        # 015: scheduled_format on ufc_fights (upcoming bouts; from BFO props)
+        if fight_existing and "scheduled_format" not in fight_existing:
+            conn.execute("ALTER TABLE ufc_fights ADD COLUMN scheduled_format VARCHAR(20)")
         # 012: model_prob (odds-free model probability) on ufc_fight_predictions
         pred_existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_fight_predictions)").fetchall()}
         if pred_existing and "model_prob" not in pred_existing:
@@ -134,6 +137,10 @@ def run_migrations():
         if "card_position" not in fight_existing:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE ufc.ufc_fights ADD COLUMN card_position INTEGER"))
+        # 015: scheduled format for upcoming bouts (from BFO props). Nullable -> metadata-only.
+        if "scheduled_format" not in fight_existing:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE ufc.ufc_fights ADD COLUMN scheduled_format VARCHAR(20)"))
 
         # 012: the ensemble's odds-free probability. Nullable, no default -> metadata-only.
         pred_existing = {c["name"] for c in insp.get_columns("ufc_fight_predictions", schema="ufc")}

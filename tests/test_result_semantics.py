@@ -282,3 +282,17 @@ class TestExpectedTimeFormat:
         assert f("Lightweight Bout", 1) == "5-5-5"              # co-main, non-title
         assert f("UFC Women's Flyweight Title Bout", 3) == "5-5-5-5-5"
         assert f("Lightweight Bout", None) == "5-5-5"
+        assert f("Road to UFC 4 Flyweight Tournament Title Bout", 3) == "5-5-5"   # tournament "title": 3 rds
+        dwcs = SimpleNamespace(weight_class="Middleweight Bout", card_position=0,
+                               event=SimpleNamespace(name="DWCS 9.5"))
+        assert _expected_time_format(dwcs) == "5-5-5"
+        props = SimpleNamespace(weight_class="Lightweight Bout", card_position=4,
+                                scheduled_format="5-5-5-5-5")
+        assert _expected_time_format(props) == "5-5-5-5-5"                      # props win
+
+    def test_scheduled_format_from_props(self):
+        from app.services.ufc.line_watcher import scheduled_format_from_props
+        assert scheduled_format_from_props({"ou_4.5_over": {}, "ou_1.5_over": {}}) == "5-5-5-5-5"
+        assert scheduled_format_from_props({"sr_5": {}}) == "5-5-5-5-5"
+        assert scheduled_format_from_props({"ou_2.5_over": {}, "red_ko": {}}) == "5-5-5"
+        assert scheduled_format_from_props({"red_ko": {}, "dec_yes": {}}) is None
