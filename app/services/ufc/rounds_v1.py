@@ -1,25 +1,26 @@
 """Fight duration (rounds / over-under) — the served survival model.
 
-Configuration = the winner of the walk-forward bake-off in scripts/rounds_wf.py (arm
-hz_cat_v2_fine_w4): discrete-time competing-risks hazard {continue, KO, Sub}, CatBoost,
-feature set v2 (method_v2 matrix + method ratings + fight-duration history + round-by-round
-pace + short notice + altitude), 1.25-minute bins, 4-year recency half-life. The curve is
-then ANCHORED to method_v2 cause by cause: the KO and Sub curves are each rescaled to
-method_v2's KO and Sub totals (so P(still going at the final bell) = its P(goes the
-distance)), keeping the hazard model's timing — so the site's survival chart, six-way grid
-and O/U always agree. See _anchor_all for the walk-forward result.
+Discrete-time competing-risks hazard with FOUR outcomes per 1.25-minute slice — red KO,
+red submission, blue KO, blue submission (or the fight goes on) — so each fighter's
+finishes get their own timing. CatBoost, feature set v2 (method_v2 matrix + method ratings
++ fight-duration history + round-by-round pace + short notice + altitude) plus the focal
+fighter's and the favourite's win probability, 4-year recency half-life. Each of the four
+cumulative curves is then ANCHORED to its own method_v2 six-way cell (red KO total = the
+grid's red KO, etc.), keeping the hazard model's timing; still going = 1 - sum, so at the
+final bell it equals P(goes the distance). Survival chart, grid and O/U always agree.
 
-Walk-forward (2,450 fights, 2022-06 -> 2026-09), anchored vs base rates (log loss):
-    starts R2 -0.026, O/U 1.5 -0.029, starts R3 -0.034, O/U 2.5 -0.030, round of finish -0.037.
-Against BFO closing prices it does NOT beat the market (a model+market stack is level).
+Walk-forward (scripts/rounds_cause4_wf.py, 2,390 fights) vs the previous 2-outcome model
+with a fixed fighter split: better on every measure, none significant on its own — joint
+who x how x round -0.0014, round of finish -0.0012, starts R2 -0.0013, O/U 1.5 -0.0008.
+Against BFO closing prices it still trails the market, by about twice as much on lopsided
+fights (favourite >= 70%), a gap this version narrows by ~15-20%.
 
 Served per fight (ufc_round_predictions):
-    curve       JSON [{t, s, ko, sub, red_ko, blue_ko, red_sub, blue_sub}] every 1.25 min:
-                s = still going, ko/sub = cumulative finishes by cause. The red/blue split of
-                each cause uses the six-way grid's ratio, held constant over time.
+    curve       JSON [{t, s, ko, sub, red_ko, blue_ko, red_sub, blue_sub}] every 1.25 min,
+                cumulative; each fighter's KO / Sub has its own timing.
     p_end_r1..r5, p_decision, over_1_5 .. over_4_5, expected_minutes,
     median_finish_minute (given a finish), peak_bin_start (minute of the riskiest bin)
-Past fights in the walk-forward window are served from out-of-sample curves.
+Past fights in the walk-forward window are served from out-of-sample curves (OOF4_PATH).
 """
 from __future__ import annotations
 
@@ -33,11 +34,14 @@ import numpy as np
 import pandas as pd
 
 from app.services.ufc.method_v2 import METHOD_DIR, attach_method_features, feature_names, orient
-from app.services.ufc.round_hazard import HazardModel, cause_curves, n_bins
+from app.services.ufc.round_hazard import HazardModel, n_bins
 
 log = logging.getLogger("rounds_v1")
 MODEL_PATH = METHOD_DIR / "rounds_v1.pkl"
-OOF_PATH = METHOD_DIR / "rounds_oof.csv"
+OOF_PATH = METHOD_DIR / "rounds_oof.csv"      # still-going at 2.5-min edges (grade table)
+OOF4_PATH = METHOD_DIR / "rounds_oof4.npz"    # 4 cause curves, fine grid (serving past fights)
+WP_FEATURES = ["wp_view", "wp_fav"]
+CAUSES = ("red_ko", "red_sub", "blue_ko", "blue_sub")
 MATRIX_CACHE = METHOD_DIR / "rounds_wf_matrix.pkl"
 BIN_SIZE = 1.25
 HALF_LIFE_YEARS = 4.0
@@ -97,23 +101,57 @@ def recency_weights(dates: pd.Series, half_life_years: float = HALF_LIFE_YEARS) 
 # train
 # ---------------------------------------------------------------------------
 
-def train_and_save(rebuild: bool = False, oof_csv: Path | None = None) -> HazardModel:
-    """Fit on every training fight. oof_csv: the walk-forward curves for this arm (2.5-minute
-    edges) from scripts/rounds_wf.py, copied for serving past fights out-of-sample."""
+def add_win_prob(views: list[pd.DataFrame], p_red: np.ndarray | None = None) -> None:
+    """wp_view = the focal fighter's win probability (view 0 focal = red, view 1 = blue),
+    wp_fav = the favourite's. p_red: served winner probability; else the devigged market
+    (mkt_w_prob) where priced, else the Elo expectation (how the model was trained)."""
+    for k, v in enumerate(views):
+        if p_red is not None:
+            p = pd.Series(p_red if k == 0 else 1 - np.asarray(p_red, float), index=v.index)
+        else:
+            p = v["mkt_w_prob"] if "mkt_w_prob" in v else pd.Series(np.nan, index=v.index)
+        if "w_elo_expected" in v:
+            p = p.fillna(v["w_elo_expected"])
+        v["wp_view"] = p.to_numpy(float)
+        v["wp_fav"] = np.maximum(v["wp_view"], 1 - v["wp_view"])
+
+
+def cause_events(m: pd.DataFrame) -> list[np.ndarray]:
+    """Per-view outcome codes: 1 focal KO, 2 focal Sub, 3 other KO, 4 other Sub, 0 none."""
+    _, _, event = labels(m)
+    fin_red = (m["red_wins"].to_numpy(float) == 1) & (event > 0)
+    return [np.where(event == 0, 0, np.where(fin_red, event, event + 2)),
+            np.where(event == 0, 0, np.where(~fin_red, event, event + 2))]
+
+
+def train_and_save(rebuild: bool = False, oof_curves: Path | None = None) -> HazardModel:
+    """Fit on every training fight. oof_curves: walk-forward 4-cause curves for the eval
+    window (scripts/rounds_cause4_wf.py arm c4_wp, .npy), saved for serving past fights."""
     m = build_training_matrix(rebuild)
     n = len(m)
     views = [orient(m, np.ones(n, bool)), orient(m, np.zeros(n, bool))]
-    feats = feature_names(views[0], "full")
+    add_win_prob(views)
+    feats = feature_names(views[0], "full") + WP_FEATURES
     t, sched, event = labels(m)
     hm = HazardModel(feats, "catboost", BIN_SIZE, params=CATBOOST)
-    hm.fit(views, t, event, sched, weights=recency_weights(m["date"]))
+    hm.fit(views, t, event, sched, weights=recency_weights(m["date"]), events=cause_events(m))
     hm.meta = {"trained_at": datetime.utcnow().isoformat(timespec="seconds"), "n": n,
-               "last_fight": str(m["date"].max()), "bin": BIN_SIZE, "half_life": HALF_LIFE_YEARS}
+               "last_fight": str(m["date"].max()), "bin": BIN_SIZE, "half_life": HALF_LIFE_YEARS,
+               "outcomes": list(CAUSES)}
     with open(MODEL_PATH, "wb") as f:
         pickle.dump(hm, f)
-    if oof_csv is not None and Path(oof_csv).exists():
-        pd.read_csv(oof_csv, dtype={"fight_id": str}).to_csv(OOF_PATH, index=False)
-    log.info(f"  saved {MODEL_PATH} ({n} fights, {len(feats)} features)")
+    if oof_curves is not None and Path(oof_curves).exists():
+        start = int(n * 0.6)
+        raw = np.load(oof_curves)
+        ids = m["fight_id"].iloc[start:].astype(str).to_numpy()
+        np.savez(OOF4_PATH, fight_id=ids.astype("U32"), curves=raw)
+        # still-going at the 2.5-minute edges, for scripts/build_grade_table.py
+        S = 1 - raw.sum(axis=1)
+        step = int(round(2.5 / BIN_SIZE))
+        out = pd.DataFrame(S[:, ::step], columns=[f"S_{e:g}" for e in np.arange(0, 25.01, 2.5)])
+        out.insert(0, "fight_id", ids)
+        out.to_csv(OOF_PATH, index=False)
+    log.info(f"  saved {MODEL_PATH} ({n} fights, {len(feats)} features, 4 outcomes)")
     return hm
 
 
@@ -147,27 +185,52 @@ def _scheduled(matchup: pd.DataFrame) -> np.ndarray:
     return s
 
 
-def summarize(S, KO, SUB, H, sched, cells, bin_size=BIN_SIZE) -> list[dict]:
-    """Per fight: anchored-curve summary + JSON curve. cells: (n, 6) six-way grid."""
+def curves4(model: HazardModel, views: list[pd.DataFrame], sched: np.ndarray):
+    """(n, 4, E) cumulative incidence (red_ko, red_sub, blue_ko, blue_sub), averaged over the
+    two corner views (view 0 focal = red, view 1 focal = blue)."""
+    from app.services.ufc.round_hazard import view_cause_curves
+    _, C0, _ = view_cause_curves(model, views[0], sched)
+    _, C1, _ = view_cause_curves(model, views[1], sched)
+    return np.stack([(C0[:, 0] + C1[:, 2]) / 2, (C0[:, 1] + C1[:, 3]) / 2,
+                     (C0[:, 2] + C1[:, 0]) / 2, (C0[:, 3] + C1[:, 1]) / 2], axis=1)
+
+
+def anchor_cells(C: np.ndarray, cells: np.ndarray) -> np.ndarray:
+    """Scale each cause curve to its six-way cell, keeping its timing. cells: (n, 6) grid
+    (red_ko, red_sub, red_dec, blue_ko, blue_sub, blue_dec). A cause the hazard model gives
+    ~no mass borrows the total finish curve's shape."""
+    target = cells[:, [0, 1, 3, 4]]
+    end = C.shape[2] - 1
+    tot = C.sum(axis=1)
+    out = np.empty_like(C)
+    for j in range(4):
+        c_end = C[:, j, end]
+        own = C[:, j] * (target[:, j] / np.clip(c_end, 1e-4, None))[:, None]
+        borrowed = tot * (target[:, j] / np.clip(tot[:, end], 1e-4, None))[:, None]
+        out[:, j] = np.where((c_end >= 1e-3)[:, None], own, borrowed)
+    return out
+
+
+def summarize(C: np.ndarray, sched: np.ndarray, bin_size=BIN_SIZE) -> list[dict]:
+    """Per fight: JSON curve + summary from anchored cause curves C (n, 4, E)."""
     out = []
     step = round(5.0 / bin_size)
-    for i in range(len(S)):
+    S_all = np.minimum.accumulate(np.clip(1 - C.sum(axis=1), 0.0, 1.0), axis=1)
+    for i in range(len(C)):
         K = n_bins(sched[i], bin_size)
-        s, ko, sub = S[i, :K + 1], KO[i, :K + 1], SUB[i, :K + 1]
-        rk = cells[i, 0] / max(cells[i, 0] + cells[i, 3], 1e-9)    # red share of KOs
-        rs = cells[i, 1] / max(cells[i, 1] + cells[i, 4], 1e-9)    # red share of subs
+        s = S_all[i, :K + 1]
+        rko, rsub, bko, bsub = (C[i, j, :K + 1] for j in range(4))
         tgrid = np.arange(K + 1) * bin_size
-        curve = [{"t": round(float(t), 3), "s": round(float(a), 4), "ko": round(float(b), 4),
-                  "sub": round(float(c), 4), "red_ko": round(float(b * rk), 4),
-                  "blue_ko": round(float(b * (1 - rk)), 4), "red_sub": round(float(c * rs), 4),
-                  "blue_sub": round(float(c * (1 - rs)), 4)} for t, a, b, c in zip(tgrid, s, ko, sub)]
+        r4 = lambda x: round(float(x), 4)
+        curve = [{"t": round(float(t), 3), "s": r4(a), "ko": r4(b + d), "sub": r4(c + e),
+                  "red_ko": r4(b), "blue_ko": r4(d), "red_sub": r4(c), "blue_sub": r4(e)}
+                 for t, a, b, c, d, e in zip(tgrid, s, rko, rsub, bko, bsub)]
         rounds = int(round(sched[i] / 5))
         p_end = [float(s[r * step] - s[(r + 1) * step]) for r in range(rounds)]
         fin = 1 - s[-1]
-        med = None
-        if fin > 1e-6:
-            frac = (1 - s) / fin
-            med = float(np.interp(0.5, frac, tgrid))
+        med = float(np.interp(0.5, (1 - s) / fin, tgrid)) if fin > 1e-6 else None
+        haz = 1 - s[1:] / np.clip(s[:-1], 1e-9, None)
+
         def over(line):
             k = round(line / bin_size)
             return float(s[k]) if k <= K else None
@@ -176,68 +239,25 @@ def summarize(S, KO, SUB, H, sched, cells, bin_size=BIN_SIZE) -> list[dict]:
             "p_decision": float(s[-1]), "over_1_5": over(7.5), "over_2_5": over(12.5),
             "over_3_5": over(17.5) if rounds == 5 else None, "over_4_5": over(22.5) if rounds == 5 else None,
             "expected_minutes": float(np.trapezoid(s, tgrid)), "median_finish_minute": med,
-            "peak_bin_start": float(np.argmax(H[i, :K]) * bin_size) if H is not None else None,
+            "peak_bin_start": float(np.argmax(haz) * bin_size) if len(haz) else None,
         })
     return out
 
 
-def _anchor_all(S, KO, SUB, p_ko, p_sub, p_dec, sched, bin_size=BIN_SIZE):
-    """Anchor each cause to method_v2's total, keeping the hazard model's timing:
-    KO(t) *= P_ko / KO(end), Sub(t) *= P_sub / Sub(end), S = 1 - KO - Sub. Then S(end) =
-    P(decision) and the curve's KO / Sub totals match the six-way grid, so the survival
-    chart and the winner x method grid tell the same story.
-
-    Walk-forward (scripts/rounds_cause_anchor_wf.py, 2,390 fights): method log loss
-    0.9618 -> 0.9549 and round x method 1.4963 -> 1.4894 (both CIs exclude zero) against
-    anchoring the decision total only; every O/U line and round of finish unchanged
-    (|diff| <= 0.0001).
-
-    Fights with no method_v2 KO / Sub fall back to the decision-only anchor; a cause the
-    hazard model gives (near) no mass borrows the total finish curve's timing."""
-    rows = np.arange(len(S))
-    end = np.array([n_bins(x, bin_size) for x in sched])
-    s_end = S[rows, end]
-    fin = np.clip(1 - s_end, 1e-4, None)
-    # Decision-only anchor: total finish mass scaled to 1 - P(decision).
-    p = np.where(np.isfinite(p_dec), p_dec, s_end)
-    scale = ((1 - p) / fin)[:, None]
-    S1, KO1, SUB1 = 1 - (1 - S) * scale, KO * scale, SUB * scale
-    # Per-cause anchor where method_v2 has both totals.
-    has = np.isfinite(p_ko) & np.isfinite(p_sub)
-    def cause(C, target):
-        c_end = C[rows, end]
-        own = C * (np.where(has, target, 0) / np.clip(c_end, 1e-4, None))[:, None]
-        borrowed = (1 - S) * (np.where(has, target, 0) / fin)[:, None]
-        return np.where((c_end >= 1e-3)[:, None], own, borrowed)
-    KO2, SUB2 = cause(KO, p_ko), cause(SUB, p_sub)
-    S2 = np.minimum.accumulate(np.clip(1 - KO2 - SUB2, 0.0, 1.0), axis=1)
-    pick = has[:, None]
-    return np.where(pick, S2, S1), np.where(pick, KO2, KO1), np.where(pick, SUB2, SUB1)
-
-
-def _oof_curves(ids: np.ndarray, sched: np.ndarray, cells: np.ndarray, p_dec: np.ndarray):
-    """Walk-forward curves (2.5-minute edges) for past fights, mapped onto the 1.25 grid by
-    linear interpolation; KO/Sub split from the six-way grid (no cause curves in the OOF)."""
-    if not OOF_PATH.exists():
+def _oof4(ids: np.ndarray) -> dict:
+    """Out-of-sample raw 4-cause curves for past fights in the walk-forward window."""
+    if not OOF4_PATH.exists():
         return {}
-    oof = pd.read_csv(OOF_PATH, dtype={"fight_id": str}).set_index("fight_id")
-    edges = np.arange(0, 25.01, 2.5)
-    fine = np.arange(0, 25.01, BIN_SIZE)
-    out = {}
-    for i, fid in enumerate(ids):
-        if fid not in oof.index:
-            continue
-        s = np.interp(fine, edges, oof.loc[fid, [f"S_{e:g}" for e in edges]].to_numpy(float))
-        ko_share = (cells[i, 0] + cells[i, 3]) / max(cells[i, 0] + cells[i, 3] + cells[i, 1] + cells[i, 4], 1e-9)
-        out[fid] = (s, (1 - s) * ko_share, (1 - s) * (1 - ko_share))
-    return out
+    z = np.load(OOF4_PATH)
+    pos = {f: k for k, f in enumerate(z["fight_id"].astype(str))}
+    return {f: z["curves"][pos[f]] for f in ids if f in pos}
 
 
 def generate_predictions(model: HazardModel | None = None) -> int:
     """Score every fight and replace ufc_round_predictions. Run after method_v2 has written
-    ufc_method_predictions (it anchors to those decision probabilities)."""
+    ufc_method_predictions (each cause curve anchors to its six-way cell)."""
     from app.database import SessionLocal, engine
-    from app.models.ufc import UFCMethodPrediction, UFCRoundPrediction
+    from app.models.ufc import UFCFightPrediction, UFCMethodPrediction, UFCRoundPrediction
 
     model = model or load()
     if model is None:
@@ -249,32 +269,27 @@ def generate_predictions(model: HazardModel | None = None) -> int:
     db = SessionLocal()
     try:
         mp = {str(r.fight_id): r for r in db.query(UFCMethodPrediction)}
+        red_prob = {str(f): p for f, p in db.query(UFCFightPrediction.fight_id, UFCFightPrediction.red_prob)}
     finally:
         db.close()
+    cols = ("red_ko_prob", "red_sub_prob", "red_dec_prob", "blue_ko_prob", "blue_sub_prob", "blue_dec_prob")
     cells = np.array([[getattr(mp[f], c) if f in mp and getattr(mp[f], c) is not None else np.nan
-                       for c in ("red_ko_prob", "red_sub_prob", "red_dec_prob",
-                                 "blue_ko_prob", "blue_sub_prob", "blue_dec_prob")] for f in ids], float)
-    p_dec = np.array([mp[f].dec_prob if f in mp else np.nan for f in ids], float)
-    p_ko = np.array([mp[f].ko_prob if f in mp and mp[f].ko_prob is not None else np.nan for f in ids], float)
-    p_sub = np.array([mp[f].sub_prob if f in mp and mp[f].sub_prob is not None else np.nan for f in ids], float)
+                       for c in cols] for f in ids], float)
     cells = np.where(np.isnan(cells), 1 / 6, cells)
+    p_red = np.array([red_prob.get(f, np.nan) for f in ids], float)
 
     n = len(matchup)
     views = [orient(matchup, np.ones(n, bool)), orient(matchup, np.zeros(n, bool))]
+    add_win_prob(views, p_red)            # served winner probability; Elo where missing
     views = [v.reindex(columns=model.base_features) for v in views]
-    cur = cause_curves(model, views, sched)
-    S, KO, SUB = _anchor_all(cur["S"], cur["KO"], cur["SUB"], p_ko, p_sub, p_dec, sched)
-    H = cur["H"]
-    oof = _oof_curves(ids, sched, cells, p_dec)
+    C = curves4(model, views, sched)
+    oof = _oof4(ids)
     for i, fid in enumerate(ids):
         if fid in oof:
-            s, ko, sub = oof[fid]
-            S[i], KO[i], SUB[i] = s, ko, sub
-    # The walk-forward curves are the raw arm output; anchor everything (idempotent for the
-    # curves anchored above).
-    S, KO, SUB = _anchor_all(S, KO, SUB, p_ko, p_sub, p_dec, sched)
+            C[i] = oof[fid]
+    C = anchor_cells(C, cells)
     log.info(f"  {len(oof)} past fights use out-of-sample round curves")
-    summaries = summarize(S, KO, SUB, H, sched, cells)
+    summaries = summarize(C, sched)
 
     db = SessionLocal()
     try:
@@ -315,9 +330,9 @@ def _cli() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--train", action="store_true")
     ap.add_argument("--rebuild", action="store_true")
-    ap.add_argument("--oof", default=str(METHOD_DIR / "rounds_wf" / "hz_cat_v2_fine_w4.csv"),
-                    help="walk-forward curves (scripts/rounds_wf.py arm output) served for past "
-                         "fights; anchored to method_v2 at serve time")
+    ap.add_argument("--oof", default=str(METHOD_DIR / "rounds_wf" / "cause4_c4_wp.npy"),
+                    help="walk-forward 4-cause curves (scripts/rounds_cause4_wf.py, arm c4_wp) "
+                         "served for past fights; anchored to method_v2 at serve time")
     ap.add_argument("--predict", action="store_true")
     a = ap.parse_args()
     if a.train:

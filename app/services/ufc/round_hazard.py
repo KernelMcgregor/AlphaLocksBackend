@@ -135,8 +135,14 @@ class HazardModel:
         parts.append(D)
         return np.hstack(parts)
 
-    def fit(self, views: list[pd.DataFrame], t, event, sched, weights=None) -> "HazardModel":
-        parts = [person_period(v, t, event, sched, self.bin_size, weights) for v in views]
+    def fit(self, views: list[pd.DataFrame], t, event, sched, weights=None,
+            events: list[np.ndarray] | None = None) -> "HazardModel":
+        """events: optional per-view outcome codes (default: `event` for every view). Used
+        for corner-specific outcomes, where 'focal fighter's KO' differs between the two
+        corner views (codes 1..K; 0 = still going / decision)."""
+        events = events or [event] * len(views)
+        self.n_causes = int(max(int(np.max(e)) for e in events))
+        parts = [person_period(v, t, ev, sched, self.bin_size, weights) for v, ev in zip(views, events)]
         rows = pd.concat([p[0] for p in parts], ignore_index=True)
         y = np.concatenate([p[1] for p in parts])
         w = None if weights is None else np.concatenate([p[3] for p in parts])
@@ -166,7 +172,13 @@ class HazardModel:
 
     def hazards(self, rows: pd.DataFrame) -> np.ndarray:
         p = self.model.predict_proba(self._design(rows))
-        return p[:, 1:3] if p.shape[1] == 3 else np.column_stack([p[:, 1], np.zeros(len(p))])
+        classes = [int(c) for c in getattr(self.model, "classes_", range(p.shape[1]))]
+        K = getattr(self, "n_causes", 2)
+        out = np.zeros((len(p), K))
+        for j, c in enumerate(classes):
+            if 1 <= c <= K:
+                out[:, c - 1] = p[:, j]
+        return out                        # (n, K): hazard of each outcome in the bin
 
     def survival(self, views: list[pd.DataFrame], sched: np.ndarray) -> np.ndarray:
         """(n, 11) S at the 2.5-minute edges 0 .. 25, averaged over corner views. Beyond a
@@ -184,6 +196,26 @@ class HazardModel:
                 S[i, len(coarse):] = coarse[-1]
             curves.append(S)
         return np.mean(curves, axis=0)
+
+
+def view_cause_curves(model: "HazardModel", view: pd.DataFrame, sched: np.ndarray):
+    """One corner view: S (n, E), cumulative incidence per outcome C (n, K, E), total
+    hazard per bin H (n, E-1), at bin edges 0 .. 25 min; flat past the scheduled end."""
+    nb = n_bins(25.0, model.bin_size)
+    rows, reps, bins = all_bins(view, sched, model.bin_size)
+    hz = np.clip(model.hazards(rows), 0, 0.999)
+    K = hz.shape[1]
+    S = np.ones((len(view), nb + 1)); C = np.zeros((len(view), K, nb + 1)); H = np.zeros((len(view), nb))
+    for i in range(len(view)):
+        h = hz[reps == i]
+        tot = np.clip(h.sum(axis=1), 0, 0.999)
+        surv = np.concatenate([[1.0], np.cumprod(1 - tot)])
+        k = len(h)
+        S[i, :k + 1] = surv; S[i, k + 1:] = surv[-1]
+        C[i, :, 1:k + 1] = np.cumsum(surv[:-1, None] * h, axis=0).T
+        C[i, :, k + 1:] = C[i, :, k:k + 1]
+        H[i, :k] = tot
+    return S, C, H
 
 
 def cause_curves(model: "HazardModel", views: list[pd.DataFrame], sched: np.ndarray):

@@ -59,3 +59,22 @@ def test_fine_bins_and_anchor():
     p_dec = np.full(n, 0.6)
     A = anchor(S, p_dec, sched)
     assert np.allclose(A[:, 6], 0.6) and np.all(np.diff(A, axis=1) <= 1e-12)
+
+
+def test_four_outcome_anchoring_and_summary():
+    from app.services.ufc.rounds_v1 import anchor_cells, summarize
+    E = 13                                            # 3-round fight on the 1.25-min grid
+    t = np.linspace(0, 1, E)
+    raw = np.stack([0.20 * t, 0.05 * t ** 2, 0.10 * np.sqrt(t), 0.02 * t], axis=0)[None]  # (1, 4, E)
+    raw = np.concatenate([raw, np.repeat(raw[:, :, -1:], 21 - E, axis=2)], axis=2)        # flat past 15:00
+    cells = np.array([[0.30, 0.08, 0.25, 0.12, 0.05, 0.20]])                              # sums to 1
+    C = anchor_cells(raw, cells)
+    assert np.allclose(C[0, :, -1], [0.30, 0.08, 0.12, 0.05])     # each cause hits its own cell
+    # timing kept: red KO is linear, blue KO front-loaded (sqrt) -> different shapes
+    assert C[0, 2, 3] / C[0, 2, -1] > C[0, 0, 3] / C[0, 0, -1]
+    sm = summarize(C, np.array([15.0]))[0]
+    assert abs(sm["p_decision"] - (0.25 + 0.20)) < 1e-6           # = grid's decision cells
+    assert abs(sum(sm[f"p_end_r{r}"] for r in (1, 2, 3)) + sm["p_decision"] - 1) < 1e-6
+    pts = sm["curve"]
+    assert all(a["s"] >= b["s"] for a, b in zip(pts, pts[1:]))
+    assert abs(pts[-1]["red_ko"] - 0.30) < 1e-4 and abs(pts[-1]["blue_sub"] - 0.05) < 1e-4
