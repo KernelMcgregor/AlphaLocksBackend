@@ -4,9 +4,10 @@ Configuration = the winner of the walk-forward bake-off in scripts/rounds_wf.py 
 hz_cat_v2_fine_w4): discrete-time competing-risks hazard {continue, KO, Sub}, CatBoost,
 feature set v2 (method_v2 matrix + method ratings + fight-duration history + round-by-round
 pace + short notice + altitude), 1.25-minute bins, 4-year recency half-life. The curve is
-then ANCHORED to method_v2: its finish mass is rescaled so P(still going at the final bell)
-equals the served P(goes the distance), keeping the hazard model's timing shape — so the
-site's decision %, six-way grid and O/U always agree.
+then ANCHORED to method_v2 cause by cause: the KO and Sub curves are each rescaled to
+method_v2's KO and Sub totals (so P(still going at the final bell) = its P(goes the
+distance)), keeping the hazard model's timing — so the site's survival chart, six-way grid
+and O/U always agree. See _anchor_all for the walk-forward result.
 
 Walk-forward (2,450 fights, 2022-06 -> 2026-09), anchored vs base rates (log loss):
     starts R2 -0.026, O/U 1.5 -0.029, starts R3 -0.034, O/U 2.5 -0.030, round of finish -0.037.
@@ -180,13 +181,38 @@ def summarize(S, KO, SUB, H, sched, cells, bin_size=BIN_SIZE) -> list[dict]:
     return out
 
 
-def _anchor_all(S, KO, SUB, p_dec, sched, bin_size=BIN_SIZE):
-    """Rescale finish mass so S(end) = p_dec, keeping timing and the KO/Sub split."""
+def _anchor_all(S, KO, SUB, p_ko, p_sub, p_dec, sched, bin_size=BIN_SIZE):
+    """Anchor each cause to method_v2's total, keeping the hazard model's timing:
+    KO(t) *= P_ko / KO(end), Sub(t) *= P_sub / Sub(end), S = 1 - KO - Sub. Then S(end) =
+    P(decision) and the curve's KO / Sub totals match the six-way grid, so the survival
+    chart and the winner x method grid tell the same story.
+
+    Walk-forward (scripts/rounds_cause_anchor_wf.py, 2,390 fights): method log loss
+    0.9618 -> 0.9549 and round x method 1.4963 -> 1.4894 (both CIs exclude zero) against
+    anchoring the decision total only; every O/U line and round of finish unchanged
+    (|diff| <= 0.0001).
+
+    Fights with no method_v2 KO / Sub fall back to the decision-only anchor; a cause the
+    hazard model gives (near) no mass borrows the total finish curve's timing."""
+    rows = np.arange(len(S))
     end = np.array([n_bins(x, bin_size) for x in sched])
-    s_end = S[np.arange(len(S)), end]
+    s_end = S[rows, end]
+    fin = np.clip(1 - s_end, 1e-4, None)
+    # Decision-only anchor: total finish mass scaled to 1 - P(decision).
     p = np.where(np.isfinite(p_dec), p_dec, s_end)
-    scale = ((1 - p) / np.clip(1 - s_end, 1e-4, None))[:, None]
-    return 1 - (1 - S) * scale, KO * scale, SUB * scale
+    scale = ((1 - p) / fin)[:, None]
+    S1, KO1, SUB1 = 1 - (1 - S) * scale, KO * scale, SUB * scale
+    # Per-cause anchor where method_v2 has both totals.
+    has = np.isfinite(p_ko) & np.isfinite(p_sub)
+    def cause(C, target):
+        c_end = C[rows, end]
+        own = C * (np.where(has, target, 0) / np.clip(c_end, 1e-4, None))[:, None]
+        borrowed = (1 - S) * (np.where(has, target, 0) / fin)[:, None]
+        return np.where((c_end >= 1e-3)[:, None], own, borrowed)
+    KO2, SUB2 = cause(KO, p_ko), cause(SUB, p_sub)
+    S2 = np.minimum.accumulate(np.clip(1 - KO2 - SUB2, 0.0, 1.0), axis=1)
+    pick = has[:, None]
+    return np.where(pick, S2, S1), np.where(pick, KO2, KO1), np.where(pick, SUB2, SUB1)
 
 
 def _oof_curves(ids: np.ndarray, sched: np.ndarray, cells: np.ndarray, p_dec: np.ndarray):
@@ -229,13 +255,15 @@ def generate_predictions(model: HazardModel | None = None) -> int:
                        for c in ("red_ko_prob", "red_sub_prob", "red_dec_prob",
                                  "blue_ko_prob", "blue_sub_prob", "blue_dec_prob")] for f in ids], float)
     p_dec = np.array([mp[f].dec_prob if f in mp else np.nan for f in ids], float)
+    p_ko = np.array([mp[f].ko_prob if f in mp and mp[f].ko_prob is not None else np.nan for f in ids], float)
+    p_sub = np.array([mp[f].sub_prob if f in mp and mp[f].sub_prob is not None else np.nan for f in ids], float)
     cells = np.where(np.isnan(cells), 1 / 6, cells)
 
     n = len(matchup)
     views = [orient(matchup, np.ones(n, bool)), orient(matchup, np.zeros(n, bool))]
     views = [v.reindex(columns=model.base_features) for v in views]
     cur = cause_curves(model, views, sched)
-    S, KO, SUB = _anchor_all(cur["S"], cur["KO"], cur["SUB"], p_dec, sched)
+    S, KO, SUB = _anchor_all(cur["S"], cur["KO"], cur["SUB"], p_ko, p_sub, p_dec, sched)
     H = cur["H"]
     oof = _oof_curves(ids, sched, cells, p_dec)
     for i, fid in enumerate(ids):
@@ -244,7 +272,7 @@ def generate_predictions(model: HazardModel | None = None) -> int:
             S[i], KO[i], SUB[i] = s, ko, sub
     # The walk-forward curves are the raw arm output; anchor everything (idempotent for the
     # curves anchored above).
-    S, KO, SUB = _anchor_all(S, KO, SUB, p_dec, sched)
+    S, KO, SUB = _anchor_all(S, KO, SUB, p_ko, p_sub, p_dec, sched)
     log.info(f"  {len(oof)} past fights use out-of-sample round curves")
     summaries = summarize(S, KO, SUB, H, sched, cells)
 
