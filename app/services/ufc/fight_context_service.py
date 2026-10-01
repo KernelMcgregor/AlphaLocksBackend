@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.models.ufc import (
     UFCFight, UFCFighter, UFCFighterRanking, UFCGlickoSnapshot,
 )
+from app.services.ufc.fighter_registry import classify_weight_class
 
 
 # ---------------------------------------------------------------------------
@@ -80,8 +81,28 @@ def _days_since_last_fight(db: Session, fighter_id: int) -> int | None:
     return (date.today() - fight_date).days
 
 
+def _division_key(wc: str | None) -> str | None:
+    """A weight class reduced to its division, so a title or interim-title bout counts as
+    the same division as a regular bout in that class ("UFC Interim Flyweight Title Bout"
+    and "Flyweight Bout" are both flyweight). Classes the shared classifier cannot place
+    (catchweights, open weight) fall back to their cleaned name."""
+    if wc is None:
+        return None
+    key = classify_weight_class(wc)
+    return key if key != "unknown" else _division_label(wc).lower()
+
+
+def _division_label(wc: str) -> str:
+    """Display name: "UFC Interim Flyweight Title Bout" -> "Flyweight"."""
+    words = [w for w in wc.replace("Bout", " ").split()
+             if w.lower() not in ("ufc", "interim", "title", "world", "championship", "bout")]
+    return " ".join(words) or wc.strip()
+
+
 def _division_change(db: Session, fighter_id: int, current_weight_class: str | None) -> dict:
-    """Check if this is a UFC debut or division change."""
+    """Check if this is a UFC debut or a change of division from the fighter's last bout.
+    Title and interim-title bouts are not a change: a flyweight champion defending is
+    still at flyweight."""
     past_fights = (
         db.query(UFCFight.weight_class)
         .filter(
@@ -98,12 +119,12 @@ def _division_change(db: Session, fighter_id: int, current_weight_class: str | N
     changed = (
         current_weight_class is not None
         and prev_class is not None
-        and current_weight_class.strip().lower() != prev_class.strip().lower()
+        and _division_key(current_weight_class) != _division_key(prev_class)
     )
     return {
         "ufc_debut": False,
         "division_change": changed,
-        "previous_division": prev_class if changed else None,
+        "previous_division": _division_label(prev_class) if changed else None,
     }
 
 
