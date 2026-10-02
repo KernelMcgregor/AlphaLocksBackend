@@ -87,3 +87,17 @@ def test_against_is_the_opponents_for(version):
     pairs = pairs[pairs["stats_fighter_id"] != pairs["stats_fighter_id_o"]]
     np.testing.assert_allclose(pairs["xs_sig_against"], pairs["xs_sig_for_o"], rtol=1e-9)
     np.testing.assert_allclose(pairs["xs_ctrl_against"], pairs["xs_ctrl_for_o"], rtol=1e-9)
+
+
+def test_display_length_distribution_and_p_more():
+    from app.services.ufc.expected_stats_serving import SUPPORT, _length_dist, _p_more
+    t = np.arange(0, 25.01, 1.25)
+    s = np.clip(1 - 0.02 * t, 0, 1)
+    T, P = _length_dist((t, s), 15.0)
+    assert abs(P.sum() - 1) < 1e-12 and T.max() == 15.0
+    assert abs(P[-1] - (1 - 0.02 * 15) / (1 - 0.02 * 0)) < 1e-9   # decision mass = S(15)
+    disp = {"theta": 4.0}
+    assert abs(_p_more(5.0, 5.0, T, P, disp, SUPPORT["sig"]) - 0.5) < 1e-9
+    a = _p_more(6.0, 4.0, T, P, disp, SUPPORT["sig"])
+    b = _p_more(4.0, 6.0, T, P, disp, SUPPORT["sig"])
+    assert a > 0.5 and abs(a + b - 1) < 1e-9

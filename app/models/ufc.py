@@ -344,6 +344,61 @@ class UFCRoundPrediction(TimestampMixin, Base):
     peak_bin_start: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
+#: Stats stored in ufc_expected_stat_predictions, and the per-stat columns each carries.
+XS_DISPLAY_STATS = ("sig", "td", "kd", "sub", "ctrl")
+XS_DISPLAY_FIELDS = ("rate", "expected", "p10", "p90", "if_distance")
+
+
+class UFCExpectedStatPrediction(TimestampMixin, Base):
+    """Expected stats per fighter per bout, for display (expected_stats_serving.py).
+
+    Expected-stats v2 with Glicko covariates (the best stat forecaster; never a winner
+    feature). Past bouts carry their walk-forward (pre-fight) values. Totals combine the
+    per-minute rate with the bout's fight-length curve from ufc_round_predictions;
+    p10/p90 are the 10th/90th percentiles of that predictive distribution. Control is in
+    seconds. Replaced on every prediction run."""
+
+    __tablename__ = "ufc_expected_stat_predictions"
+    __table_args__ = (
+        UniqueConstraint("fight_id", "fighter_id"),
+        {"schema": UFC_SCHEMA},
+    )
+
+    fight_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_fights.id")), index=True)
+    fighter_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_fighters.id")), index=True)
+    model_version: Mapped[str] = mapped_column(String(20))
+    sig_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sig_expected: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sig_p10: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sig_p90: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sig_if_distance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    td_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    td_expected: Mapped[float | None] = mapped_column(Float, nullable=True)
+    td_p10: Mapped[float | None] = mapped_column(Float, nullable=True)
+    td_p90: Mapped[float | None] = mapped_column(Float, nullable=True)
+    td_if_distance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    kd_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    kd_expected: Mapped[float | None] = mapped_column(Float, nullable=True)
+    kd_p10: Mapped[float | None] = mapped_column(Float, nullable=True)
+    kd_p90: Mapped[float | None] = mapped_column(Float, nullable=True)
+    kd_if_distance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sub_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sub_expected: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sub_p10: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sub_p90: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sub_if_distance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ctrl_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ctrl_expected: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ctrl_p10: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ctrl_p90: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ctrl_if_distance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #: P(this fighter lands strictly more than the opponent), ties excluded
+    sig_p_more: Mapped[float | None] = mapped_column(Float, nullable=True)
+    td_p_more: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #: share of the bout this fighter is expected to spend in control (0-1)
+    ctrl_share: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
 class UFCPropOddsHistory(Base):
     """Append-only prop-market snapshots: BestFightOdds consensus, de-vigged.
 

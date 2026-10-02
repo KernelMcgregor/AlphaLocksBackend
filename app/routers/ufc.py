@@ -481,6 +481,10 @@ def _build_fight(db: Session, fight_id: int):
     from app.services.ufc.rounds_v1 import round_payload
     result["round_prediction"] = round_payload(db, fight_id)
 
+    # Expected stats per corner (expected_stats_serving), if generated.
+    from app.services.ufc.expected_stats_serving import expected_stats_payload
+    result["expected_stats"] = expected_stats_payload(db, fight_id)
+
     return result
 
 

@@ -422,6 +422,12 @@ def generate_predictions(model: ConditionalMethodModel | None = None) -> int:
             rounds_v1.generate_predictions()
     except Exception as e:  # never let the rounds layer block method predictions
         log.error(f"  round predictions failed: {e}")
+    # Expected stats for display turn rates into totals with those duration curves.
+    try:
+        from app.services.ufc import expected_stats_serving
+        expected_stats_serving.generate_predictions()
+    except Exception as e:  # display only: never block method / round predictions
+        log.error(f"  expected-stat predictions failed: {e}")
     return len(preds)
 
 
