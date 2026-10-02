@@ -272,21 +272,33 @@ def _win_rate_6(bouts: list[_Bout], before: date) -> float:
     return credit / len(prior)
 
 
-def _resume(bouts_by_fighter: dict[int, list[_Bout]], fid: int, before: date) -> float:
+def _resume(bouts_by_fighter: dict[int, list[_Bout]], fid: int, before: date,
+            loss_credit: float | None = None) -> float:
     """How much fighter `fid` had proven themselves as of `before`.
 
     Summed, not averaged, over up to 6 bouts — which is what makes a short UFC record
     score low by construction: "a fighter with only 1 or 2 UFC fights will only have 1 or
     2 opponent tier numbers being added together instead of 6."
+
+    A loss earns `loss_credit * strength**2`. Squared, so losing to a fighter who had been
+    winning everything is worth something and losing to a .500 fighter is worth little.
+    Without it, a veteran whose last six were losses to Oliveira, Poirier and Pimblett
+    (Michael Chandler) sits at tier 1 — the same as a 0-3 newcomer — and beating him is
+    worth nothing.
     """
+    loss_credit = LOSS_CREDIT if loss_credit is None else loss_credit
     own = bouts_by_fighter.get(fid)
     if not own:
         return 0.0
     total = 0.0
     for b in _last_n_before(own, before):
-        credit = 1.0 if b.won else (0.5 if b.drew else 0.0)
         opp_strength = _win_rate_6(bouts_by_fighter.get(b.opponent_id, []), b.date)
-        total += credit * opp_strength
+        if b.won:
+            total += opp_strength
+        elif b.drew:
+            total += 0.5 * opp_strength
+        else:
+            total += loss_credit * opp_strength ** 2
     return total
 
 
@@ -308,10 +320,19 @@ def _resume(bouts_by_fighter: dict[int, list[_Bout]], fid: int, before: date) ->
 TIER_INTERCEPT = -0.9
 TIER_SLOPE = 2.5
 
+#: Credit an opponent's LOSS earns toward their resume, scaled by the square of the
+#: winner's strength (see `_resume`). 0.0 is the original, losses-count-for-nothing
+#: recursion. Changing it moves every resume, so TIER_INTERCEPT/TIER_SLOPE must be refit
+#: with it — `scripts/fit_tier_line.py` does both.
+LOSS_CREDIT = 0.0
 
-def opponent_tier(resume: float) -> int:
+
+def opponent_tier(resume: float, intercept: float | None = None,
+                  slope: float | None = None) -> int:
     """Resume score -> tier 1-10."""
-    return max(1, min(N_TIERS, round(TIER_INTERCEPT + TIER_SLOPE * resume)))
+    a = TIER_INTERCEPT if intercept is None else intercept
+    b = TIER_SLOPE if slope is None else slope
+    return max(1, min(N_TIERS, round(a + b * resume)))
 
 
 # ---------------------------------------------------------------------------
@@ -404,14 +425,18 @@ def build_history(db, as_of: date | None = None) -> dict:
     # specific point in time". `_resume` is bounded at the bout date for exactly this
     # reason: a bout's credit must not change years later because the opponent's career
     # continued.
+    #: The raw resume behind each tier is kept so a refit of the tier line can re-bucket
+    #: without redoing the recursion.
+    resumes: dict[tuple[int, int], float] = {}
     tiers: dict[tuple[int, int], int] = {}      # (fighter_id, fight_id) -> opponent tier
     for d, fid, fight_id, opp in timeline:
-        tiers[(fid, fight_id)] = opponent_tier(_resume(bouts_by_fighter, opp, d))
+        resumes[(fid, fight_id)] = _resume(bouts_by_fighter, opp, d)
+        tiers[(fid, fight_id)] = opponent_tier(resumes[(fid, fight_id)])
 
     from app.services.ufc.champions import load_title_bouts
 
     return {
-        "bouts": bouts_by_fighter, "tiers": tiers, "names": names,
+        "bouts": bouts_by_fighter, "tiers": tiers, "resumes": resumes, "names": names,
         "status": status, "activity": {f: sorted(ds) for f, ds in activity.items()},
         "div_bouts": div_bouts, "title_bouts": load_title_bouts(db),
     }

@@ -17,14 +17,23 @@ from __future__ import annotations
 import math
 import re
 
-_JUDGE = re.compile(r"([A-Za-z][^.\d]*?)\s+(\d+)\s*-\s*(\d+)")
+_SCORE = re.compile(r"(\d+)\s*-\s*(\d+)")
 
 
 def parse(details: str | None) -> list[tuple[str, int, int]]:
-    """-> [(judge, winner_pts, loser_pts)] (for draws: just the two numbers as listed)."""
+    """-> [(judge, winner_pts, loser_pts)] (for draws: just the two numbers as listed).
+
+    The judge is whatever text precedes each score, so "Andrew Hopper Jr. 27 - 30" keeps
+    its judge and a card UFCStats lists without a name ("Chris Lee 28 - 29. 28 - 29.")
+    still counts, with judge "". (An earlier name regex dropped both, losing a judge.)"""
     if not isinstance(details, str):  # None / NaN from a DataFrame
         return []
-    return [(j.strip(), int(b), int(a)) for j, a, b in _JUDGE.findall(details)]
+    out, prev = [], 0
+    for m in _SCORE.finditer(details):
+        name = details[prev:m.start()].strip().lstrip(".").strip()
+        out.append((name, int(m.group(2)), int(m.group(1))))
+        prev = m.end()
+    return out
 
 
 def winner_margin(details: str | None) -> float | None:

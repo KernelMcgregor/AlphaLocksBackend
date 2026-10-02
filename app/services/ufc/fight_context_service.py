@@ -312,7 +312,7 @@ def _completed_bouts(db: Session, fighter_id: int) -> list[UFCFight]:
 
 def _bout_summary(fight: UFCFight, fighter_id: int) -> dict:
     return {
-        "fight_id": fight.id,
+        "fight_id": str(fight.id),
         "date": str(fight.date) if fight.date else None,
         "won": fight.winner_id == fighter_id,
         "method": (fight.method or "").strip() or None,
@@ -348,7 +348,9 @@ def _common_opponents(db: Session, red_id: int, blue_id: int) -> list[dict]:
 
     rows = [
         {
-            "opponent_id": opp_id,
+            # A string: these ids are past 2^53, and a JSON number is rounded by the
+            # browser into a different (nonexistent) fighter -- no portrait, dead link.
+            "opponent_id": str(opp_id),
             "opponent_name": names.get(opp_id, "Unknown"),
             "red": _bout_summary(red_bouts[opp_id], red_id),
             "blue": _bout_summary(blue_bouts[opp_id], blue_id),
@@ -363,7 +365,7 @@ def _common_opponents(db: Session, red_id: int, blue_id: int) -> list[dict]:
 
 def _corner(db: Session, fight: UFCFight, fighter: UFCFighter) -> dict:
     return {
-        "fighter_id": fighter.id,
+        "fighter_id": str(fighter.id),
         "age": _age(fighter),
         # Pre-fight ratings; the percentiles come from the fighter's CURRENT
         # divisional profile, so for a past fight they read "as of today".

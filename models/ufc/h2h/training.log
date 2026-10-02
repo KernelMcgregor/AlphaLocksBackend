@@ -9123,3 +9123,786 @@ weighted avg       0.76      0.76      0.76       557
 2026-10-01 02:47:12,443 INFO [model]   Added 195 upcoming fights using latest fighter features
 2026-10-01 02:47:12,443 INFO [model]   Loading odds for predictions...
 2026-10-01 02:47:18,506 INFO [model]   Odds matched: 2888/11353 fights (25.4%)
+2026-10-01 19:52:58,324 INFO [glicko_service]   Loading fight data...
+2026-10-01 19:52:58,330 INFO [glicko_service]   Loading fight data...
+2026-10-01 19:52:59,076 INFO [glicko_service]   Loaded 11616 fights
+2026-10-01 19:52:59,077 INFO [glicko_service]   Loading per-round stats...
+2026-10-01 19:52:59,089 INFO [glicko_service]   Loaded 11616 fights
+2026-10-01 19:52:59,089 INFO [glicko_service]   Loading per-round stats...
+2026-10-01 19:53:05,185 INFO [glicko_service]   Loaded rounds for 11286 fights
+2026-10-01 19:53:05,186 INFO [glicko_service]   Loading per-fight derived totals...
+2026-10-01 19:53:05,213 INFO [glicko_service]   Loaded rounds for 11286 fights
+2026-10-01 19:53:05,215 INFO [glicko_service]   Loading per-fight derived totals...
+2026-10-01 19:53:10,099 INFO [glicko_service]   Loaded 22572 derived totals rows
+2026-10-01 19:53:10,144 INFO [glicko_service]   Loaded 22572 derived totals rows
+2026-10-01 19:53:10,544 INFO [glicko_service]   Loaded 4617 fighters
+2026-10-01 19:53:10,552 INFO [glicko_service]   Loaded 4617 fighters
+2026-10-01 19:53:11,015 INFO [glicko_service]   Computing weight class baseline rates...
+2026-10-01 19:53:11,026 INFO [glicko_service]   Computing weight class baseline rates...
+2026-10-01 19:53:11,302 INFO [glicko_service]     P4P: 1 rounds, KD=0.0000, SUB=0.0000, TD=0.0000, td15s_cap=10.0, ctrl15g_cap=10.0, gnp15g_cap=10.0
+2026-10-01 19:53:11,304 INFO [glicko_service]     Flyweight: 1667 rounds, KD=0.0223, SUB=0.0687, TD=0.0837, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=79.1
+2026-10-01 19:53:11,306 INFO [glicko_service]     Bantamweight: 3013 rounds, KD=0.0254, SUB=0.0624, TD=0.0770, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=84.0
+2026-10-01 19:53:11,310 INFO [glicko_service]     Featherweight: 3365 rounds, KD=0.0254, SUB=0.0663, TD=0.0792, td15s_cap=26.8, ctrl15g_cap=15.0, gnp15g_cap=85.3
+2026-10-01 19:53:11,317 INFO [glicko_service]     Lightweight: 4960 rounds, KD=0.0249, SUB=0.0827, TD=0.0845, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=77.6
+2026-10-01 19:53:11,321 INFO [glicko_service]     P4P: 1 rounds, KD=0.0000, SUB=0.0000, TD=0.0000, td15s_cap=10.0, ctrl15g_cap=10.0, gnp15g_cap=10.0
+2026-10-01 19:53:11,322 INFO [glicko_service]     Flyweight: 1667 rounds, KD=0.0223, SUB=0.0687, TD=0.0837, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=79.1
+2026-10-01 19:53:11,322 INFO [glicko_service]     Welterweight: 4416 rounds, KD=0.0297, SUB=0.0721, TD=0.0818, td15s_cap=28.1, ctrl15g_cap=15.0, gnp15g_cap=77.8
+2026-10-01 19:53:11,325 INFO [glicko_service]     Bantamweight: 3013 rounds, KD=0.0254, SUB=0.0624, TD=0.0770, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=84.0
+2026-10-01 19:53:11,326 INFO [glicko_service]     Middleweight: 4028 rounds, KD=0.0296, SUB=0.0745, TD=0.0734, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=94.7
+2026-10-01 19:53:11,328 INFO [glicko_service]     Light Heavyweight: 2462 rounds, KD=0.0332, SUB=0.0515, TD=0.0675, td15s_cap=26.3, ctrl15g_cap=15.0, gnp15g_cap=106.6
+2026-10-01 19:53:11,328 INFO [glicko_service]     Featherweight: 3365 rounds, KD=0.0254, SUB=0.0663, TD=0.0792, td15s_cap=26.8, ctrl15g_cap=15.0, gnp15g_cap=85.3
+2026-10-01 19:53:11,330 INFO [glicko_service]     Heavyweight: 2651 rounds, KD=0.0323, SUB=0.0576, TD=0.0590, td15s_cap=23.1, ctrl15g_cap=15.0, gnp15g_cap=103.8
+2026-10-01 19:53:11,330 INFO [glicko_service]     P4P: 1 rounds, KD=0.0000, SUB=0.0000, TD=0.0000, td15s_cap=10.0, ctrl15g_cap=10.0, gnp15g_cap=10.0
+2026-10-01 19:53:11,332 INFO [glicko_service]     Strawweight: 1380 rounds, KD=0.0092, SUB=0.0493, TD=0.0696, td15s_cap=23.4, ctrl15g_cap=15.0, gnp15g_cap=64.7
+2026-10-01 19:53:11,332 INFO [glicko_service]     Lightweight: 4960 rounds, KD=0.0249, SUB=0.0827, TD=0.0845, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=77.6
+2026-10-01 19:53:11,332 INFO [glicko_service]     Flyweight: 1059 rounds, KD=0.0077, SUB=0.0465, TD=0.0616, td15s_cap=22.2, ctrl15g_cap=15.0, gnp15g_cap=77.1
+2026-10-01 19:53:11,333 INFO [glicko_service]     Bantamweight: 1003 rounds, KD=0.0098, SUB=0.0489, TD=0.0621, td15s_cap=27.3, ctrl15g_cap=15.0, gnp15g_cap=78.8
+2026-10-01 19:53:11,336 INFO [glicko_service]     Welterweight: 4416 rounds, KD=0.0297, SUB=0.0721, TD=0.0818, td15s_cap=28.1, ctrl15g_cap=15.0, gnp15g_cap=77.8
+2026-10-01 19:53:11,343 INFO [glicko_service]     Middleweight: 4028 rounds, KD=0.0296, SUB=0.0745, TD=0.0734, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=94.7
+2026-10-01 19:53:11,346 INFO [glicko_service]     Light Heavyweight: 2462 rounds, KD=0.0332, SUB=0.0515, TD=0.0675, td15s_cap=26.3, ctrl15g_cap=15.0, gnp15g_cap=106.6
+2026-10-01 19:53:11,349 INFO [glicko_service]     Heavyweight: 2651 rounds, KD=0.0323, SUB=0.0576, TD=0.0590, td15s_cap=23.1, ctrl15g_cap=15.0, gnp15g_cap=103.8
+2026-10-01 19:53:11,349 INFO [glicko_service]     P4P: 1 rounds, KD=0.0000, SUB=0.0000, TD=0.0000, td15s_cap=10.0, ctrl15g_cap=10.0, gnp15g_cap=10.0
+2026-10-01 19:53:11,351 INFO [glicko_service]     Strawweight: 1380 rounds, KD=0.0092, SUB=0.0493, TD=0.0696, td15s_cap=23.4, ctrl15g_cap=15.0, gnp15g_cap=64.7
+2026-10-01 19:53:11,352 INFO [glicko_service]     Flyweight: 1059 rounds, KD=0.0077, SUB=0.0465, TD=0.0616, td15s_cap=22.2, ctrl15g_cap=15.0, gnp15g_cap=77.1
+2026-10-01 19:53:11,353 INFO [glicko_service]     Bantamweight: 1003 rounds, KD=0.0098, SUB=0.0489, TD=0.0621, td15s_cap=27.3, ctrl15g_cap=15.0, gnp15g_cap=78.8
+2026-10-01 19:53:18,078 INFO [glicko_service]   Processed 27882 rounds
+2026-10-01 19:53:18,105 INFO [glicko_service]   Processed 27882 rounds
+2026-10-01 19:53:18,164 INFO [model] Loading data from database...
+2026-10-01 19:53:18,187 INFO [model] Loading data from database...
+2026-10-01 19:53:18,488 INFO [model]   Loaded 4617 fighters
+2026-10-01 19:53:18,515 INFO [model]   Loaded 4617 fighters
+2026-10-01 19:53:23,825 INFO [model]   Loaded 22299 fight-stat rows (11198 unique fights)
+2026-10-01 19:53:23,826 INFO [model]   Loading per-round stats...
+2026-10-01 19:53:23,856 INFO [model]   Loaded 22299 fight-stat rows (11198 unique fights)
+2026-10-01 19:53:23,857 INFO [model]   Loading per-round stats...
+2026-10-01 19:53:31,372 INFO [model]   Loaded 61838 per-round stat rows
+2026-10-01 19:53:31,403 INFO [model]   Loaded 61838 per-round stat rows
+2026-10-01 19:53:31,836 INFO [model] Building features...
+2026-10-01 19:53:31,866 INFO [model] Building features...
+2026-10-01 19:53:41,750 INFO [career_rating]   Career ratings: 228719 pro bouts, 4040 linked UFC fighters, 20558/22299 rows covered
+2026-10-01 19:53:41,877 INFO [career_rating]   Career ratings: 228719 pro bouts, 4040 linked UFC fighters, 20558/22299 rows covered
+2026-10-01 19:53:43,100 INFO [model]   Computing defensive stats...
+2026-10-01 19:53:43,195 INFO [model]   Computing defensive stats...
+2026-10-01 19:53:51,934 INFO [model]   Computing Elo ratings...
+2026-10-01 19:53:51,956 INFO [model]   Computing Elo ratings...
+2026-10-01 19:53:54,858 INFO [model]   Computing resume scores...
+2026-10-01 19:53:54,918 INFO [model]   Computing resume scores...
+2026-10-01 19:53:55,660 INFO [model]   Using 21096 caller-supplied Glicko snapshots
+2026-10-01 19:53:55,709 INFO [model]   Using 21096 caller-supplied Glicko snapshots
+2026-10-01 19:54:07,821 INFO [model]   Added 15 Glicko features  + 4 confidence features
+2026-10-01 19:54:07,823 INFO [model]   Computing Elo-adjusted stats...
+2026-10-01 19:54:07,831 INFO [model]   Computing rolling career averages...
+2026-10-01 19:54:07,832 INFO [model]   Added 15 Glicko features  + 4 confidence features
+2026-10-01 19:54:07,835 INFO [model]   Computing Elo-adjusted stats...
+2026-10-01 19:54:07,844 INFO [model]   Computing rolling career averages...
+2026-10-01 19:56:19,244 INFO [model]   Computing streaks and career stats...
+2026-10-01 19:56:19,657 INFO [model]   Computing streaks and career stats...
+2026-10-01 19:56:27,075 INFO [model]   Computing composite features...
+2026-10-01 19:56:27,095 INFO [model]   Computing round-by-round profiles...
+2026-10-01 19:56:27,567 INFO [model]   Computing composite features...
+2026-10-01 19:56:27,588 INFO [model]   Computing round-by-round profiles...
+2026-10-01 19:57:06,439 INFO [model]   Computing age curve features...
+2026-10-01 19:57:06,449 INFO [model]   Computing damage accumulation...
+2026-10-01 19:57:07,104 INFO [model]   Computing age curve features...
+2026-10-01 19:57:07,113 INFO [model]   Computing damage accumulation...
+2026-10-01 19:57:11,960 INFO [model]   Computing weight-class movement...
+2026-10-01 19:57:12,652 INFO [model]   Computing weight-class movement...
+2026-10-01 19:57:12,866 INFO [model]   Computing age-relative performance residuals...
+2026-10-01 19:57:13,206 INFO [model]   Computing opponent-adjusted expected stats...
+2026-10-01 19:57:13,279 INFO [expected_stats]   Expected stats (v1): 59 refits x 5 stats
+2026-10-01 19:57:13,407 INFO [model]   Computing age-relative performance residuals...
+2026-10-01 19:57:13,792 INFO [model]   Computing opponent-adjusted expected stats...
+2026-10-01 19:57:13,885 INFO [expected_stats]   Expected stats (v2): 59 refits x 5 stats
+2026-10-01 19:58:04,791 INFO [model]   Computing fighter style clusters (k=6)...
+2026-10-01 19:58:06,697 INFO [model]     Fit on 17081 rows, assigned 22299 fighter-fights
+2026-10-01 19:58:06,699 INFO [model]     Style 0 (3349 fighter-fights): SigStr/5=15.4 TD/5=0.6 Sub/5=0.5 Ctrl/5=50.7 GndStr/5=3.1 top=ctrl_per5
+2026-10-01 19:58:06,699 INFO [model]     Style 1 (10346 fighter-fights): SigStr/5=15.1 TD/5=0.5 Sub/5=0.3 Ctrl/5=43.5 GndStr/5=3.1 top=ctrl_per5
+2026-10-01 19:58:06,699 INFO [model]     Style 2 (3759 fighter-fights): SigStr/5=16.7 TD/5=1.5 Sub/5=0.6 Ctrl/5=113.4 GndStr/5=8.0 top=ctrl_per5
+2026-10-01 19:58:06,701 INFO [model]     Style 3 (4223 fighter-fights): SigStr/5=30.5 TD/5=0.3 Sub/5=0.2 Ctrl/5=33.7 GndStr/5=5.6 top=ctrl_per5
+2026-10-01 19:58:06,703 INFO [model]     Style 4 (314 fighter-fights): SigStr/5=71.9 TD/5=0.7 Sub/5=0.3 Ctrl/5=55.9 GndStr/5=35.5 top=sig_str_landed_per5
+2026-10-01 19:58:06,703 INFO [model]     Style 5 (308 fighter-fights): SigStr/5=11.6 TD/5=2.3 Sub/5=4.7 Ctrl/5=54.7 GndStr/5=3.9 top=ctrl_per5
+2026-10-01 19:58:07,065 INFO [model]   Style matchup features computed expanding-in-time (6x6, 22202 fighter-fights)
+2026-10-01 19:58:08,260 INFO [model]   Feature matrix shape: (22299, 371)
+2026-10-01 19:58:08,353 INFO [model] Building matchup feature matrix...
+2026-10-01 19:58:08,892 INFO [model]   Loading odds from database...
+2026-10-01 19:58:15,287 INFO [model]   Odds matched: 2867/11101 fights (25.8%)
+2026-10-01 19:58:15,416 INFO [model]   Filtered to modern era (2015+): 6284 fights (dropped 4587 pre-2015)
+2026-10-01 19:58:15,417 INFO [model]   Red win rate (modern): 0.567
+2026-10-01 19:58:15,454 INFO [model]   Matchup matrix: 6284 fights, 317 candidate features
+2026-10-01 19:58:15,455 INFO [model]   Red win rate: 0.567
+2026-10-01 19:58:15,457 INFO [model]   Date range: 2015-01-03 to 2026-09-26
+2026-10-01 20:02:53,994 INFO [model]   Computing fighter style clusters (k=6)...
+2026-10-01 20:02:54,490 INFO [model]     Fit on 17081 rows, assigned 22299 fighter-fights
+2026-10-01 20:02:54,491 INFO [model]     Style 0 (3349 fighter-fights): SigStr/5=15.4 TD/5=0.6 Sub/5=0.5 Ctrl/5=50.7 GndStr/5=3.1 top=ctrl_per5
+2026-10-01 20:02:54,491 INFO [model]     Style 1 (10346 fighter-fights): SigStr/5=15.1 TD/5=0.5 Sub/5=0.3 Ctrl/5=43.5 GndStr/5=3.1 top=ctrl_per5
+2026-10-01 20:02:54,492 INFO [model]     Style 2 (3759 fighter-fights): SigStr/5=16.7 TD/5=1.5 Sub/5=0.6 Ctrl/5=113.4 GndStr/5=8.0 top=ctrl_per5
+2026-10-01 20:02:54,492 INFO [model]     Style 3 (4223 fighter-fights): SigStr/5=30.5 TD/5=0.3 Sub/5=0.2 Ctrl/5=33.7 GndStr/5=5.6 top=ctrl_per5
+2026-10-01 20:02:54,492 INFO [model]     Style 4 (314 fighter-fights): SigStr/5=71.9 TD/5=0.7 Sub/5=0.3 Ctrl/5=55.9 GndStr/5=35.5 top=sig_str_landed_per5
+2026-10-01 20:02:54,492 INFO [model]     Style 5 (308 fighter-fights): SigStr/5=11.6 TD/5=2.3 Sub/5=4.7 Ctrl/5=54.7 GndStr/5=3.9 top=ctrl_per5
+2026-10-01 20:02:54,820 INFO [model]   Style matchup features computed expanding-in-time (6x6, 22202 fighter-fights)
+2026-10-01 20:02:55,508 INFO [model]   Feature matrix shape: (22299, 375)
+2026-10-01 20:02:55,555 INFO [model] Building matchup feature matrix...
+2026-10-01 20:02:55,796 INFO [model]   Loading odds from database...
+2026-10-01 20:02:58,714 INFO [model]   Odds matched: 2867/11101 fights (25.8%)
+2026-10-01 20:02:58,793 INFO [model]   Filtered to modern era (2015+): 6284 fights (dropped 4587 pre-2015)
+2026-10-01 20:02:58,794 INFO [model]   Red win rate (modern): 0.567
+2026-10-01 20:02:58,819 INFO [model]   Matchup matrix: 6284 fights, 321 candidate features
+2026-10-01 20:02:58,819 INFO [model]   Red win rate: 0.567
+2026-10-01 20:02:58,821 INFO [model]   Date range: 2015-01-03 to 2026-09-26
+2026-10-01 20:06:32,383 INFO [model]     MarketAnchor: b=0.406 c=+0.033 on 402 priced rows (trusting 41% of disagreement)
+2026-10-01 20:06:32,385 INFO [fast_wf]   noodds:catboost:0 fold 1/8 feats=310 anchor b=0.406
+2026-10-01 20:06:36,197 INFO [model]     MarketAnchor: b=0.310 c=+0.037 on 402 priced rows (trusting 31% of disagreement)
+2026-10-01 20:06:36,199 INFO [fast_wf]   noodds:catboost:0 fold 1/8 feats=314 anchor b=0.310
+2026-10-01 20:06:59,707 INFO [model]     MarketAnchor: b=0.417 c=+0.156 on 493 priced rows (trusting 42% of disagreement)
+2026-10-01 20:06:59,709 INFO [fast_wf]   noodds:catboost:0 fold 2/8 feats=310 anchor b=0.417
+2026-10-01 20:07:02,833 INFO [model]     MarketAnchor: b=0.399 c=+0.150 on 493 priced rows (trusting 40% of disagreement)
+2026-10-01 20:07:02,835 INFO [fast_wf]   noodds:catboost:0 fold 2/8 feats=314 anchor b=0.399
+2026-10-01 20:07:29,059 INFO [model]     MarketAnchor: b=0.373 c=+0.096 on 529 priced rows (trusting 37% of disagreement)
+2026-10-01 20:07:29,061 INFO [fast_wf]   noodds:catboost:0 fold 3/8 feats=314 anchor b=0.373
+2026-10-01 20:07:36,671 INFO [model]     MarketAnchor: b=0.413 c=+0.090 on 529 priced rows (trusting 41% of disagreement)
+2026-10-01 20:07:36,672 INFO [fast_wf]   noodds:catboost:0 fold 3/8 feats=310 anchor b=0.413
+2026-10-01 20:08:03,321 INFO [model]     MarketAnchor: b=0.281 c=+0.099 on 595 priced rows (trusting 28% of disagreement)
+2026-10-01 20:08:03,323 INFO [fast_wf]   noodds:catboost:0 fold 4/8 feats=314 anchor b=0.281
+2026-10-01 20:08:17,509 INFO [model]     MarketAnchor: b=0.338 c=+0.094 on 595 priced rows (trusting 34% of disagreement)
+2026-10-01 20:08:17,510 INFO [fast_wf]   noodds:catboost:0 fold 4/8 feats=310 anchor b=0.338
+2026-10-01 20:08:33,000 INFO [model]     MarketAnchor: b=0.336 c=+0.059 on 628 priced rows (trusting 34% of disagreement)
+2026-10-01 20:08:33,003 INFO [fast_wf]   noodds:catboost:0 fold 5/8 feats=314 anchor b=0.336
+2026-10-01 20:08:53,909 INFO [model]     MarketAnchor: b=0.372 c=+0.058 on 628 priced rows (trusting 37% of disagreement)
+2026-10-01 20:08:53,911 INFO [fast_wf]   noodds:catboost:0 fold 5/8 feats=310 anchor b=0.372
+2026-10-01 20:09:07,099 INFO [model]     MarketAnchor: b=0.284 c=+0.041 on 689 priced rows (trusting 28% of disagreement)
+2026-10-01 20:09:07,101 INFO [fast_wf]   noodds:catboost:0 fold 6/8 feats=314 anchor b=0.284
+2026-10-01 20:09:31,327 INFO [model]     MarketAnchor: b=0.264 c=+0.045 on 689 priced rows (trusting 26% of disagreement)
+2026-10-01 20:09:31,328 INFO [fast_wf]   noodds:catboost:0 fold 6/8 feats=310 anchor b=0.264
+2026-10-01 20:09:35,994 INFO [model]     MarketAnchor: b=0.310 c=+0.064 on 707 priced rows (trusting 31% of disagreement)
+2026-10-01 20:09:35,995 INFO [fast_wf]   noodds:catboost:0 fold 7/8 feats=314 anchor b=0.310
+2026-10-01 20:10:09,814 INFO [model]     MarketAnchor: b=0.434 c=+0.074 on 771 priced rows (trusting 43% of disagreement)
+2026-10-01 20:10:09,816 INFO [fast_wf]   noodds:catboost:0 fold 8/8 feats=314 anchor b=0.434
+2026-10-01 20:10:16,882 INFO [model]     MarketAnchor: b=0.348 c=+0.064 on 707 priced rows (trusting 35% of disagreement)
+2026-10-01 20:10:16,884 INFO [fast_wf]   noodds:catboost:0 fold 7/8 feats=310 anchor b=0.348
+2026-10-01 20:10:20,621 INFO [model]     MarketAnchor: b=0.321 c=+0.033 on 402 priced rows (trusting 32% of disagreement)
+2026-10-01 20:10:20,622 INFO [fast_wf]   noodds_noraw:catboost:0 fold 1/8 feats=177 anchor b=0.321
+2026-10-01 20:10:32,483 INFO [model]     MarketAnchor: b=0.390 c=+0.151 on 493 priced rows (trusting 39% of disagreement)
+2026-10-01 20:10:32,484 INFO [fast_wf]   noodds_noraw:catboost:0 fold 2/8 feats=177 anchor b=0.390
+2026-10-01 20:10:52,098 INFO [model]     MarketAnchor: b=0.366 c=+0.090 on 529 priced rows (trusting 37% of disagreement)
+2026-10-01 20:10:52,100 INFO [fast_wf]   noodds_noraw:catboost:0 fold 3/8 feats=177 anchor b=0.366
+2026-10-01 20:10:54,737 INFO [model]     MarketAnchor: b=0.415 c=+0.069 on 771 priced rows (trusting 41% of disagreement)
+2026-10-01 20:10:54,739 INFO [fast_wf]   noodds:catboost:0 fold 8/8 feats=310 anchor b=0.415
+2026-10-01 20:11:06,017 INFO [model]     MarketAnchor: b=0.297 c=+0.094 on 595 priced rows (trusting 30% of disagreement)
+2026-10-01 20:11:06,019 INFO [fast_wf]   noodds_noraw:catboost:0 fold 4/8 feats=177 anchor b=0.297
+2026-10-01 20:11:09,738 INFO [model]     MarketAnchor: b=0.383 c=+0.029 on 402 priced rows (trusting 38% of disagreement)
+2026-10-01 20:11:09,739 INFO [fast_wf]   noodds_noraw:catboost:0 fold 1/8 feats=173 anchor b=0.383
+2026-10-01 20:11:21,544 INFO [model]     MarketAnchor: b=0.400 c=+0.152 on 493 priced rows (trusting 40% of disagreement)
+2026-10-01 20:11:21,546 INFO [fast_wf]   noodds_noraw:catboost:0 fold 2/8 feats=173 anchor b=0.400
+2026-10-01 20:11:25,585 INFO [model]     MarketAnchor: b=0.399 c=+0.054 on 628 priced rows (trusting 40% of disagreement)
+2026-10-01 20:11:25,585 INFO [fast_wf]   noodds_noraw:catboost:0 fold 5/8 feats=177 anchor b=0.399
+2026-10-01 20:11:33,308 INFO [model]     MarketAnchor: b=0.443 c=+0.090 on 529 priced rows (trusting 44% of disagreement)
+2026-10-01 20:11:33,309 INFO [fast_wf]   noodds_noraw:catboost:0 fold 3/8 feats=173 anchor b=0.443
+2026-10-01 20:11:39,660 INFO [model]     MarketAnchor: b=0.256 c=+0.047 on 689 priced rows (trusting 26% of disagreement)
+2026-10-01 20:11:39,663 INFO [fast_wf]   noodds_noraw:catboost:0 fold 6/8 feats=177 anchor b=0.256
+2026-10-01 20:11:53,284 INFO [model]     MarketAnchor: b=0.350 c=+0.090 on 595 priced rows (trusting 35% of disagreement)
+2026-10-01 20:11:53,285 INFO [fast_wf]   noodds_noraw:catboost:0 fold 4/8 feats=173 anchor b=0.350
+2026-10-01 20:11:57,570 INFO [model]     MarketAnchor: b=0.322 c=+0.067 on 707 priced rows (trusting 32% of disagreement)
+2026-10-01 20:11:57,570 INFO [fast_wf]   noodds_noraw:catboost:0 fold 7/8 feats=177 anchor b=0.322
+2026-10-01 20:12:14,225 INFO [model]     MarketAnchor: b=0.425 c=+0.051 on 628 priced rows (trusting 43% of disagreement)
+2026-10-01 20:12:14,226 INFO [fast_wf]   noodds_noraw:catboost:0 fold 5/8 feats=173 anchor b=0.425
+2026-10-01 20:12:19,744 INFO [model]     MarketAnchor: b=0.428 c=+0.075 on 771 priced rows (trusting 43% of disagreement)
+2026-10-01 20:12:19,745 INFO [fast_wf]   noodds_noraw:catboost:0 fold 8/8 feats=177 anchor b=0.428
+2026-10-01 20:12:27,935 INFO [model]     MarketAnchor: b=0.266 c=+0.046 on 689 priced rows (trusting 27% of disagreement)
+2026-10-01 20:12:27,937 INFO [fast_wf]   noodds_noraw:catboost:0 fold 6/8 feats=173 anchor b=0.266
+2026-10-01 20:12:43,554 INFO [model]     MarketAnchor: b=0.358 c=+0.067 on 707 priced rows (trusting 36% of disagreement)
+2026-10-01 20:12:43,555 INFO [fast_wf]   noodds_noraw:catboost:0 fold 7/8 feats=173 anchor b=0.358
+2026-10-01 20:13:02,003 INFO [model]     MarketAnchor: b=0.452 c=+0.073 on 771 priced rows (trusting 45% of disagreement)
+2026-10-01 20:13:02,005 INFO [fast_wf]   noodds_noraw:catboost:0 fold 8/8 feats=173 anchor b=0.452
+2026-10-01 20:13:02,276 INFO [model]   Early stopping (chronological val, n=480): best_iter=89 val_logloss=0.6507
+2026-10-01 20:13:05,325 INFO [model]     MarketAnchor: b=0.298 c=+0.036 on 402 priced rows (trusting 30% of disagreement)
+2026-10-01 20:13:05,326 INFO [fast_wf]   noodds:hgb:0 fold 1/8 feats=314 anchor b=0.298
+2026-10-01 20:13:19,626 INFO [model]   Early stopping (chronological val, n=480): best_iter=107 val_logloss=0.6535
+2026-10-01 20:13:22,813 INFO [model]     MarketAnchor: b=0.255 c=+0.042 on 402 priced rows (trusting 25% of disagreement)
+2026-10-01 20:13:22,814 INFO [fast_wf]   noodds:hgb:0 fold 1/8 feats=310 anchor b=0.255
+2026-10-01 20:13:23,494 INFO [model]   Early stopping (chronological val, n=520): best_iter=115 val_logloss=0.6555
+2026-10-01 20:13:26,735 INFO [model]     MarketAnchor: b=0.383 c=+0.158 on 493 priced rows (trusting 38% of disagreement)
+2026-10-01 20:13:26,737 INFO [fast_wf]   noodds:hgb:0 fold 2/8 feats=314 anchor b=0.383
+2026-10-01 20:13:38,499 INFO [model]   Early stopping (chronological val, n=520): best_iter=147 val_logloss=0.6582
+2026-10-01 20:13:41,191 INFO [model]     MarketAnchor: b=0.391 c=+0.150 on 493 priced rows (trusting 39% of disagreement)
+2026-10-01 20:13:41,192 INFO [fast_wf]   noodds:hgb:0 fold 2/8 feats=310 anchor b=0.391
+2026-10-01 20:13:42,360 INFO [model]   Early stopping (chronological val, n=560): best_iter=410 val_logloss=0.6510
+2026-10-01 20:13:49,045 INFO [model]     MarketAnchor: b=0.328 c=+0.094 on 529 priced rows (trusting 33% of disagreement)
+2026-10-01 20:13:49,046 INFO [fast_wf]   noodds:hgb:0 fold 3/8 feats=314 anchor b=0.328
+2026-10-01 20:13:56,830 INFO [model]   Early stopping (chronological val, n=560): best_iter=344 val_logloss=0.6573
+2026-10-01 20:14:02,305 INFO [model]     MarketAnchor: b=0.415 c=+0.088 on 529 priced rows (trusting 42% of disagreement)
+2026-10-01 20:14:02,306 INFO [fast_wf]   noodds:hgb:0 fold 3/8 feats=310 anchor b=0.415
+2026-10-01 20:14:04,711 INFO [model]   Early stopping (chronological val, n=600): best_iter=182 val_logloss=0.6445
+2026-10-01 20:14:08,289 INFO [model]     MarketAnchor: b=0.251 c=+0.102 on 595 priced rows (trusting 25% of disagreement)
+2026-10-01 20:14:08,289 INFO [fast_wf]   noodds:hgb:0 fold 4/8 feats=314 anchor b=0.251
+2026-10-01 20:14:17,988 INFO [model]   Early stopping (chronological val, n=600): best_iter=215 val_logloss=0.6429
+2026-10-01 20:14:21,913 INFO [model]     MarketAnchor: b=0.308 c=+0.096 on 595 priced rows (trusting 31% of disagreement)
+2026-10-01 20:14:21,914 INFO [fast_wf]   noodds:hgb:0 fold 4/8 feats=310 anchor b=0.308
+2026-10-01 20:14:24,114 INFO [model]   Early stopping (chronological val, n=640): best_iter=217 val_logloss=0.6455
+2026-10-01 20:14:28,323 INFO [model]     MarketAnchor: b=0.322 c=+0.063 on 628 priced rows (trusting 32% of disagreement)
+2026-10-01 20:14:28,324 INFO [fast_wf]   noodds:hgb:0 fold 5/8 feats=314 anchor b=0.322
+2026-10-01 20:14:37,790 INFO [model]   Early stopping (chronological val, n=640): best_iter=279 val_logloss=0.6416
+2026-10-01 20:14:42,913 INFO [model]     MarketAnchor: b=0.432 c=+0.048 on 628 priced rows (trusting 43% of disagreement)
+2026-10-01 20:14:42,914 INFO [fast_wf]   noodds:hgb:0 fold 5/8 feats=310 anchor b=0.432
+2026-10-01 20:14:43,936 INFO [model]   Early stopping (chronological val, n=680): best_iter=114 val_logloss=0.6456
+2026-10-01 20:14:46,667 INFO [model]     MarketAnchor: b=0.239 c=+0.044 on 689 priced rows (trusting 24% of disagreement)
+2026-10-01 20:14:46,667 INFO [fast_wf]   noodds:hgb:0 fold 6/8 feats=314 anchor b=0.239
+2026-10-01 20:14:59,370 INFO [model]   Early stopping (chronological val, n=680): best_iter=125 val_logloss=0.6431
+2026-10-01 20:15:02,515 INFO [model]     MarketAnchor: b=0.190 c=+0.053 on 689 priced rows (trusting 19% of disagreement)
+2026-10-01 20:15:02,516 INFO [fast_wf]   noodds:hgb:0 fold 6/8 feats=310 anchor b=0.190
+2026-10-01 20:15:03,872 INFO [model]   Early stopping (chronological val, n=720): best_iter=105 val_logloss=0.6427
+2026-10-01 20:15:06,679 INFO [model]     MarketAnchor: b=0.308 c=+0.062 on 707 priced rows (trusting 31% of disagreement)
+2026-10-01 20:15:06,680 INFO [fast_wf]   noodds:hgb:0 fold 7/8 feats=314 anchor b=0.308
+2026-10-01 20:15:19,970 INFO [model]   Early stopping (chronological val, n=720): best_iter=204 val_logloss=0.6422
+2026-10-01 20:15:28,792 INFO [model]     MarketAnchor: b=0.318 c=+0.066 on 707 priced rows (trusting 32% of disagreement)
+2026-10-01 20:15:28,793 INFO [fast_wf]   noodds:hgb:0 fold 7/8 feats=310 anchor b=0.318
+2026-10-01 20:15:29,080 INFO [model]   Early stopping (chronological val, n=760): best_iter=204 val_logloss=0.6411
+2026-10-01 20:15:34,037 INFO [model]     MarketAnchor: b=0.372 c=+0.073 on 771 priced rows (trusting 37% of disagreement)
+2026-10-01 20:15:34,039 INFO [fast_wf]   noodds:hgb:0 fold 8/8 feats=314 anchor b=0.372
+2026-10-01 20:15:34,630 INFO [model]     MarketAnchor: b=0.326 c=+0.028 on 402 priced rows (trusting 33% of disagreement)
+2026-10-01 20:15:34,631 INFO [fast_wf]   noodds:logit:0 fold 1/8 feats=314 anchor b=0.326
+2026-10-01 20:15:35,234 INFO [model]     MarketAnchor: b=0.267 c=+0.166 on 493 priced rows (trusting 27% of disagreement)
+2026-10-01 20:15:35,235 INFO [fast_wf]   noodds:logit:0 fold 2/8 feats=314 anchor b=0.267
+2026-10-01 20:15:36,054 INFO [model]     MarketAnchor: b=0.318 c=+0.080 on 529 priced rows (trusting 32% of disagreement)
+2026-10-01 20:15:36,054 INFO [fast_wf]   noodds:logit:0 fold 3/8 feats=314 anchor b=0.318
+2026-10-01 20:15:36,815 INFO [model]     MarketAnchor: b=0.376 c=+0.084 on 595 priced rows (trusting 38% of disagreement)
+2026-10-01 20:15:36,816 INFO [fast_wf]   noodds:logit:0 fold 4/8 feats=314 anchor b=0.376
+2026-10-01 20:15:37,645 INFO [model]     MarketAnchor: b=0.404 c=+0.048 on 628 priced rows (trusting 40% of disagreement)
+2026-10-01 20:15:37,646 INFO [fast_wf]   noodds:logit:0 fold 5/8 feats=314 anchor b=0.404
+2026-10-01 20:15:38,354 INFO [model]     MarketAnchor: b=0.282 c=+0.040 on 689 priced rows (trusting 28% of disagreement)
+2026-10-01 20:15:38,355 INFO [fast_wf]   noodds:logit:0 fold 6/8 feats=314 anchor b=0.282
+2026-10-01 20:15:39,176 INFO [model]     MarketAnchor: b=0.326 c=+0.061 on 707 priced rows (trusting 33% of disagreement)
+2026-10-01 20:15:39,177 INFO [fast_wf]   noodds:logit:0 fold 7/8 feats=314 anchor b=0.326
+2026-10-01 20:15:40,026 INFO [model]     MarketAnchor: b=0.385 c=+0.073 on 771 priced rows (trusting 38% of disagreement)
+2026-10-01 20:15:40,027 INFO [fast_wf]   noodds:logit:0 fold 8/8 feats=314 anchor b=0.385
+2026-10-01 20:15:40,141 INFO [fast_wf] wrote /private/tmp/claude-501/-Users-rafeburns-Downloads-ALocks/4668a2bb-5b4b-4a13-a70d-94e74bfedd4e/scratchpad/wf_xs2.csv
+2026-10-01 20:15:45,672 INFO [model]   Early stopping (chronological val, n=760): best_iter=257 val_logloss=0.6372
+2026-10-01 20:15:49,696 INFO [model]     MarketAnchor: b=0.393 c=+0.070 on 771 priced rows (trusting 39% of disagreement)
+2026-10-01 20:15:49,697 INFO [fast_wf]   noodds:hgb:0 fold 8/8 feats=310 anchor b=0.393
+2026-10-01 20:15:50,177 INFO [model]     MarketAnchor: b=0.286 c=+0.034 on 402 priced rows (trusting 29% of disagreement)
+2026-10-01 20:15:50,177 INFO [fast_wf]   noodds:logit:0 fold 1/8 feats=310 anchor b=0.286
+2026-10-01 20:15:50,552 INFO [model]     MarketAnchor: b=0.258 c=+0.166 on 493 priced rows (trusting 26% of disagreement)
+2026-10-01 20:15:50,553 INFO [fast_wf]   noodds:logit:0 fold 2/8 feats=310 anchor b=0.258
+2026-10-01 20:15:51,010 INFO [model]     MarketAnchor: b=0.314 c=+0.082 on 529 priced rows (trusting 31% of disagreement)
+2026-10-01 20:15:51,011 INFO [fast_wf]   noodds:logit:0 fold 3/8 feats=310 anchor b=0.314
+2026-10-01 20:15:51,360 INFO [model]     MarketAnchor: b=0.373 c=+0.085 on 595 priced rows (trusting 37% of disagreement)
+2026-10-01 20:15:51,361 INFO [fast_wf]   noodds:logit:0 fold 4/8 feats=310 anchor b=0.373
+2026-10-01 20:15:51,724 INFO [model]     MarketAnchor: b=0.413 c=+0.047 on 628 priced rows (trusting 41% of disagreement)
+2026-10-01 20:15:51,725 INFO [fast_wf]   noodds:logit:0 fold 5/8 feats=310 anchor b=0.413
+2026-10-01 20:15:52,178 INFO [model]     MarketAnchor: b=0.322 c=+0.038 on 689 priced rows (trusting 32% of disagreement)
+2026-10-01 20:15:52,179 INFO [fast_wf]   noodds:logit:0 fold 6/8 feats=310 anchor b=0.322
+2026-10-01 20:15:52,674 INFO [model]     MarketAnchor: b=0.336 c=+0.063 on 707 priced rows (trusting 34% of disagreement)
+2026-10-01 20:15:52,674 INFO [fast_wf]   noodds:logit:0 fold 7/8 feats=310 anchor b=0.336
+2026-10-01 20:15:53,220 INFO [model]     MarketAnchor: b=0.381 c=+0.075 on 771 priced rows (trusting 38% of disagreement)
+2026-10-01 20:15:53,220 INFO [fast_wf]   noodds:logit:0 fold 8/8 feats=310 anchor b=0.381
+2026-10-01 20:15:53,289 INFO [fast_wf] wrote /private/tmp/claude-501/-Users-rafeburns-Downloads-ALocks/4668a2bb-5b4b-4a13-a70d-94e74bfedd4e/scratchpad/wf_xs1.csv
+2026-10-01 20:16:43,161 INFO [model]     MarketAnchor: b=0.382 c=+0.032 on 402 priced rows (trusting 38% of disagreement)
+2026-10-01 20:16:43,168 INFO [fast_wf]   noodds:catboost:0 fold 1/8 feats=314 anchor b=0.382
+2026-10-01 20:16:50,491 INFO [model]     MarketAnchor: b=0.350 c=+0.036 on 402 priced rows (trusting 35% of disagreement)
+2026-10-01 20:16:50,494 INFO [fast_wf]   noodds:catboost:0 fold 1/8 feats=310 anchor b=0.350
+2026-10-01 20:16:51,593 INFO [model]     MarketAnchor: b=0.409 c=+0.031 on 402 priced rows (trusting 41% of disagreement)
+2026-10-01 20:16:51,595 INFO [fast_wf]   noodds:catboost:0 fold 1/8 feats=310 anchor b=0.409
+2026-10-01 20:17:05,173 INFO [model]     MarketAnchor: b=0.384 c=+0.151 on 493 priced rows (trusting 38% of disagreement)
+2026-10-01 20:17:05,175 INFO [fast_wf]   noodds:catboost:0 fold 2/8 feats=314 anchor b=0.384
+2026-10-01 20:17:19,537 INFO [model]     MarketAnchor: b=0.373 c=+0.157 on 493 priced rows (trusting 37% of disagreement)
+2026-10-01 20:17:19,538 INFO [fast_wf]   noodds:catboost:0 fold 2/8 feats=310 anchor b=0.373
+2026-10-01 20:17:19,792 INFO [model]     MarketAnchor: b=0.443 c=+0.146 on 493 priced rows (trusting 44% of disagreement)
+2026-10-01 20:17:19,794 INFO [fast_wf]   noodds:catboost:0 fold 2/8 feats=310 anchor b=0.443
+2026-10-01 20:17:47,827 INFO [model]     MarketAnchor: b=0.412 c=+0.091 on 529 priced rows (trusting 41% of disagreement)
+2026-10-01 20:17:47,828 INFO [fast_wf]   noodds:catboost:0 fold 3/8 feats=314 anchor b=0.412
+2026-10-01 20:17:50,036 INFO [model]     MarketAnchor: b=0.403 c=+0.093 on 529 priced rows (trusting 40% of disagreement)
+2026-10-01 20:17:50,038 INFO [fast_wf]   noodds:catboost:0 fold 3/8 feats=310 anchor b=0.403
+2026-10-01 20:18:03,830 INFO [model]     MarketAnchor: b=0.410 c=+0.096 on 529 priced rows (trusting 41% of disagreement)
+2026-10-01 20:18:03,832 INFO [fast_wf]   noodds:catboost:0 fold 3/8 feats=310 anchor b=0.410
+2026-10-01 20:18:33,390 INFO [model]     MarketAnchor: b=0.341 c=+0.092 on 595 priced rows (trusting 34% of disagreement)
+2026-10-01 20:18:33,393 INFO [fast_wf]   noodds:catboost:0 fold 4/8 feats=314 anchor b=0.341
+2026-10-01 20:18:40,209 INFO [model]     MarketAnchor: b=0.264 c=+0.101 on 595 priced rows (trusting 26% of disagreement)
+2026-10-01 20:18:40,210 INFO [fast_wf]   noodds:catboost:0 fold 4/8 feats=310 anchor b=0.264
+2026-10-01 20:18:50,708 INFO [model]     MarketAnchor: b=0.307 c=+0.103 on 595 priced rows (trusting 31% of disagreement)
+2026-10-01 20:18:50,710 INFO [fast_wf]   noodds:catboost:0 fold 4/8 feats=310 anchor b=0.307
+2026-10-01 20:19:12,919 INFO [model]     MarketAnchor: b=0.375 c=+0.055 on 628 priced rows (trusting 37% of disagreement)
+2026-10-01 20:19:12,921 INFO [fast_wf]   noodds:catboost:0 fold 5/8 feats=314 anchor b=0.375
+2026-10-01 20:19:18,496 INFO [model]     MarketAnchor: b=0.392 c=+0.054 on 628 priced rows (trusting 39% of disagreement)
+2026-10-01 20:19:18,498 INFO [fast_wf]   noodds:catboost:0 fold 5/8 feats=310 anchor b=0.392
+2026-10-01 20:19:36,715 INFO [model]     MarketAnchor: b=0.353 c=+0.061 on 628 priced rows (trusting 35% of disagreement)
+2026-10-01 20:19:36,718 INFO [fast_wf]   noodds:catboost:0 fold 5/8 feats=310 anchor b=0.353
+2026-10-01 20:19:41,577 INFO [model]     MarketAnchor: b=0.234 c=+0.047 on 689 priced rows (trusting 23% of disagreement)
+2026-10-01 20:19:41,579 INFO [fast_wf]   noodds:catboost:0 fold 6/8 feats=310 anchor b=0.234
+2026-10-01 20:19:51,743 INFO [model]     MarketAnchor: b=0.293 c=+0.045 on 689 priced rows (trusting 29% of disagreement)
+2026-10-01 20:19:51,746 INFO [fast_wf]   noodds:catboost:0 fold 6/8 feats=314 anchor b=0.293
+2026-10-01 20:19:58,850 INFO [model]     MarketAnchor: b=0.261 c=+0.044 on 689 priced rows (trusting 26% of disagreement)
+2026-10-01 20:19:58,852 INFO [fast_wf]   noodds:catboost:0 fold 6/8 feats=310 anchor b=0.261
+2026-10-01 20:20:04,772 INFO [model]     MarketAnchor: b=0.278 c=+0.067 on 707 priced rows (trusting 28% of disagreement)
+2026-10-01 20:20:04,774 INFO [fast_wf]   noodds:catboost:0 fold 7/8 feats=310 anchor b=0.278
+2026-10-01 20:20:35,170 INFO [model]     MarketAnchor: b=0.317 c=+0.067 on 707 priced rows (trusting 32% of disagreement)
+2026-10-01 20:20:35,172 INFO [fast_wf]   noodds:catboost:0 fold 7/8 feats=314 anchor b=0.317
+2026-10-01 20:20:44,091 INFO [model]     MarketAnchor: b=0.334 c=+0.065 on 707 priced rows (trusting 33% of disagreement)
+2026-10-01 20:20:44,093 INFO [fast_wf]   noodds:catboost:0 fold 7/8 feats=310 anchor b=0.334
+2026-10-01 20:20:47,754 INFO [model]     MarketAnchor: b=0.449 c=+0.071 on 771 priced rows (trusting 45% of disagreement)
+2026-10-01 20:20:47,756 INFO [fast_wf]   noodds:catboost:0 fold 8/8 feats=310 anchor b=0.449
+2026-10-01 20:21:08,446 INFO [model]     MarketAnchor: b=0.340 c=+0.034 on 402 priced rows (trusting 34% of disagreement)
+2026-10-01 20:21:08,447 INFO [fast_wf]   noodds_noraw:catboost:0 fold 1/8 feats=173 anchor b=0.340
+2026-10-01 20:21:19,319 INFO [model]     MarketAnchor: b=0.402 c=+0.073 on 771 priced rows (trusting 40% of disagreement)
+2026-10-01 20:21:19,321 INFO [fast_wf]   noodds:catboost:0 fold 8/8 feats=310 anchor b=0.402
+2026-10-01 20:21:19,977 INFO [model]     MarketAnchor: b=0.342 c=+0.156 on 493 priced rows (trusting 34% of disagreement)
+2026-10-01 20:21:19,978 INFO [fast_wf]   noodds_noraw:catboost:0 fold 2/8 feats=173 anchor b=0.342
+2026-10-01 20:21:20,892 INFO [model]     MarketAnchor: b=0.439 c=+0.070 on 771 priced rows (trusting 44% of disagreement)
+2026-10-01 20:21:20,894 INFO [fast_wf]   noodds:catboost:0 fold 8/8 feats=314 anchor b=0.439
+2026-10-01 20:21:31,238 INFO [model]     MarketAnchor: b=0.342 c=+0.091 on 529 priced rows (trusting 34% of disagreement)
+2026-10-01 20:21:31,240 INFO [fast_wf]   noodds_noraw:catboost:0 fold 3/8 feats=173 anchor b=0.342
+2026-10-01 20:21:34,757 INFO [model]     MarketAnchor: b=0.335 c=+0.033 on 402 priced rows (trusting 34% of disagreement)
+2026-10-01 20:21:34,758 INFO [fast_wf]   noodds_noraw:catboost:0 fold 1/8 feats=173 anchor b=0.335
+2026-10-01 20:21:35,873 INFO [model]     MarketAnchor: b=0.365 c=+0.030 on 402 priced rows (trusting 36% of disagreement)
+2026-10-01 20:21:35,874 INFO [fast_wf]   noodds_noraw:catboost:0 fold 1/8 feats=177 anchor b=0.365
+2026-10-01 20:21:45,438 INFO [model]     MarketAnchor: b=0.366 c=+0.156 on 493 priced rows (trusting 37% of disagreement)
+2026-10-01 20:21:45,439 INFO [fast_wf]   noodds_noraw:catboost:0 fold 2/8 feats=173 anchor b=0.366
+2026-10-01 20:21:48,697 INFO [model]     MarketAnchor: b=0.416 c=+0.147 on 493 priced rows (trusting 42% of disagreement)
+2026-10-01 20:21:48,698 INFO [fast_wf]   noodds_noraw:catboost:0 fold 2/8 feats=177 anchor b=0.416
+2026-10-01 20:21:56,236 INFO [model]     MarketAnchor: b=0.372 c=+0.090 on 529 priced rows (trusting 37% of disagreement)
+2026-10-01 20:21:56,238 INFO [fast_wf]   noodds_noraw:catboost:0 fold 3/8 feats=173 anchor b=0.372
+2026-10-01 20:21:59,040 INFO [model]     MarketAnchor: b=0.337 c=+0.095 on 595 priced rows (trusting 34% of disagreement)
+2026-10-01 20:21:59,041 INFO [fast_wf]   noodds_noraw:catboost:0 fold 4/8 feats=173 anchor b=0.337
+2026-10-01 20:22:03,410 INFO [model]     MarketAnchor: b=0.445 c=+0.092 on 529 priced rows (trusting 45% of disagreement)
+2026-10-01 20:22:03,411 INFO [fast_wf]   noodds_noraw:catboost:0 fold 3/8 feats=177 anchor b=0.445
+2026-10-01 20:22:11,293 INFO [model]     MarketAnchor: b=0.359 c=+0.056 on 628 priced rows (trusting 36% of disagreement)
+2026-10-01 20:22:11,295 INFO [fast_wf]   noodds_noraw:catboost:0 fold 5/8 feats=173 anchor b=0.359
+2026-10-01 20:22:18,525 INFO [model]     MarketAnchor: b=0.276 c=+0.100 on 595 priced rows (trusting 28% of disagreement)
+2026-10-01 20:22:18,526 INFO [fast_wf]   noodds_noraw:catboost:0 fold 4/8 feats=173 anchor b=0.276
+2026-10-01 20:22:25,762 INFO [model]     MarketAnchor: b=0.299 c=+0.040 on 689 priced rows (trusting 30% of disagreement)
+2026-10-01 20:22:25,763 INFO [fast_wf]   noodds_noraw:catboost:0 fold 6/8 feats=173 anchor b=0.299
+2026-10-01 20:22:34,103 INFO [model]     MarketAnchor: b=0.326 c=+0.093 on 595 priced rows (trusting 33% of disagreement)
+2026-10-01 20:22:34,105 INFO [fast_wf]   noodds_noraw:catboost:0 fold 4/8 feats=177 anchor b=0.326
+2026-10-01 20:22:41,647 INFO [model]     MarketAnchor: b=0.418 c=+0.054 on 628 priced rows (trusting 42% of disagreement)
+2026-10-01 20:22:41,649 INFO [fast_wf]   noodds_noraw:catboost:0 fold 5/8 feats=173 anchor b=0.418
+2026-10-01 20:22:52,477 INFO [model]     MarketAnchor: b=0.360 c=+0.062 on 707 priced rows (trusting 36% of disagreement)
+2026-10-01 20:22:52,480 INFO [fast_wf]   noodds_noraw:catboost:0 fold 7/8 feats=173 anchor b=0.360
+2026-10-01 20:22:58,222 INFO [model]     MarketAnchor: b=0.366 c=+0.058 on 628 priced rows (trusting 37% of disagreement)
+2026-10-01 20:22:58,226 INFO [fast_wf]   noodds_noraw:catboost:0 fold 5/8 feats=177 anchor b=0.366
+2026-10-01 20:23:01,742 INFO [model]     MarketAnchor: b=0.282 c=+0.044 on 689 priced rows (trusting 28% of disagreement)
+2026-10-01 20:23:01,745 INFO [fast_wf]   noodds_noraw:catboost:0 fold 6/8 feats=173 anchor b=0.282
+2026-10-01 20:23:12,719 INFO [model]     MarketAnchor: b=0.266 c=+0.046 on 689 priced rows (trusting 27% of disagreement)
+2026-10-01 20:23:12,721 INFO [fast_wf]   noodds_noraw:catboost:0 fold 6/8 feats=177 anchor b=0.266
+2026-10-01 20:23:20,697 INFO [model]     MarketAnchor: b=0.314 c=+0.068 on 707 priced rows (trusting 31% of disagreement)
+2026-10-01 20:23:20,699 INFO [fast_wf]   noodds_noraw:catboost:0 fold 7/8 feats=173 anchor b=0.314
+2026-10-01 20:23:20,861 INFO [model]     MarketAnchor: b=0.433 c=+0.072 on 771 priced rows (trusting 43% of disagreement)
+2026-10-01 20:23:20,862 INFO [fast_wf]   noodds_noraw:catboost:0 fold 8/8 feats=173 anchor b=0.433
+2026-10-01 20:23:29,059 INFO [model]     MarketAnchor: b=0.351 c=+0.065 on 707 priced rows (trusting 35% of disagreement)
+2026-10-01 20:23:29,061 INFO [fast_wf]   noodds_noraw:catboost:0 fold 7/8 feats=177 anchor b=0.351
+2026-10-01 20:23:36,288 INFO [model]     MarketAnchor: b=0.414 c=+0.070 on 771 priced rows (trusting 41% of disagreement)
+2026-10-01 20:23:36,291 INFO [fast_wf]   noodds_noraw:catboost:0 fold 8/8 feats=173 anchor b=0.414
+2026-10-01 20:23:51,768 INFO [model]     MarketAnchor: b=0.436 c=+0.072 on 771 priced rows (trusting 44% of disagreement)
+2026-10-01 20:23:51,772 INFO [fast_wf]   noodds_noraw:catboost:0 fold 8/8 feats=177 anchor b=0.436
+2026-10-01 20:23:57,843 INFO [model]   Early stopping (chronological val, n=480): best_iter=93 val_logloss=0.6517
+2026-10-01 20:24:00,266 INFO [model]     MarketAnchor: b=0.323 c=+0.035 on 402 priced rows (trusting 32% of disagreement)
+2026-10-01 20:24:00,267 INFO [fast_wf]   noodds:hgb:0 fold 1/8 feats=310 anchor b=0.323
+2026-10-01 20:24:01,571 INFO [model]   Early stopping (chronological val, n=480): best_iter=197 val_logloss=0.6546
+2026-10-01 20:24:05,574 INFO [model]     MarketAnchor: b=0.306 c=+0.035 on 402 priced rows (trusting 31% of disagreement)
+2026-10-01 20:24:05,575 INFO [fast_wf]   noodds:hgb:0 fold 1/8 feats=310 anchor b=0.306
+2026-10-01 20:24:09,003 INFO [model]   Early stopping (chronological val, n=480): best_iter=91 val_logloss=0.6544
+2026-10-01 20:24:11,526 INFO [model]     MarketAnchor: b=0.226 c=+0.042 on 402 priced rows (trusting 23% of disagreement)
+2026-10-01 20:24:11,527 INFO [fast_wf]   noodds:hgb:0 fold 1/8 feats=314 anchor b=0.226
+2026-10-01 20:24:17,898 INFO [model]   Early stopping (chronological val, n=520): best_iter=97 val_logloss=0.6555
+2026-10-01 20:24:20,281 INFO [model]     MarketAnchor: b=0.413 c=+0.150 on 493 priced rows (trusting 41% of disagreement)
+2026-10-01 20:24:20,281 INFO [fast_wf]   noodds:hgb:0 fold 2/8 feats=310 anchor b=0.413
+2026-10-01 20:24:22,901 INFO [model]   Early stopping (chronological val, n=520): best_iter=126 val_logloss=0.6583
+2026-10-01 20:24:25,792 INFO [model]     MarketAnchor: b=0.386 c=+0.150 on 493 priced rows (trusting 39% of disagreement)
+2026-10-01 20:24:25,793 INFO [fast_wf]   noodds:hgb:0 fold 2/8 feats=310 anchor b=0.386
+2026-10-01 20:24:29,005 INFO [model]   Early stopping (chronological val, n=520): best_iter=164 val_logloss=0.6585
+2026-10-01 20:24:32,693 INFO [model]     MarketAnchor: b=0.374 c=+0.157 on 493 priced rows (trusting 37% of disagreement)
+2026-10-01 20:24:32,695 INFO [fast_wf]   noodds:hgb:0 fold 2/8 feats=314 anchor b=0.374
+2026-10-01 20:24:38,401 INFO [model]   Early stopping (chronological val, n=560): best_iter=304 val_logloss=0.6513
+2026-10-01 20:24:43,383 INFO [model]   Early stopping (chronological val, n=560): best_iter=302 val_logloss=0.6576
+2026-10-01 20:24:44,196 INFO [model]     MarketAnchor: b=0.316 c=+0.097 on 529 priced rows (trusting 32% of disagreement)
+2026-10-01 20:24:44,197 INFO [fast_wf]   noodds:hgb:0 fold 3/8 feats=310 anchor b=0.316
+2026-10-01 20:24:50,245 INFO [model]     MarketAnchor: b=0.362 c=+0.094 on 529 priced rows (trusting 36% of disagreement)
+2026-10-01 20:24:50,246 INFO [fast_wf]   noodds:hgb:0 fold 3/8 feats=310 anchor b=0.362
+2026-10-01 20:24:51,407 INFO [model]   Early stopping (chronological val, n=560): best_iter=373 val_logloss=0.6558
+2026-10-01 20:24:59,024 INFO [model]     MarketAnchor: b=0.392 c=+0.088 on 529 priced rows (trusting 39% of disagreement)
+2026-10-01 20:24:59,025 INFO [fast_wf]   noodds:hgb:0 fold 3/8 feats=314 anchor b=0.392
+2026-10-01 20:25:03,890 INFO [model]   Early stopping (chronological val, n=600): best_iter=173 val_logloss=0.6427
+2026-10-01 20:25:07,728 INFO [model]     MarketAnchor: b=0.302 c=+0.100 on 595 priced rows (trusting 30% of disagreement)
+2026-10-01 20:25:07,729 INFO [fast_wf]   noodds:hgb:0 fold 4/8 feats=310 anchor b=0.302
+2026-10-01 20:25:08,547 INFO [model]   Early stopping (chronological val, n=600): best_iter=162 val_logloss=0.6445
+2026-10-01 20:25:12,202 INFO [model]     MarketAnchor: b=0.259 c=+0.101 on 595 priced rows (trusting 26% of disagreement)
+2026-10-01 20:25:12,203 INFO [fast_wf]   noodds:hgb:0 fold 4/8 feats=310 anchor b=0.259
+2026-10-01 20:25:16,864 INFO [model]   Early stopping (chronological val, n=600): best_iter=177 val_logloss=0.6439
+2026-10-01 20:25:20,913 INFO [model]     MarketAnchor: b=0.316 c=+0.093 on 595 priced rows (trusting 32% of disagreement)
+2026-10-01 20:25:20,913 INFO [fast_wf]   noodds:hgb:0 fold 4/8 feats=314 anchor b=0.316
+2026-10-01 20:25:29,058 INFO [model]   Early stopping (chronological val, n=640): best_iter=187 val_logloss=0.6449
+2026-10-01 20:25:33,478 INFO [model]     MarketAnchor: b=0.324 c=+0.060 on 628 priced rows (trusting 32% of disagreement)
+2026-10-01 20:25:33,479 INFO [fast_wf]   noodds:hgb:0 fold 5/8 feats=310 anchor b=0.324
+2026-10-01 20:25:34,019 INFO [model]   Early stopping (chronological val, n=640): best_iter=228 val_logloss=0.6439
+2026-10-01 20:25:38,970 INFO [model]     MarketAnchor: b=0.367 c=+0.053 on 628 priced rows (trusting 37% of disagreement)
+2026-10-01 20:25:38,971 INFO [fast_wf]   noodds:hgb:0 fold 5/8 feats=310 anchor b=0.367
+2026-10-01 20:25:42,930 INFO [model]   Early stopping (chronological val, n=640): best_iter=274 val_logloss=0.6431
+2026-10-01 20:25:49,656 INFO [model]     MarketAnchor: b=0.383 c=+0.054 on 628 priced rows (trusting 38% of disagreement)
+2026-10-01 20:25:49,658 INFO [fast_wf]   noodds:hgb:0 fold 5/8 feats=314 anchor b=0.383
+2026-10-01 20:25:52,661 INFO [model]   Early stopping (chronological val, n=680): best_iter=132 val_logloss=0.6460
+2026-10-01 20:25:56,375 INFO [model]     MarketAnchor: b=0.239 c=+0.047 on 689 priced rows (trusting 24% of disagreement)
+2026-10-01 20:25:56,377 INFO [fast_wf]   noodds:hgb:0 fold 6/8 feats=310 anchor b=0.239
+2026-10-01 20:25:59,181 INFO [model]   Early stopping (chronological val, n=680): best_iter=142 val_logloss=0.6457
+2026-10-01 20:26:02,832 INFO [model]     MarketAnchor: b=0.208 c=+0.052 on 689 priced rows (trusting 21% of disagreement)
+2026-10-01 20:26:02,834 INFO [fast_wf]   noodds:hgb:0 fold 6/8 feats=310 anchor b=0.208
+2026-10-01 20:26:10,231 INFO [model]   Early stopping (chronological val, n=680): best_iter=130 val_logloss=0.6439
+2026-10-01 20:26:13,725 INFO [model]     MarketAnchor: b=0.184 c=+0.056 on 689 priced rows (trusting 18% of disagreement)
+2026-10-01 20:26:13,725 INFO [fast_wf]   noodds:hgb:0 fold 6/8 feats=314 anchor b=0.184
+2026-10-01 20:26:17,432 INFO [model]   Early stopping (chronological val, n=720): best_iter=147 val_logloss=0.6419
+2026-10-01 20:26:21,156 INFO [model]     MarketAnchor: b=0.291 c=+0.068 on 707 priced rows (trusting 29% of disagreement)
+2026-10-01 20:26:21,157 INFO [fast_wf]   noodds:hgb:0 fold 7/8 feats=310 anchor b=0.291
+2026-10-01 20:26:22,748 INFO [model]   Early stopping (chronological val, n=720): best_iter=143 val_logloss=0.6427
+2026-10-01 20:26:26,851 INFO [model]     MarketAnchor: b=0.295 c=+0.070 on 707 priced rows (trusting 30% of disagreement)
+2026-10-01 20:26:26,852 INFO [fast_wf]   noodds:hgb:0 fold 7/8 feats=310 anchor b=0.295
+2026-10-01 20:26:34,062 INFO [model]   Early stopping (chronological val, n=720): best_iter=165 val_logloss=0.6408
+2026-10-01 20:26:38,555 INFO [model]     MarketAnchor: b=0.294 c=+0.067 on 707 priced rows (trusting 29% of disagreement)
+2026-10-01 20:26:38,556 INFO [fast_wf]   noodds:hgb:0 fold 7/8 feats=314 anchor b=0.294
+2026-10-01 20:26:42,185 INFO [model]   Early stopping (chronological val, n=760): best_iter=250 val_logloss=0.6404
+2026-10-01 20:26:49,045 INFO [model]   Early stopping (chronological val, n=760): best_iter=225 val_logloss=0.6370
+2026-10-01 20:26:49,691 INFO [model]     MarketAnchor: b=0.436 c=+0.067 on 771 priced rows (trusting 44% of disagreement)
+2026-10-01 20:26:49,692 INFO [fast_wf]   noodds:hgb:0 fold 8/8 feats=310 anchor b=0.436
+2026-10-01 20:26:50,297 INFO [model]     MarketAnchor: b=0.326 c=+0.028 on 402 priced rows (trusting 33% of disagreement)
+2026-10-01 20:26:50,298 INFO [fast_wf]   noodds:logit:0 fold 1/8 feats=310 anchor b=0.326
+2026-10-01 20:26:50,901 INFO [model]     MarketAnchor: b=0.267 c=+0.166 on 493 priced rows (trusting 27% of disagreement)
+2026-10-01 20:26:50,901 INFO [fast_wf]   noodds:logit:0 fold 2/8 feats=310 anchor b=0.267
+2026-10-01 20:26:51,909 INFO [model]     MarketAnchor: b=0.318 c=+0.080 on 529 priced rows (trusting 32% of disagreement)
+2026-10-01 20:26:51,910 INFO [fast_wf]   noodds:logit:0 fold 3/8 feats=310 anchor b=0.318
+2026-10-01 20:26:52,744 INFO [model]     MarketAnchor: b=0.376 c=+0.084 on 595 priced rows (trusting 38% of disagreement)
+2026-10-01 20:26:52,745 INFO [fast_wf]   noodds:logit:0 fold 4/8 feats=310 anchor b=0.376
+2026-10-01 20:26:53,786 INFO [model]     MarketAnchor: b=0.404 c=+0.048 on 628 priced rows (trusting 40% of disagreement)
+2026-10-01 20:26:53,787 INFO [fast_wf]   noodds:logit:0 fold 5/8 feats=310 anchor b=0.404
+2026-10-01 20:26:54,967 INFO [model]     MarketAnchor: b=0.282 c=+0.040 on 689 priced rows (trusting 28% of disagreement)
+2026-10-01 20:26:54,968 INFO [fast_wf]   noodds:logit:0 fold 6/8 feats=310 anchor b=0.282
+2026-10-01 20:26:56,071 INFO [model]     MarketAnchor: b=0.326 c=+0.061 on 707 priced rows (trusting 33% of disagreement)
+2026-10-01 20:26:56,072 INFO [fast_wf]   noodds:logit:0 fold 7/8 feats=310 anchor b=0.326
+2026-10-01 20:26:57,448 INFO [model]     MarketAnchor: b=0.385 c=+0.073 on 771 priced rows (trusting 38% of disagreement)
+2026-10-01 20:26:57,449 INFO [fast_wf]   noodds:logit:0 fold 8/8 feats=310 anchor b=0.385
+2026-10-01 20:26:59,314 INFO [glicko_service]   Loading fight data...
+2026-10-01 20:27:00,092 INFO [glicko_service]   Loaded 11616 fights
+2026-10-01 20:27:00,093 INFO [glicko_service]   Loading per-round stats...
+2026-10-01 20:27:03,853 INFO [model]     MarketAnchor: b=0.383 c=+0.072 on 771 priced rows (trusting 38% of disagreement)
+2026-10-01 20:27:03,856 INFO [fast_wf]   noodds:hgb:0 fold 8/8 feats=310 anchor b=0.383
+2026-10-01 20:27:04,629 INFO [model]     MarketAnchor: b=0.301 c=+0.031 on 402 priced rows (trusting 30% of disagreement)
+2026-10-01 20:27:04,629 INFO [fast_wf]   noodds:logit:0 fold 1/8 feats=310 anchor b=0.301
+2026-10-01 20:27:05,312 INFO [model]     MarketAnchor: b=0.268 c=+0.166 on 493 priced rows (trusting 27% of disagreement)
+2026-10-01 20:27:05,313 INFO [fast_wf]   noodds:logit:0 fold 2/8 feats=310 anchor b=0.268
+2026-10-01 20:27:05,471 INFO [glicko_service]   Loaded rounds for 11286 fights
+2026-10-01 20:27:05,472 INFO [glicko_service]   Loading per-fight derived totals...
+2026-10-01 20:27:06,306 INFO [model]     MarketAnchor: b=0.323 c=+0.083 on 529 priced rows (trusting 32% of disagreement)
+2026-10-01 20:27:06,306 INFO [fast_wf]   noodds:logit:0 fold 3/8 feats=310 anchor b=0.323
+2026-10-01 20:27:07,313 INFO [model]     MarketAnchor: b=0.374 c=+0.086 on 595 priced rows (trusting 37% of disagreement)
+2026-10-01 20:27:07,314 INFO [fast_wf]   noodds:logit:0 fold 4/8 feats=310 anchor b=0.374
+2026-10-01 20:27:08,193 INFO [model]     MarketAnchor: b=0.422 c=+0.048 on 628 priced rows (trusting 42% of disagreement)
+2026-10-01 20:27:08,194 INFO [fast_wf]   noodds:logit:0 fold 5/8 feats=310 anchor b=0.422
+2026-10-01 20:27:09,160 INFO [model]     MarketAnchor: b=0.304 c=+0.039 on 689 priced rows (trusting 30% of disagreement)
+2026-10-01 20:27:09,161 INFO [fast_wf]   noodds:logit:0 fold 6/8 feats=310 anchor b=0.304
+2026-10-01 20:27:09,479 INFO [glicko_service]   Loaded 22572 derived totals rows
+2026-10-01 20:27:10,212 INFO [model]     MarketAnchor: b=0.337 c=+0.061 on 707 priced rows (trusting 34% of disagreement)
+2026-10-01 20:27:10,214 INFO [fast_wf]   noodds:logit:0 fold 7/8 feats=310 anchor b=0.337
+2026-10-01 20:27:10,870 INFO [glicko_service]   Loaded 4617 fighters
+2026-10-01 20:27:11,245 INFO [model]     MarketAnchor: b=0.389 c=+0.074 on 771 priced rows (trusting 39% of disagreement)
+2026-10-01 20:27:11,245 INFO [fast_wf]   noodds:logit:0 fold 8/8 feats=310 anchor b=0.389
+2026-10-01 20:27:11,382 INFO [glicko_service]   Computing weight class baseline rates...
+2026-10-01 20:27:11,674 INFO [glicko_service]     P4P: 1 rounds, KD=0.0000, SUB=0.0000, TD=0.0000, td15s_cap=10.0, ctrl15g_cap=10.0, gnp15g_cap=10.0
+2026-10-01 20:27:11,676 INFO [glicko_service]     Flyweight: 1667 rounds, KD=0.0223, SUB=0.0687, TD=0.0837, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=79.1
+2026-10-01 20:27:11,679 INFO [glicko_service]     Bantamweight: 3013 rounds, KD=0.0254, SUB=0.0624, TD=0.0770, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=84.0
+2026-10-01 20:27:11,682 INFO [glicko_service]     Featherweight: 3365 rounds, KD=0.0254, SUB=0.0663, TD=0.0792, td15s_cap=26.8, ctrl15g_cap=15.0, gnp15g_cap=85.3
+2026-10-01 20:27:11,688 INFO [glicko_service]     Lightweight: 4960 rounds, KD=0.0249, SUB=0.0827, TD=0.0845, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=77.6
+2026-10-01 20:27:11,693 INFO [glicko_service]     Welterweight: 4416 rounds, KD=0.0297, SUB=0.0721, TD=0.0818, td15s_cap=28.1, ctrl15g_cap=15.0, gnp15g_cap=77.8
+2026-10-01 20:27:11,698 INFO [glicko_service]     Middleweight: 4028 rounds, KD=0.0296, SUB=0.0745, TD=0.0734, td15s_cap=25.7, ctrl15g_cap=15.0, gnp15g_cap=94.7
+2026-10-01 20:27:11,701 INFO [glicko_service]     Light Heavyweight: 2462 rounds, KD=0.0332, SUB=0.0515, TD=0.0675, td15s_cap=26.3, ctrl15g_cap=15.0, gnp15g_cap=106.6
+2026-10-01 20:27:11,703 INFO [glicko_service]     Heavyweight: 2651 rounds, KD=0.0323, SUB=0.0576, TD=0.0590, td15s_cap=23.1, ctrl15g_cap=15.0, gnp15g_cap=103.8
+2026-10-01 20:27:11,704 INFO [glicko_service]     P4P: 1 rounds, KD=0.0000, SUB=0.0000, TD=0.0000, td15s_cap=10.0, ctrl15g_cap=10.0, gnp15g_cap=10.0
+2026-10-01 20:27:11,704 INFO [glicko_service]     Strawweight: 1380 rounds, KD=0.0092, SUB=0.0493, TD=0.0696, td15s_cap=23.4, ctrl15g_cap=15.0, gnp15g_cap=64.7
+2026-10-01 20:27:11,705 INFO [glicko_service]     Flyweight: 1059 rounds, KD=0.0077, SUB=0.0465, TD=0.0616, td15s_cap=22.2, ctrl15g_cap=15.0, gnp15g_cap=77.1
+2026-10-01 20:27:11,706 INFO [glicko_service]     Bantamweight: 1003 rounds, KD=0.0098, SUB=0.0489, TD=0.0621, td15s_cap=27.3, ctrl15g_cap=15.0, gnp15g_cap=78.8
+2026-10-01 20:27:15,810 INFO [model]   Early stopping (chronological val, n=760): best_iter=270 val_logloss=0.6373
+2026-10-01 20:27:17,060 INFO [glicko_service]   Processed 27882 rounds
+2026-10-01 20:27:17,117 INFO [model] Loading data from database...
+2026-10-01 20:27:17,369 INFO [model]   Loaded 4617 fighters
+2026-10-01 20:27:20,550 INFO [model]     MarketAnchor: b=0.360 c=+0.073 on 771 priced rows (trusting 36% of disagreement)
+2026-10-01 20:27:20,551 INFO [fast_wf]   noodds:hgb:0 fold 8/8 feats=314 anchor b=0.360
+2026-10-01 20:27:21,149 INFO [model]     MarketAnchor: b=0.286 c=+0.034 on 402 priced rows (trusting 29% of disagreement)
+2026-10-01 20:27:21,149 INFO [fast_wf]   noodds:logit:0 fold 1/8 feats=314 anchor b=0.286
+2026-10-01 20:27:21,724 INFO [model]     MarketAnchor: b=0.258 c=+0.166 on 493 priced rows (trusting 26% of disagreement)
+2026-10-01 20:27:21,725 INFO [fast_wf]   noodds:logit:0 fold 2/8 feats=314 anchor b=0.258
+2026-10-01 20:27:21,960 INFO [model]   Loaded 22299 fight-stat rows (11198 unique fights)
+2026-10-01 20:27:21,961 INFO [model]   Loading per-round stats...
+2026-10-01 20:27:22,485 INFO [model]     MarketAnchor: b=0.314 c=+0.082 on 529 priced rows (trusting 31% of disagreement)
+2026-10-01 20:27:22,486 INFO [fast_wf]   noodds:logit:0 fold 3/8 feats=314 anchor b=0.314
+2026-10-01 20:27:23,123 INFO [model]     MarketAnchor: b=0.373 c=+0.085 on 595 priced rows (trusting 37% of disagreement)
+2026-10-01 20:27:23,124 INFO [fast_wf]   noodds:logit:0 fold 4/8 feats=314 anchor b=0.373
+2026-10-01 20:27:23,724 INFO [model]     MarketAnchor: b=0.413 c=+0.047 on 628 priced rows (trusting 41% of disagreement)
+2026-10-01 20:27:23,724 INFO [fast_wf]   noodds:logit:0 fold 5/8 feats=314 anchor b=0.413
+2026-10-01 20:27:24,389 INFO [model]     MarketAnchor: b=0.322 c=+0.038 on 689 priced rows (trusting 32% of disagreement)
+2026-10-01 20:27:24,390 INFO [fast_wf]   noodds:logit:0 fold 6/8 feats=314 anchor b=0.322
+2026-10-01 20:27:25,288 INFO [model]     MarketAnchor: b=0.336 c=+0.063 on 707 priced rows (trusting 34% of disagreement)
+2026-10-01 20:27:25,288 INFO [fast_wf]   noodds:logit:0 fold 7/8 feats=314 anchor b=0.336
+2026-10-01 20:27:26,122 INFO [model]     MarketAnchor: b=0.381 c=+0.075 on 771 priced rows (trusting 38% of disagreement)
+2026-10-01 20:27:26,123 INFO [fast_wf]   noodds:logit:0 fold 8/8 feats=314 anchor b=0.381
+2026-10-01 20:27:27,136 INFO [model]   Loaded 61838 per-round stat rows
+2026-10-01 20:27:27,400 INFO [model] Building features...
+2026-10-01 20:27:33,149 INFO [career_rating]   Career ratings: 228719 pro bouts, 4040 linked UFC fighters, 20558/22299 rows covered
+2026-10-01 20:27:33,822 INFO [model]   Computing defensive stats...
+2026-10-01 20:27:38,802 INFO [model]   Computing Elo ratings...
+2026-10-01 20:27:40,216 INFO [model]   Computing resume scores...
+2026-10-01 20:27:40,581 INFO [model]   Using 21096 caller-supplied Glicko snapshots
+2026-10-01 20:27:46,694 INFO [model]   Added 15 Glicko features  + 4 confidence features
+2026-10-01 20:27:46,695 INFO [model]   Computing Elo-adjusted stats...
+2026-10-01 20:27:46,698 INFO [model]   Computing rolling career averages...
+2026-10-01 20:28:46,361 INFO [model]   Computing streaks and career stats...
+2026-10-01 20:28:51,153 INFO [model]   Computing composite features...
+2026-10-01 20:28:51,166 INFO [model]   Computing round-by-round profiles...
+2026-10-01 20:29:15,549 INFO [model]   Computing age curve features...
+2026-10-01 20:29:15,557 INFO [model]   Computing damage accumulation...
+2026-10-01 20:29:18,839 INFO [model]   Computing weight-class movement...
+2026-10-01 20:29:19,395 INFO [model]   Computing age-relative performance residuals...
+2026-10-01 20:29:19,622 INFO [model]   Computing opponent-adjusted expected stats...
+2026-10-01 20:29:19,681 INFO [expected_stats]   Expected stats (v2): 59 refits x 5 stats
+2026-10-01 20:30:53,519 INFO [model]   Computing fighter style clusters (k=6)...
+2026-10-01 20:30:53,986 INFO [model]     Fit on 17081 rows, assigned 22299 fighter-fights
+2026-10-01 20:30:53,987 INFO [model]     Style 0 (3349 fighter-fights): SigStr/5=15.4 TD/5=0.6 Sub/5=0.5 Ctrl/5=50.7 GndStr/5=3.1 top=ctrl_per5
+2026-10-01 20:30:53,987 INFO [model]     Style 1 (10346 fighter-fights): SigStr/5=15.1 TD/5=0.5 Sub/5=0.3 Ctrl/5=43.5 GndStr/5=3.1 top=ctrl_per5
+2026-10-01 20:30:53,987 INFO [model]     Style 2 (3759 fighter-fights): SigStr/5=16.7 TD/5=1.5 Sub/5=0.6 Ctrl/5=113.4 GndStr/5=8.0 top=ctrl_per5
+2026-10-01 20:30:53,987 INFO [model]     Style 3 (4223 fighter-fights): SigStr/5=30.5 TD/5=0.3 Sub/5=0.2 Ctrl/5=33.7 GndStr/5=5.6 top=ctrl_per5
+2026-10-01 20:30:53,987 INFO [model]     Style 4 (314 fighter-fights): SigStr/5=71.9 TD/5=0.7 Sub/5=0.3 Ctrl/5=55.9 GndStr/5=35.5 top=sig_str_landed_per5
+2026-10-01 20:30:53,988 INFO [model]     Style 5 (308 fighter-fights): SigStr/5=11.6 TD/5=2.3 Sub/5=4.7 Ctrl/5=54.7 GndStr/5=3.9 top=ctrl_per5
+2026-10-01 20:30:54,094 INFO [model]   Style matchup features computed expanding-in-time (6x6, 22202 fighter-fights)
+2026-10-01 20:30:54,621 INFO [model]   Feature matrix shape: (22299, 375)
+2026-10-01 20:30:54,660 INFO [model] Building matchup feature matrix...
+2026-10-01 20:30:54,855 INFO [model]   Loading odds from database...
+2026-10-01 20:30:56,599 INFO [model]   Odds matched: 2867/11101 fights (25.8%)
+2026-10-01 20:30:56,641 INFO [model]   Filtered to modern era (2015+): 6284 fights (dropped 4587 pre-2015)
+2026-10-01 20:30:56,642 INFO [model]   Red win rate (modern): 0.567
+2026-10-01 20:30:56,655 INFO [model]   Matchup matrix: 6284 fights, 321 candidate features
+2026-10-01 20:30:56,655 INFO [model]   Red win rate: 0.567
+2026-10-01 20:30:56,656 INFO [model]   Date range: 2015-01-03 to 2026-09-26
+2026-10-01 20:31:08,726 INFO [model]     MarketAnchor: b=0.334 c=+0.039 on 402 priced rows (trusting 33% of disagreement)
+2026-10-01 20:31:08,728 INFO [fast_wf]   noodds:catboost:0 fold 1/8 feats=314 anchor b=0.334
+2026-10-01 20:31:18,559 INFO [model]     MarketAnchor: b=0.405 c=+0.161 on 493 priced rows (trusting 40% of disagreement)
+2026-10-01 20:31:18,561 INFO [fast_wf]   noodds:catboost:0 fold 2/8 feats=314 anchor b=0.405
+2026-10-01 20:31:30,020 INFO [model]     MarketAnchor: b=0.450 c=+0.093 on 529 priced rows (trusting 45% of disagreement)
+2026-10-01 20:31:30,021 INFO [fast_wf]   noodds:catboost:0 fold 3/8 feats=314 anchor b=0.450
+2026-10-01 20:31:42,820 INFO [model]     MarketAnchor: b=0.300 c=+0.096 on 595 priced rows (trusting 30% of disagreement)
+2026-10-01 20:31:42,822 INFO [fast_wf]   noodds:catboost:0 fold 4/8 feats=314 anchor b=0.300
+2026-10-01 20:31:56,633 INFO [model]     MarketAnchor: b=0.406 c=+0.053 on 628 priced rows (trusting 41% of disagreement)
+2026-10-01 20:31:56,634 INFO [fast_wf]   noodds:catboost:0 fold 5/8 feats=314 anchor b=0.406
+2026-10-01 20:32:06,635 INFO [model]     MarketAnchor: b=0.240 c=+0.049 on 689 priced rows (trusting 24% of disagreement)
+2026-10-01 20:32:06,636 INFO [fast_wf]   noodds:catboost:0 fold 6/8 feats=314 anchor b=0.240
+2026-10-01 20:32:21,870 INFO [model]     MarketAnchor: b=0.312 c=+0.067 on 707 priced rows (trusting 31% of disagreement)
+2026-10-01 20:32:21,871 INFO [fast_wf]   noodds:catboost:0 fold 7/8 feats=314 anchor b=0.312
+2026-10-01 20:32:37,539 INFO [model]     MarketAnchor: b=0.430 c=+0.073 on 771 priced rows (trusting 43% of disagreement)
+2026-10-01 20:32:37,541 INFO [fast_wf]   noodds:catboost:0 fold 8/8 feats=314 anchor b=0.430
+2026-10-01 20:32:44,174 INFO [model]     MarketAnchor: b=0.309 c=+0.034 on 402 priced rows (trusting 31% of disagreement)
+2026-10-01 20:32:44,174 INFO [fast_wf]   noodds_noraw:catboost:0 fold 1/8 feats=177 anchor b=0.309
+2026-10-01 20:32:49,307 INFO [model]     MarketAnchor: b=0.449 c=+0.147 on 493 priced rows (trusting 45% of disagreement)
+2026-10-01 20:32:49,308 INFO [fast_wf]   noodds_noraw:catboost:0 fold 2/8 feats=177 anchor b=0.449
+2026-10-01 20:32:57,266 INFO [model]     MarketAnchor: b=0.436 c=+0.088 on 529 priced rows (trusting 44% of disagreement)
+2026-10-01 20:32:57,267 INFO [fast_wf]   noodds_noraw:catboost:0 fold 3/8 feats=177 anchor b=0.436
+2026-10-01 20:33:05,671 INFO [model]     MarketAnchor: b=0.347 c=+0.090 on 595 priced rows (trusting 35% of disagreement)
+2026-10-01 20:33:05,673 INFO [fast_wf]   noodds_noraw:catboost:0 fold 4/8 feats=177 anchor b=0.347
+2026-10-01 20:33:13,751 INFO [model]     MarketAnchor: b=0.420 c=+0.048 on 628 priced rows (trusting 42% of disagreement)
+2026-10-01 20:33:13,752 INFO [fast_wf]   noodds_noraw:catboost:0 fold 5/8 feats=177 anchor b=0.420
+2026-10-01 20:33:20,671 INFO [model]     MarketAnchor: b=0.273 c=+0.045 on 689 priced rows (trusting 27% of disagreement)
+2026-10-01 20:33:20,672 INFO [fast_wf]   noodds_noraw:catboost:0 fold 6/8 feats=177 anchor b=0.273
+2026-10-01 20:33:28,795 INFO [model]     MarketAnchor: b=0.312 c=+0.065 on 707 priced rows (trusting 31% of disagreement)
+2026-10-01 20:33:28,796 INFO [fast_wf]   noodds_noraw:catboost:0 fold 7/8 feats=177 anchor b=0.312
+2026-10-01 20:33:37,676 INFO [model]     MarketAnchor: b=0.403 c=+0.074 on 771 priced rows (trusting 40% of disagreement)
+2026-10-01 20:33:37,678 INFO [fast_wf]   noodds_noraw:catboost:0 fold 8/8 feats=177 anchor b=0.403
+2026-10-01 20:33:42,922 INFO [model]   Early stopping (chronological val, n=480): best_iter=89 val_logloss=0.6519
+2026-10-01 20:33:43,737 INFO [model]     MarketAnchor: b=0.227 c=+0.043 on 402 priced rows (trusting 23% of disagreement)
+2026-10-01 20:33:43,738 INFO [fast_wf]   noodds:hgb:0 fold 1/8 feats=314 anchor b=0.227
+2026-10-01 20:33:49,963 INFO [model]   Early stopping (chronological val, n=520): best_iter=136 val_logloss=0.6590
+2026-10-01 20:33:51,345 INFO [model]     MarketAnchor: b=0.376 c=+0.162 on 493 priced rows (trusting 38% of disagreement)
+2026-10-01 20:33:51,346 INFO [fast_wf]   noodds:hgb:0 fold 2/8 feats=314 anchor b=0.376
+2026-10-01 20:33:58,700 INFO [model]   Early stopping (chronological val, n=560): best_iter=410 val_logloss=0.6571
+2026-10-01 20:34:01,704 INFO [model]     MarketAnchor: b=0.448 c=+0.080 on 529 priced rows (trusting 45% of disagreement)
+2026-10-01 20:34:01,705 INFO [fast_wf]   noodds:hgb:0 fold 3/8 feats=314 anchor b=0.448
+2026-10-01 20:34:08,030 INFO [model]   Early stopping (chronological val, n=600): best_iter=175 val_logloss=0.6445
+2026-10-01 20:34:09,758 INFO [model]     MarketAnchor: b=0.227 c=+0.107 on 595 priced rows (trusting 23% of disagreement)
+2026-10-01 20:34:09,758 INFO [fast_wf]   noodds:hgb:0 fold 4/8 feats=314 anchor b=0.227
+2026-10-01 20:34:17,525 INFO [model]   Early stopping (chronological val, n=640): best_iter=163 val_logloss=0.6434
+2026-10-01 20:34:19,365 INFO [model]     MarketAnchor: b=0.346 c=+0.059 on 628 priced rows (trusting 35% of disagreement)
+2026-10-01 20:34:19,366 INFO [fast_wf]   noodds:hgb:0 fold 5/8 feats=314 anchor b=0.346
+2026-10-01 20:34:27,085 INFO [model]   Early stopping (chronological val, n=680): best_iter=133 val_logloss=0.6444
+2026-10-01 20:34:28,670 INFO [model]     MarketAnchor: b=0.180 c=+0.055 on 689 priced rows (trusting 18% of disagreement)
+2026-10-01 20:34:28,671 INFO [fast_wf]   noodds:hgb:0 fold 6/8 feats=314 anchor b=0.180
+2026-10-01 20:34:36,665 INFO [model]   Early stopping (chronological val, n=720): best_iter=134 val_logloss=0.6428
+2026-10-01 20:34:38,301 INFO [model]     MarketAnchor: b=0.315 c=+0.066 on 707 priced rows (trusting 32% of disagreement)
+2026-10-01 20:34:38,301 INFO [fast_wf]   noodds:hgb:0 fold 7/8 feats=314 anchor b=0.315
+2026-10-01 20:34:47,150 INFO [model]   Early stopping (chronological val, n=760): best_iter=215 val_logloss=0.6393
+2026-10-01 20:34:49,591 INFO [model]     MarketAnchor: b=0.375 c=+0.073 on 771 priced rows (trusting 37% of disagreement)
+2026-10-01 20:34:49,592 INFO [fast_wf]   noodds:hgb:0 fold 8/8 feats=314 anchor b=0.375
+2026-10-01 20:34:49,899 INFO [model]     MarketAnchor: b=0.317 c=+0.031 on 402 priced rows (trusting 32% of disagreement)
+2026-10-01 20:34:49,899 INFO [fast_wf]   noodds:logit:0 fold 1/8 feats=314 anchor b=0.317
+2026-10-01 20:34:50,227 INFO [model]     MarketAnchor: b=0.252 c=+0.170 on 493 priced rows (trusting 25% of disagreement)
+2026-10-01 20:34:50,227 INFO [fast_wf]   noodds:logit:0 fold 2/8 feats=314 anchor b=0.252
+2026-10-01 20:34:50,559 INFO [model]     MarketAnchor: b=0.295 c=+0.084 on 529 priced rows (trusting 30% of disagreement)
+2026-10-01 20:34:50,560 INFO [fast_wf]   noodds:logit:0 fold 3/8 feats=314 anchor b=0.295
+2026-10-01 20:34:50,882 INFO [model]     MarketAnchor: b=0.382 c=+0.086 on 595 priced rows (trusting 38% of disagreement)
+2026-10-01 20:34:50,882 INFO [fast_wf]   noodds:logit:0 fold 4/8 feats=314 anchor b=0.382
+2026-10-01 20:34:51,283 INFO [model]     MarketAnchor: b=0.415 c=+0.050 on 628 priced rows (trusting 42% of disagreement)
+2026-10-01 20:34:51,283 INFO [fast_wf]   noodds:logit:0 fold 5/8 feats=314 anchor b=0.415
+2026-10-01 20:34:51,688 INFO [model]     MarketAnchor: b=0.325 c=+0.038 on 689 priced rows (trusting 33% of disagreement)
+2026-10-01 20:34:51,688 INFO [fast_wf]   noodds:logit:0 fold 6/8 feats=314 anchor b=0.325
+2026-10-01 20:34:52,177 INFO [model]     MarketAnchor: b=0.342 c=+0.063 on 707 priced rows (trusting 34% of disagreement)
+2026-10-01 20:34:52,178 INFO [fast_wf]   noodds:logit:0 fold 7/8 feats=314 anchor b=0.342
+2026-10-01 20:34:52,754 INFO [model]     MarketAnchor: b=0.400 c=+0.075 on 771 priced rows (trusting 40% of disagreement)
+2026-10-01 20:34:52,754 INFO [fast_wf]   noodds:logit:0 fold 8/8 feats=314 anchor b=0.400
+2026-10-01 20:34:52,829 INFO [fast_wf] wrote /private/tmp/claude-501/-Users-rafeburns-Downloads-ALocks/4668a2bb-5b4b-4a13-a70d-94e74bfedd4e/scratchpad/wf_xs2ng.csv
+2026-10-02 04:24:22,352 INFO [model] Loading data from database...
+2026-10-02 04:24:35,784 INFO [model]   Loaded 4618 fighters
+2026-10-02 04:24:39,269 INFO [model]   Added 91 upcoming fights
+2026-10-02 04:24:39,540 INFO [model]   Loaded 22481 fight-stat rows (11289 unique fights)
+2026-10-02 04:24:39,540 INFO [model]   Loading per-round stats...
+2026-10-02 04:24:43,809 INFO [model]   Loaded 62680 per-round stat rows
+2026-10-02 04:25:01,217 INFO [model] Loading data from database...
+2026-10-02 04:25:14,706 INFO [model]   Loaded 4618 fighters
+2026-10-02 04:25:18,176 INFO [model]   Added 91 upcoming fights
+2026-10-02 04:25:18,454 INFO [model]   Loaded 22481 fight-stat rows (11289 unique fights)
+2026-10-02 04:25:18,454 INFO [model]   Loading per-round stats...
+2026-10-02 04:25:24,696 INFO [model]   Loaded 62680 per-round stat rows
+2026-10-02 04:25:26,102 INFO [expected_stats_serving]   attached 21096 Glicko snapshots
+2026-10-02 04:25:26,181 INFO [expected_stats]   Expected stats (v2): 59 refits x 5 stats
+2026-10-02 17:48:54,441 INFO [fast_wf_ja] eval fights 2514; diff_judge_appeal nonzero on 81% of them (SD 0.228)
+2026-10-02 17:48:58,265 INFO [model]     MarketAnchor: b=0.406 c=+0.033 on 402 priced rows (trusting 41% of disagreement)
+2026-10-02 17:48:58,265 INFO [fast_wf]   noodds:catboost:0 fold 1/8 feats=310 anchor b=0.406
+2026-10-02 17:49:03,332 INFO [model]     MarketAnchor: b=0.417 c=+0.156 on 493 priced rows (trusting 42% of disagreement)
+2026-10-02 17:49:03,333 INFO [fast_wf]   noodds:catboost:0 fold 2/8 feats=310 anchor b=0.417
+2026-10-02 17:49:10,940 INFO [model]     MarketAnchor: b=0.413 c=+0.090 on 529 priced rows (trusting 41% of disagreement)
+2026-10-02 17:49:10,941 INFO [fast_wf]   noodds:catboost:0 fold 3/8 feats=310 anchor b=0.413
+2026-10-02 17:49:21,712 INFO [model]     MarketAnchor: b=0.338 c=+0.094 on 595 priced rows (trusting 34% of disagreement)
+2026-10-02 17:49:21,712 INFO [fast_wf]   noodds:catboost:0 fold 4/8 feats=310 anchor b=0.338
+2026-10-02 17:49:29,279 INFO [model]     MarketAnchor: b=0.372 c=+0.058 on 628 priced rows (trusting 37% of disagreement)
+2026-10-02 17:49:29,280 INFO [fast_wf]   noodds:catboost:0 fold 5/8 feats=310 anchor b=0.372
+2026-10-02 17:49:38,135 INFO [model]     MarketAnchor: b=0.264 c=+0.045 on 689 priced rows (trusting 26% of disagreement)
+2026-10-02 17:49:38,135 INFO [fast_wf]   noodds:catboost:0 fold 6/8 feats=310 anchor b=0.264
+2026-10-02 17:49:50,025 INFO [model]     MarketAnchor: b=0.348 c=+0.064 on 707 priced rows (trusting 35% of disagreement)
+2026-10-02 17:49:50,026 INFO [fast_wf]   noodds:catboost:0 fold 7/8 feats=310 anchor b=0.348
+2026-10-02 17:49:59,278 INFO [model]     MarketAnchor: b=0.415 c=+0.069 on 771 priced rows (trusting 41% of disagreement)
+2026-10-02 17:49:59,279 INFO [fast_wf]   noodds:catboost:0 fold 8/8 feats=310 anchor b=0.415
+2026-10-02 17:50:02,992 INFO [model]     MarketAnchor: b=0.383 c=+0.029 on 402 priced rows (trusting 38% of disagreement)
+2026-10-02 17:50:02,992 INFO [fast_wf]   noodds_noraw:catboost:0 fold 1/8 feats=173 anchor b=0.383
+2026-10-02 17:50:05,855 INFO [model]     MarketAnchor: b=0.400 c=+0.152 on 493 priced rows (trusting 40% of disagreement)
+2026-10-02 17:50:05,856 INFO [fast_wf]   noodds_noraw:catboost:0 fold 2/8 feats=173 anchor b=0.400
+2026-10-02 17:50:08,799 INFO [model]     MarketAnchor: b=0.443 c=+0.090 on 529 priced rows (trusting 44% of disagreement)
+2026-10-02 17:50:08,800 INFO [fast_wf]   noodds_noraw:catboost:0 fold 3/8 feats=173 anchor b=0.443
+2026-10-02 17:50:13,329 INFO [model]     MarketAnchor: b=0.350 c=+0.090 on 595 priced rows (trusting 35% of disagreement)
+2026-10-02 17:50:13,330 INFO [fast_wf]   noodds_noraw:catboost:0 fold 4/8 feats=173 anchor b=0.350
+2026-10-02 17:50:19,011 INFO [model]     MarketAnchor: b=0.425 c=+0.051 on 628 priced rows (trusting 43% of disagreement)
+2026-10-02 17:50:19,012 INFO [fast_wf]   noodds_noraw:catboost:0 fold 5/8 feats=173 anchor b=0.425
+2026-10-02 17:50:22,936 INFO [model]     MarketAnchor: b=0.266 c=+0.046 on 689 priced rows (trusting 27% of disagreement)
+2026-10-02 17:50:22,937 INFO [fast_wf]   noodds_noraw:catboost:0 fold 6/8 feats=173 anchor b=0.266
+2026-10-02 17:50:27,932 INFO [model]     MarketAnchor: b=0.358 c=+0.067 on 707 priced rows (trusting 36% of disagreement)
+2026-10-02 17:50:27,932 INFO [fast_wf]   noodds_noraw:catboost:0 fold 7/8 feats=173 anchor b=0.358
+2026-10-02 17:50:33,726 INFO [model]     MarketAnchor: b=0.452 c=+0.073 on 771 priced rows (trusting 45% of disagreement)
+2026-10-02 17:50:33,728 INFO [fast_wf]   noodds_noraw:catboost:0 fold 8/8 feats=173 anchor b=0.452
+2026-10-02 17:50:37,744 INFO [model]   Early stopping (chronological val, n=480): best_iter=107 val_logloss=0.6535
+2026-10-02 17:50:38,381 INFO [model]     MarketAnchor: b=0.255 c=+0.042 on 402 priced rows (trusting 25% of disagreement)
+2026-10-02 17:50:38,381 INFO [fast_wf]   noodds:hgb:0 fold 1/8 feats=310 anchor b=0.255
+2026-10-02 17:50:42,921 INFO [model]   Early stopping (chronological val, n=520): best_iter=147 val_logloss=0.6582
+2026-10-02 17:50:43,817 INFO [model]     MarketAnchor: b=0.391 c=+0.150 on 493 priced rows (trusting 39% of disagreement)
+2026-10-02 17:50:43,817 INFO [fast_wf]   noodds:hgb:0 fold 2/8 feats=310 anchor b=0.391
+2026-10-02 17:50:48,607 INFO [model]   Early stopping (chronological val, n=560): best_iter=344 val_logloss=0.6573
+2026-10-02 17:50:50,279 INFO [model]     MarketAnchor: b=0.415 c=+0.088 on 529 priced rows (trusting 42% of disagreement)
+2026-10-02 17:50:50,280 INFO [fast_wf]   noodds:hgb:0 fold 3/8 feats=310 anchor b=0.415
+2026-10-02 17:50:55,485 INFO [model]   Early stopping (chronological val, n=600): best_iter=215 val_logloss=0.6429
+2026-10-02 17:50:56,902 INFO [model]     MarketAnchor: b=0.308 c=+0.096 on 595 priced rows (trusting 31% of disagreement)
+2026-10-02 17:50:56,902 INFO [fast_wf]   noodds:hgb:0 fold 4/8 feats=310 anchor b=0.308
+2026-10-02 17:51:02,785 INFO [model]   Early stopping (chronological val, n=640): best_iter=279 val_logloss=0.6416
+2026-10-02 17:51:04,676 INFO [model]     MarketAnchor: b=0.432 c=+0.048 on 628 priced rows (trusting 43% of disagreement)
+2026-10-02 17:51:04,676 INFO [fast_wf]   noodds:hgb:0 fold 5/8 feats=310 anchor b=0.432
+2026-10-02 17:51:10,277 INFO [model]   Early stopping (chronological val, n=680): best_iter=125 val_logloss=0.6431
+2026-10-02 17:51:11,288 INFO [model]     MarketAnchor: b=0.190 c=+0.053 on 689 priced rows (trusting 19% of disagreement)
+2026-10-02 17:51:11,289 INFO [fast_wf]   noodds:hgb:0 fold 6/8 feats=310 anchor b=0.190
+2026-10-02 17:51:16,887 INFO [model]   Early stopping (chronological val, n=720): best_iter=204 val_logloss=0.6422
+2026-10-02 17:51:18,152 INFO [model]     MarketAnchor: b=0.318 c=+0.066 on 707 priced rows (trusting 32% of disagreement)
+2026-10-02 17:51:18,153 INFO [fast_wf]   noodds:hgb:0 fold 7/8 feats=310 anchor b=0.318
+2026-10-02 17:51:23,626 INFO [model]   Early stopping (chronological val, n=760): best_iter=257 val_logloss=0.6372
+2026-10-02 17:51:25,503 INFO [model]     MarketAnchor: b=0.393 c=+0.070 on 771 priced rows (trusting 39% of disagreement)
+2026-10-02 17:51:25,504 INFO [fast_wf]   noodds:hgb:0 fold 8/8 feats=310 anchor b=0.393
+2026-10-02 17:51:25,792 INFO [model]     MarketAnchor: b=0.286 c=+0.034 on 402 priced rows (trusting 29% of disagreement)
+2026-10-02 17:51:25,792 INFO [fast_wf]   noodds_nosn:logit:0 fold 1/8 feats=310 anchor b=0.286
+2026-10-02 17:51:26,053 INFO [model]     MarketAnchor: b=0.258 c=+0.166 on 493 priced rows (trusting 26% of disagreement)
+2026-10-02 17:51:26,054 INFO [fast_wf]   noodds_nosn:logit:0 fold 2/8 feats=310 anchor b=0.258
+2026-10-02 17:51:26,367 INFO [model]     MarketAnchor: b=0.314 c=+0.082 on 529 priced rows (trusting 31% of disagreement)
+2026-10-02 17:51:26,367 INFO [fast_wf]   noodds_nosn:logit:0 fold 3/8 feats=310 anchor b=0.314
+2026-10-02 17:51:26,593 INFO [model]     MarketAnchor: b=0.373 c=+0.085 on 595 priced rows (trusting 37% of disagreement)
+2026-10-02 17:51:26,594 INFO [fast_wf]   noodds_nosn:logit:0 fold 4/8 feats=310 anchor b=0.373
+2026-10-02 17:51:26,841 INFO [model]     MarketAnchor: b=0.413 c=+0.047 on 628 priced rows (trusting 41% of disagreement)
+2026-10-02 17:51:26,841 INFO [fast_wf]   noodds_nosn:logit:0 fold 5/8 feats=310 anchor b=0.413
+2026-10-02 17:51:27,123 INFO [model]     MarketAnchor: b=0.322 c=+0.038 on 689 priced rows (trusting 32% of disagreement)
+2026-10-02 17:51:27,123 INFO [fast_wf]   noodds_nosn:logit:0 fold 6/8 feats=310 anchor b=0.322
+2026-10-02 17:51:27,435 INFO [model]     MarketAnchor: b=0.336 c=+0.063 on 707 priced rows (trusting 34% of disagreement)
+2026-10-02 17:51:27,435 INFO [fast_wf]   noodds_nosn:logit:0 fold 7/8 feats=310 anchor b=0.336
+2026-10-02 17:51:27,760 INFO [model]     MarketAnchor: b=0.381 c=+0.075 on 771 priced rows (trusting 38% of disagreement)
+2026-10-02 17:51:27,760 INFO [fast_wf]   noodds_nosn:logit:0 fold 8/8 feats=310 anchor b=0.381
+2026-10-02 17:51:33,405 INFO [model]     MarketAnchor: b=0.360 c=+0.035 on 402 priced rows (trusting 36% of disagreement)
+2026-10-02 17:51:33,407 INFO [fast_wf]   noodds:catboost:0 fold 1/8 feats=311 anchor b=0.360
+2026-10-02 17:51:39,238 INFO [model]     MarketAnchor: b=0.400 c=+0.154 on 493 priced rows (trusting 40% of disagreement)
+2026-10-02 17:51:39,238 INFO [fast_wf]   noodds:catboost:0 fold 2/8 feats=311 anchor b=0.400
+2026-10-02 17:51:48,294 INFO [model]     MarketAnchor: b=0.386 c=+0.089 on 529 priced rows (trusting 39% of disagreement)
+2026-10-02 17:51:48,295 INFO [fast_wf]   noodds:catboost:0 fold 3/8 feats=311 anchor b=0.386
+2026-10-02 17:51:57,375 INFO [model]     MarketAnchor: b=0.290 c=+0.100 on 595 priced rows (trusting 29% of disagreement)
+2026-10-02 17:51:57,376 INFO [fast_wf]   noodds:catboost:0 fold 4/8 feats=311 anchor b=0.290
+2026-10-02 17:52:05,148 INFO [model]     MarketAnchor: b=0.410 c=+0.054 on 628 priced rows (trusting 41% of disagreement)
+2026-10-02 17:52:05,150 INFO [fast_wf]   noodds:catboost:0 fold 5/8 feats=311 anchor b=0.410
+2026-10-02 17:52:12,128 INFO [model]     MarketAnchor: b=0.290 c=+0.041 on 689 priced rows (trusting 29% of disagreement)
+2026-10-02 17:52:12,130 INFO [fast_wf]   noodds:catboost:0 fold 6/8 feats=311 anchor b=0.290
+2026-10-02 17:52:22,139 INFO [model]     MarketAnchor: b=0.325 c=+0.064 on 707 priced rows (trusting 33% of disagreement)
+2026-10-02 17:52:22,141 INFO [fast_wf]   noodds:catboost:0 fold 7/8 feats=311 anchor b=0.325
+2026-10-02 17:52:29,353 INFO [model]     MarketAnchor: b=0.432 c=+0.069 on 771 priced rows (trusting 43% of disagreement)
+2026-10-02 17:52:29,354 INFO [fast_wf]   noodds:catboost:0 fold 8/8 feats=311 anchor b=0.432
+2026-10-02 17:52:31,896 INFO [model]     MarketAnchor: b=0.346 c=+0.032 on 402 priced rows (trusting 35% of disagreement)
+2026-10-02 17:52:31,896 INFO [fast_wf]   noodds_noraw:catboost:0 fold 1/8 feats=174 anchor b=0.346
+2026-10-02 17:52:34,788 INFO [model]     MarketAnchor: b=0.397 c=+0.150 on 493 priced rows (trusting 40% of disagreement)
+2026-10-02 17:52:34,788 INFO [fast_wf]   noodds_noraw:catboost:0 fold 2/8 feats=174 anchor b=0.397
+2026-10-02 17:52:37,207 INFO [model]     MarketAnchor: b=0.445 c=+0.092 on 529 priced rows (trusting 45% of disagreement)
+2026-10-02 17:52:37,209 INFO [fast_wf]   noodds_noraw:catboost:0 fold 3/8 feats=174 anchor b=0.445
+2026-10-02 17:52:43,578 INFO [model]     MarketAnchor: b=0.304 c=+0.098 on 595 priced rows (trusting 30% of disagreement)
+2026-10-02 17:52:43,578 INFO [fast_wf]   noodds_noraw:catboost:0 fold 4/8 feats=174 anchor b=0.304
+2026-10-02 17:52:49,169 INFO [model]     MarketAnchor: b=0.414 c=+0.053 on 628 priced rows (trusting 41% of disagreement)
+2026-10-02 17:52:49,170 INFO [fast_wf]   noodds_noraw:catboost:0 fold 5/8 feats=174 anchor b=0.414
+2026-10-02 17:52:52,995 INFO [model]     MarketAnchor: b=0.264 c=+0.045 on 689 priced rows (trusting 26% of disagreement)
+2026-10-02 17:52:52,996 INFO [fast_wf]   noodds_noraw:catboost:0 fold 6/8 feats=174 anchor b=0.264
+2026-10-02 17:52:59,547 INFO [model]     MarketAnchor: b=0.353 c=+0.064 on 707 priced rows (trusting 35% of disagreement)
+2026-10-02 17:52:59,548 INFO [fast_wf]   noodds_noraw:catboost:0 fold 7/8 feats=174 anchor b=0.353
+2026-10-02 17:53:04,763 INFO [model]     MarketAnchor: b=0.442 c=+0.072 on 771 priced rows (trusting 44% of disagreement)
+2026-10-02 17:53:04,765 INFO [fast_wf]   noodds_noraw:catboost:0 fold 8/8 feats=174 anchor b=0.442
+2026-10-02 17:53:08,815 INFO [model]   Early stopping (chronological val, n=480): best_iter=92 val_logloss=0.6542
+2026-10-02 17:53:09,474 INFO [model]     MarketAnchor: b=0.277 c=+0.039 on 402 priced rows (trusting 28% of disagreement)
+2026-10-02 17:53:09,475 INFO [fast_wf]   noodds:hgb:0 fold 1/8 feats=311 anchor b=0.277
+2026-10-02 17:53:14,351 INFO [model]   Early stopping (chronological val, n=520): best_iter=146 val_logloss=0.6587
+2026-10-02 17:53:15,373 INFO [model]     MarketAnchor: b=0.388 c=+0.152 on 493 priced rows (trusting 39% of disagreement)
+2026-10-02 17:53:15,374 INFO [fast_wf]   noodds:hgb:0 fold 2/8 feats=311 anchor b=0.388
+2026-10-02 17:53:21,441 INFO [model]   Early stopping (chronological val, n=560): best_iter=558 val_logloss=0.6560
+2026-10-02 17:53:24,569 INFO [model]     MarketAnchor: b=0.426 c=+0.077 on 529 priced rows (trusting 43% of disagreement)
+2026-10-02 17:53:24,569 INFO [fast_wf]   noodds:hgb:0 fold 3/8 feats=311 anchor b=0.426
+2026-10-02 17:53:29,303 INFO [model]   Early stopping (chronological val, n=600): best_iter=243 val_logloss=0.6433
+2026-10-02 17:53:30,655 INFO [model]     MarketAnchor: b=0.296 c=+0.099 on 595 priced rows (trusting 30% of disagreement)
+2026-10-02 17:53:30,655 INFO [fast_wf]   noodds:hgb:0 fold 4/8 feats=311 anchor b=0.296
+2026-10-02 17:53:36,103 INFO [model]   Early stopping (chronological val, n=640): best_iter=229 val_logloss=0.6435
+2026-10-02 17:53:37,736 INFO [model]     MarketAnchor: b=0.385 c=+0.053 on 628 priced rows (trusting 38% of disagreement)
+2026-10-02 17:53:37,737 INFO [fast_wf]   noodds:hgb:0 fold 5/8 feats=311 anchor b=0.385
+2026-10-02 17:53:43,389 INFO [model]   Early stopping (chronological val, n=680): best_iter=109 val_logloss=0.6451
+2026-10-02 17:53:44,319 INFO [model]     MarketAnchor: b=0.212 c=+0.052 on 689 priced rows (trusting 21% of disagreement)
+2026-10-02 17:53:44,320 INFO [fast_wf]   noodds:hgb:0 fold 6/8 feats=311 anchor b=0.212
+2026-10-02 17:53:50,789 INFO [model]   Early stopping (chronological val, n=720): best_iter=227 val_logloss=0.6430
+2026-10-02 17:53:52,537 INFO [model]     MarketAnchor: b=0.362 c=+0.062 on 707 priced rows (trusting 36% of disagreement)
+2026-10-02 17:53:52,537 INFO [fast_wf]   noodds:hgb:0 fold 7/8 feats=311 anchor b=0.362
+2026-10-02 17:53:59,331 INFO [model]   Early stopping (chronological val, n=760): best_iter=245 val_logloss=0.6384
+2026-10-02 17:54:01,254 INFO [model]     MarketAnchor: b=0.355 c=+0.074 on 771 priced rows (trusting 36% of disagreement)
+2026-10-02 17:54:01,255 INFO [fast_wf]   noodds:hgb:0 fold 8/8 feats=311 anchor b=0.355
+2026-10-02 17:54:01,563 INFO [model]     MarketAnchor: b=0.283 c=+0.035 on 402 priced rows (trusting 28% of disagreement)
+2026-10-02 17:54:01,563 INFO [fast_wf]   noodds_nosn:logit:0 fold 1/8 feats=311 anchor b=0.283
+2026-10-02 17:54:01,811 INFO [model]     MarketAnchor: b=0.289 c=+0.160 on 493 priced rows (trusting 29% of disagreement)
+2026-10-02 17:54:01,811 INFO [fast_wf]   noodds_nosn:logit:0 fold 2/8 feats=311 anchor b=0.289
+2026-10-02 17:54:02,075 INFO [model]     MarketAnchor: b=0.374 c=+0.078 on 529 priced rows (trusting 37% of disagreement)
+2026-10-02 17:54:02,076 INFO [fast_wf]   noodds_nosn:logit:0 fold 3/8 feats=311 anchor b=0.374
+2026-10-02 17:54:02,319 INFO [model]     MarketAnchor: b=0.328 c=+0.092 on 595 priced rows (trusting 33% of disagreement)
+2026-10-02 17:54:02,319 INFO [fast_wf]   noodds_nosn:logit:0 fold 4/8 feats=311 anchor b=0.328
+2026-10-02 17:54:02,609 INFO [model]     MarketAnchor: b=0.397 c=+0.048 on 628 priced rows (trusting 40% of disagreement)
+2026-10-02 17:54:02,609 INFO [fast_wf]   noodds_nosn:logit:0 fold 5/8 feats=311 anchor b=0.397
+2026-10-02 17:54:02,963 INFO [model]     MarketAnchor: b=0.314 c=+0.040 on 689 priced rows (trusting 31% of disagreement)
+2026-10-02 17:54:02,964 INFO [fast_wf]   noodds_nosn:logit:0 fold 6/8 feats=311 anchor b=0.314
+2026-10-02 17:54:03,316 INFO [model]     MarketAnchor: b=0.321 c=+0.063 on 707 priced rows (trusting 32% of disagreement)
+2026-10-02 17:54:03,316 INFO [fast_wf]   noodds_nosn:logit:0 fold 7/8 feats=311 anchor b=0.321
+2026-10-02 17:54:03,688 INFO [model]     MarketAnchor: b=0.370 c=+0.077 on 771 priced rows (trusting 37% of disagreement)
+2026-10-02 17:54:03,688 INFO [fast_wf]   noodds_nosn:logit:0 fold 8/8 feats=311 anchor b=0.370

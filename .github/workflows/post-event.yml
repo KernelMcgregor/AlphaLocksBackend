@@ -213,6 +213,29 @@ jobs:
         if: always() && steps.audit.outputs.id != ''
         run: python -m app.services.audit finish --id '${{ steps.audit.outputs.id }}' --status '${{ job.status }}'
 
+  # Judges' scorecards. Runs every morning, not only while an event is missing results:
+  # mmadecisions.com posts round-by-round cards hours to days after a card, so a gate on
+  # "event_happened" would miss most of them. After check-and-update so last night's
+  # results (and their UFCStats judge totals) are already in. A no-op without requests
+  # once every decision of the last 30 days has verified cards. Never blocks anything.
+  scorecards:
+    runs-on: ubuntu-latest
+    needs: check-and-update
+    if: always() && (github.event_name == 'workflow_dispatch' || github.event.schedule == '0 6 * * *')
+    continue-on-error: true
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Sync judges' scorecards (UFCStats totals + mmadecisions rounds)
+        run: python -m app.services.ufc.mmad_scraper --sync --days 30 --max-requests 150 --no-cache
+
   # Also refresh odds twice a week regardless of events
   refresh-odds:
     runs-on: ubuntu-latest

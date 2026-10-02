@@ -1087,3 +1087,167 @@ class UFCCancelledBout(TimestampMixin, Base):
     weight_class: Mapped[str | None] = mapped_column(String(100), nullable=True)
     booked_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     removed_at: Mapped[dt.datetime] = mapped_column(DateTime)
+
+
+# -- Judges' scorecards (mmadecisions.com + UFCStats totals; services/ufc/mmad_scraper.py) --
+
+
+class UFCJudge(TimestampMixin, Base):
+    """One judge. Keyed by the mmadecisions.com judge id when the judge has a page there;
+    judges seen only in UFCStats `details` totals get a row with mmad_judge_id NULL."""
+
+    __tablename__ = "ufc_judges"
+    __table_args__ = {"schema": UFC_SCHEMA}
+
+    mmad_judge_id: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    name_norm: Mapped[str] = mapped_column(String(120), index=True)
+
+
+class UFCJudgeAlias(TimestampMixin, Base):
+    """A judge's name as UFCStats spells it ("Sal D'amato") -> ufc_judges. Learnt from
+    fights where both sources agree on every judge's total, so a new card's UFCStats
+    totals can be credited to the right judge before mmadecisions posts its rounds."""
+
+    __tablename__ = "ufc_judge_aliases"
+    __table_args__ = {"schema": UFC_SCHEMA}
+
+    alias_norm: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    alias: Mapped[str] = mapped_column(String(120))
+    judge_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_judges.id")), index=True)
+    n_fights: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class MMADFighter(TimestampMixin, Base):
+    """mmadecisions.com fighter -> ufc_fighters, derived only from verified fights.
+    match_status: verified | conflict (one id seen on two DB fighters, or the reverse;
+    left unlinked) | unlinked (no verified UFC fight, e.g. non-UFC promotions)."""
+
+    __tablename__ = "mmad_fighters"
+    __table_args__ = {"schema": UFC_SCHEMA}
+
+    mmad_fighter_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    ufc_fighter_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey(_fk("ufc_fighters.id")), nullable=True, index=True)
+    match_status: Mapped[str] = mapped_column(String(20))
+    n_fights_matched: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class MMADDecision(TimestampMixin, Base):
+    """One decision page on mmadecisions.com. fighter_a is listed first on the site (the
+    winner, or the first-named fighter of a draw). For a matched UFC bout, `swapped`
+    True means fighter_a is the DB *blue* corner.
+
+    match_status: verified (winner and every judge's total agree with UFCStats, rounds
+    sum to totals) | name_only (names/date/winner agree; nothing to compare totals with)
+    | review (matched but a check failed, see `flags`) | unmatched | non_ufc."""
+
+    __tablename__ = "mmad_decisions"
+    __table_args__ = {"schema": UFC_SCHEMA}
+
+    mmad_decision_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    mmad_event_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    event_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    is_ufc: Mapped[bool] = mapped_column(Boolean, default=True)
+    date: Mapped[dt.date | None] = mapped_column(Date, nullable=True, index=True)
+    location: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    fighter_a_mmad_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    fighter_b_mmad_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    fighter_a_name: Mapped[str] = mapped_column(String(200))
+    fighter_b_name: Mapped[str] = mapped_column(String(200))
+    outcome: Mapped[str] = mapped_column(String(10))            # win | draw | nc
+    decision_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    referee: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    fight_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey(_fk("ufc_fights.id")), nullable=True, unique=True, index=True)
+    swapped: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    match_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    match_status: Mapped[str] = mapped_column(String(20), index=True)
+    flags: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    #: Fan scorecards submitted on the site, and how many picked a / b / draw.
+    fan_n: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fan_a: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fan_b: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fan_draw: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class UFCJudgeScorecard(TimestampMixin, Base):
+    """A judge's score for one round (round 0 = the total) of one decision.
+
+    source="mmad": from mmadecisions.com, rounds 1..N plus 0. source="ufcstats": the
+    totals in ufc_fights.details (round 0 only; winners only, as UFCStats does not say
+    which corner a draw's numbers belong to).
+
+    red_pts/blue_pts are DB corners when fight_id is set; for non-UFC decisions
+    (fight_id NULL) red = mmad fighter_a, blue = fighter_b. NULL points = unknown (old
+    cards). judge_id is NULL for "Unknown Judge"; judge_seq (1..3) keeps the row unique.
+    """
+
+    __tablename__ = "ufc_judge_scorecards"
+    __table_args__ = (
+        UniqueConstraint("source", "mmad_decision_id", "judge_seq", "round",
+                         name="uq_judge_scorecards_mmad"),
+        UniqueConstraint("source", "fight_id", "judge_seq", "round",
+                         name="uq_judge_scorecards_fight"),
+        {"schema": UFC_SCHEMA},
+    )
+
+    source: Mapped[str] = mapped_column(String(10))
+    mmad_decision_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    fight_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey(_fk("ufc_fights.id")), nullable=True, index=True)
+    judge_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey(_fk("ufc_judges.id")), nullable=True, index=True)
+    judge_seq: Mapped[int] = mapped_column(Integer)
+    round: Mapped[int] = mapped_column(Integer)
+    red_pts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    blue_pts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: Points the referee took off in this round (round 0: the whole fight). red_pts and
+    #: blue_pts are what counted, i.e. AFTER deductions; the judge's own verdict on the
+    #: round is pts + ded (a 9-9 with a 1-point deduction from red was a 10-9 red round).
+    red_ded: Mapped[int] = mapped_column(Integer, default=0)
+    blue_ded: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class MMADDeduction(TimestampMixin, Base):
+    """A referee's point deduction as listed on a decision page ("Figueiredo was
+    deducted 1 point in round 3: Low blow"). fighter is a | b (mmad_decisions sides)."""
+
+    __tablename__ = "mmad_deductions"
+    __table_args__ = {"schema": UFC_SCHEMA}
+
+    mmad_decision_id: Mapped[int] = mapped_column(Integer, index=True)
+    round: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fighter: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    points: Mapped[int] = mapped_column(Integer)
+    reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+
+class MMADMediaScore(TimestampMixin, Base):
+    """A journalist's total score as listed on mmadecisions.com. a/b = mmad_decisions
+    fighter_a/fighter_b; pick is a | b | draw."""
+
+    __tablename__ = "mmad_media_scores"
+    __table_args__ = {"schema": UFC_SCHEMA}
+
+    mmad_decision_id: Mapped[int] = mapped_column(Integer, index=True)
+    journalist: Mapped[str] = mapped_column(String(120))
+    outlet: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    a_pts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    b_pts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pick: Mapped[str | None] = mapped_column(String(5), nullable=True)
+
+
+class MMADFanScore(TimestampMixin, Base):
+    """Share of fan scorecards per outcome. round 0 = the total score distribution
+    ("48-47" for a, ...), round N = that round ("10-9" for b, ...). a/b as above."""
+
+    __tablename__ = "mmad_fan_scores"
+    __table_args__ = {"schema": UFC_SCHEMA}
+
+    mmad_decision_id: Mapped[int] = mapped_column(Integer, index=True)
+    round: Mapped[int] = mapped_column(Integer)
+    score: Mapped[str] = mapped_column(String(10))
+    pick: Mapped[str] = mapped_column(String(5))
+    pct: Mapped[float] = mapped_column(Float)
