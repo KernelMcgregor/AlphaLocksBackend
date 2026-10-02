@@ -32,3 +32,6 @@ models/ufc/h2h/fast_wf_matchup*.pkl
 models/ufc/method/method_wf_matrix.pkl
 models/ufc/method/rounds_wf_matrix.pkl
 models/ufc/method/rounds_wf/
+
+# xs_eval walk-forward predictions and frames (regenerable)
+models/ufc/xs_eval/

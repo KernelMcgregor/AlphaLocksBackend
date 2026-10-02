@@ -1442,7 +1442,7 @@ WINNER_RAW_COLS = (
 # Columns that describe the FIGHT, not a fighter — both corners carry the same value.
 # They must be emitted once as `fight_*`; a diff is identically zero and a red_/blue_
 # pair is two copies of the same number.
-FIGHT_LEVEL_PREFIXES = ("div_",)
+FIGHT_LEVEL_PREFIXES = ("div_", "xs_fight_")
 FIGHT_LEVEL_COLS = ("is_title_fight", "is_five_round", "scheduled_rounds", "scheduled_minutes",
                     "mm_main_event", "mm_co_main", "mm_main_card", "mm_card_depth")
 
@@ -3363,6 +3363,8 @@ def build_serving_matchup(df: pd.DataFrame) -> pd.DataFrame:
 
     def _upcoming_fight_level(fight, col: str) -> float:
         """Fight-level features for a bout that has not happened yet."""
+        if col.startswith("xs_"):
+            return np.nan  # matchup-specific; see the xs_ note in the loop below
         if col.startswith("div_"):
             return float(_classify_weight_class(fight.weight_class) == col[len("div_"):])
         if col == "is_title_fight":
@@ -3392,6 +3394,12 @@ def build_serving_matchup(df: pd.DataFrame) -> pd.DataFrame:
         for col in fight_cols:
             row[f"fight_{col}"] = _upcoming_fight_level(fight, col)
         for col in fighter_cols:
+            # Expected stats are properties of the MATCHUP: the last historical row holds
+            # them against that fighter's previous opponent. Unknown beats wrong, so leave
+            # them NaN for the train-fitted imputation.
+            if col.startswith("xs_"):
+                row[f"diff_{col}"] = np.nan
+                continue
             row[f"diff_{col}"] = _feat(r_feats, r_over, col) - _feat(b_feats, b_over, col)
         for col in raw_cols:
             row[f"red_{col}"] = _feat(r_feats, r_over, col)

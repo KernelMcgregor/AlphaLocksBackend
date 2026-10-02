@@ -44,13 +44,16 @@ from app.services.ufc.model import (
     CAREER_FEATURES_ENABLED, MATCHMAKING_ENABLED, SCORECARDS_ENABLED, SHORT_NOTICE_ENABLED,
     WITHDRAWALS_ENABLED,
 )
+from app.services.ufc.expected_stats import V2 as XS_V2, V2_GLICKO as XS_V2_GLICKO
 
 # Separate caches per feature configuration so runs never mix.
 CACHE = MODEL_DIR / ("fast_wf_matchup" + ("_career" if CAREER_FEATURES_ENABLED else "")
                      + ("_sn" if SHORT_NOTICE_ENABLED else "")
                      + ("_mm" if MATCHMAKING_ENABLED else "")
                      + ("_wd" if WITHDRAWALS_ENABLED else "")
-                     + ("_sc" if SCORECARDS_ENABLED else "") + ".pkl")
+                     + ("_sc" if SCORECARDS_ENABLED else "")
+                     + ("_xs2" if XS_V2 else "")
+                     + ("g" if XS_V2 and XS_V2_GLICKO else "") + ".pkl")
 
 
 def build_matrix(rebuild: bool) -> tuple[pd.DataFrame, list[str]]:
