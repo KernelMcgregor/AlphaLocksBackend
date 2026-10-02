@@ -86,7 +86,11 @@ CTX_SCALE, COV_SCALE = 10.0, 3.0
 
 
 def _boundaries(start: date, end: date) -> list[pd.Timestamp]:
-    return list(pd.date_range(pd.Timestamp(start), pd.Timestamp(end) + pd.offsets.MonthBegin(1),
+    """Refit dates from `start`, the last one strictly after `end`, so every bout up to
+    `end` falls in some [lo, hi) window. (Stopping at end + 1 month left bouts after the
+    final quarter boundary, i.e. most upcoming cards, with no expected stats at all.)"""
+    return list(pd.date_range(pd.Timestamp(start),
+                              pd.Timestamp(end) + pd.DateOffset(months=REFIT_MONTHS),
                               freq=f"{REFIT_MONTHS}MS"))
 
 

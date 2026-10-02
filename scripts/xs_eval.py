@@ -138,7 +138,7 @@ def report_window() -> tuple[pd.DataFrame, pd.Timestamp]:
 # ---------------------------------------------------------------------------
 
 def boundaries(start: str, end: pd.Timestamp, months: int) -> list[pd.Timestamp]:
-    return list(pd.date_range(pd.Timestamp(start), end + pd.offsets.MonthBegin(1), freq=f"{months}MS"))
+    return list(pd.date_range(pd.Timestamp(start), end + pd.DateOffset(months=months), freq=f"{months}MS"))
 
 
 def walk_forward(fit_predict, obs: pd.DataFrame, months: int = 3, start: str = "2012-01-01",

@@ -101,3 +101,9 @@ def test_display_length_distribution_and_p_more():
     a = _p_more(6.0, 4.0, T, P, disp, SUPPORT["sig"])
     b = _p_more(4.0, 6.0, T, P, disp, SUPPORT["sig"])
     assert a > 0.5 and abs(a + b - 1) < 1e-9
+
+
+@pytest.mark.parametrize("end", ["2026-09-30", "2026-10-03", "2026-11-21", "2026-12-31"])
+def test_refit_windows_cover_every_date_up_to_the_last_bout(end):
+    b = es._boundaries(es.FIRST_REFIT, pd.Timestamp(end).date())
+    assert b[-1] > pd.Timestamp(end)
