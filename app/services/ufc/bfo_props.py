@@ -30,9 +30,12 @@ import json
 import re
 from collections import defaultdict
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
-import pandas as pd
+
+if TYPE_CHECKING:  # pandas is only needed for the offline CSV / backfill helpers; the line
+    import pandas as pd  # watcher's light CI install does not have it
 
 from app.services.ufc.bfo_scraper import (
     DEFAULT_CACHE_DIR, _json_ld_date, american_to_prob, parse_american,
@@ -204,6 +207,7 @@ def corner_markets(c: dict, swapped: bool) -> dict[str, dict]:
 
 
 def to_corners(cons: dict[int, dict], links: pd.DataFrame) -> pd.DataFrame:
+    import pandas as pd
     """links: bfo_matchup_id, db_fight_id, db_swapped (from data/bfo/odds.csv)."""
     link = links.dropna(subset=["db_fight_id"]).drop_duplicates("bfo_matchup_id")
     rows = []
@@ -238,6 +242,7 @@ def backfill_closes(odds_csv: Path = Path("data/bfo/odds.csv"), replace: bool = 
     """Load closing props (de-vigged prob + best/median price and book) from the cached event
     pages into ufc_prop_odds_history (source 'bfo_close', captured_at = event date).
     Fights that already have bfo_close rows are skipped unless replace=True."""
+    import pandas as pd
     import datetime as _dt
 
     from app.database import SessionLocal
@@ -278,6 +283,7 @@ def backfill_closes(odds_csv: Path = Path("data/bfo/odds.csv"), replace: bool = 
 
 
 def build(cache_dir: Path = DEFAULT_CACHE_DIR, odds_csv: Path = Path("data/bfo/odds.csv")) -> pd.DataFrame:
+    import pandas as pd
     links = pd.read_csv(odds_csv, dtype={"db_fight_id": str},
                         usecols=["bfo_matchup_id", "db_fight_id", "db_swapped"])
     return to_corners(parse_cache(cache_dir), links)

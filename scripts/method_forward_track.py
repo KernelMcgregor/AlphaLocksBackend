@@ -67,9 +67,13 @@ def _props(db, fight_id: int, first: bool, before: datetime | None = None) -> di
 
 
 def _model_version() -> str | None:
-    from app.services.ufc import method_v2
-    m = method_v2.load()
-    return m.meta.get("trained_at") if m else None
+    """trained_at of the served method_v2 model, from its metadata sidecar (no model
+    imports: this runs in the line watcher's light CI install, without pandas/sklearn)."""
+    meta = Path(__file__).resolve().parents[1] / "models" / "ufc" / "method" / "method_v2_meta.json"
+    try:
+        return json.loads(meta.read_text()).get("trained_at")
+    except (OSError, ValueError):
+        return None
 
 
 def _joint_columns_ready() -> bool:

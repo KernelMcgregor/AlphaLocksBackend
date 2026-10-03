@@ -323,6 +323,10 @@ def train_and_save(rebuild: bool = True, with_oof: bool = True) -> ConditionalMe
                       last_fight=str(matchup["date"].max()), feature_set=FEATURE_SET)
     with open(MODEL_PATH, "wb") as f:
         _pickle.dump(model, f)
+    # Metadata sidecar for lightweight readers (scripts/method_forward_track.py in CI).
+    import json as _json
+    (METHOD_DIR / "method_v2_meta.json").write_text(_json.dumps(
+        {k: (v.tolist() if hasattr(v, "tolist") else v) for k, v in model.meta.items()}, indent=1))
     log.info(f"  saved {MODEL_PATH} ({model.meta['n']} fights, {len(model.features)} features)")
     return model
 
