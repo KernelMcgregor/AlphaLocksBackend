@@ -20,6 +20,10 @@ closing-line history (winner_close). Informational badges (never change the grad
   opening line, outlier price (best > 1.15x the median book's price), line moved away
   (market moved > 2 pts away from the pick since it opened), high variance (decimal >= 6),
   small sample (the band has < 50 historical bets), stale price.
+Arbitrage: every market's outcomes at their best bettable prices (Pinnacle excluded: a US
+bettor cannot take it); when the implied probabilities sum below 1 the fight's `arbs` lists
+the margin and the stake per leg (find_arb), with freshness and sanity warnings.
+
 Exchanges (Kalshi, Polymarket) are price venues like any book, at the cost of buying the Yes
 leg (ask, plus Kalshi's taker fee), but only once a quote has really traded: Polymarket seeds new
 props with placeholder prices and no volume. A pick priced on one carries an "exchange price"
@@ -27,6 +31,8 @@ badge. Exchanges are not in the grade table's backtest (their history is too sho
 ROI behind such a grade comes from sportsbook prices.
 """
 from __future__ import annotations
+
+import math
 
 import json
 from datetime import date, datetime, timedelta
@@ -240,6 +246,52 @@ def merge_prices(side: dict, extra: dict | None) -> dict:
         med = american_from_decimal(median(decimal(v) for v in books.values()))
     return {**side, "best": best, "book": book, "med": med, "books": books}
 
+# ---------------------------------------------------------------------------
+# arbitrage
+# ---------------------------------------------------------------------------
+
+#: Arbs are only listed when their prices are this fresh (the line watcher refreshes every
+#: 2 h); older ones are flagged, and beyond ARB_DROP_HOURS dropped. Large margins are
+#: usually a stale or mistaken line, so they carry a warning.
+ARB_STALE_HOURS = 6
+ARB_DROP_HOURS = 24
+ARB_VERIFY_MARGIN = 0.08
+ARB_MIN_MARGIN = 0.0025
+
+
+def bettable_best(side: dict) -> tuple[str, int] | None:
+    """(book, American) of the best price for a side that a US bettor can actually take:
+    every venue in side["books"] (or the stored best) except the sharp reference book."""
+    books = side.get("books") or ({side["book"]: side["best"]} if side.get("best") is not None else {})
+    cands = [(b, a) for b, a in books.items() if b != SHARP_BOOK and decimal(a)]
+    return max(cands, key=lambda ba: decimal(ba[1])) if cands else None
+
+
+def find_arb(legs: list[tuple[str, str, int]], total: float = 100.0) -> dict | None:
+    """legs: [(outcome label, book, American)] covering every outcome of a market. An arb
+    when the implied probabilities of the best prices sum below 1: stake each leg in
+    proportion to 1/decimal and every outcome pays the same, total / sum."""
+    if len(legs) < 2 or any(decimal(a) is None for _, _, a in legs):
+        return None
+    inv = [1 / decimal(a) for _, _, a in legs]
+    s = sum(inv)
+    margin = 1 / s - 1
+    if margin < ARB_MIN_MARGIN:
+        return None
+    return {"margin": margin, "implied_sum": s, "total_stake": total, "payout": total / s,
+            "legs": [{"outcome": o, "book": b, "american": a, "stake": round(total * i / s, 2)}
+                     for (o, b, a), i in zip(legs, inv)]}
+
+
+def exchange_contract_price(platform: str, american: int) -> float:
+    """Inverse of exchange_american: the contract price (0-1) behind a fee-adjusted American
+    price, solving p + fee*p*(1-p) = 1/decimal. Exchanges quote in % so the page shows this."""
+    cost, f = 1 / decimal(american), EXCHANGE_FEE_RATE.get(platform, 0.0)
+    if not f:
+        return round(cost, 3)
+    return round(((1 + f) - math.sqrt((1 + f) ** 2 - 4 * f * cost)) / (2 * f), 3)
+
+
 def _moneyline(db: Session, fight_id: int, hist: list | None = None,
                fallback: list | None = None) -> dict:
     """Latest price per sportsbook (line watcher 'BFO:<book>' rows, else ufc_fight_odds), the
@@ -414,6 +466,39 @@ def _build_rows(db: Session, rows, pre: dict | None = None) -> dict:
                   for k in {*direct, *ex} if k != "ml_q_red"}
         five = (f.max_fight_time_seconds or 0) >= 1500
         markets = []
+        arbs = []
+
+        def check_arb(market_key, label, sides, captured_at):
+            """Every outcome of the market at its best bettable price; listed if they lock
+            in a profit and the prices are recent enough to still be there."""
+            legs = []
+            for sd in sides:
+                bb = bettable_best(sd)
+                if bb is None:
+                    return
+                legs.append((sd.get("label") or sd["side"], bb[0], bb[1]))
+            arb = find_arb(legs)
+            if arb is None:
+                return
+            platform_of = {v: k for k, v in EXCHANGE_NAME.items()}
+            for leg in arb["legs"]:
+                if leg["book"] in platform_of:
+                    leg["exchange_price"] = exchange_contract_price(platform_of[leg["book"]], leg["american"])
+            age_h = (now - captured_at).total_seconds() / 3600 if captured_at else None
+            if age_h is None or age_h > ARB_DROP_HOURS:
+                return
+            warnings = []
+            if age_h > ARB_STALE_HOURS:
+                warnings.append("prices over 6 h old")
+            if arb["margin"] > ARB_VERIFY_MARGIN:
+                warnings.append("unusually large: often a stale or mistaken line")
+            if any(l["book"] in EXCHANGE_NAME.values() for l in arb["legs"]):
+                warnings.append("exchange leg (after fees)")
+            if len({l["book"] for l in arb["legs"]}) == 1:
+                warnings.append("all legs at one book")
+            arbs.append({"market_key": market_key, "label": label, **arb,
+                         "captured_at": captured_at.isoformat() if captured_at else None,
+                         "age_hours": round(age_h, 1), "warnings": warnings})
 
         def add(family, market_key, label, sides, q_of, captured):
             """sides: [{side, label, p, best, med, book}]; q_of(side) -> market no-vig prob.
@@ -425,6 +510,8 @@ def _build_rows(db: Session, rows, pre: dict | None = None) -> dict:
                 if market_key != "moneyline":
                     qs = sharp_q.get(sd.get("key"))
                     sd["p"] = blend_prob(sd.get("p"), qs if qs is not None else q_of(sd["side"]))
+            if len(sides) >= 2:
+                check_arb(market_key, label, sides, captured)
             pick = choose_pick(sides)
             ref = pick or max(sides, key=lambda s: (s.get("p") or 0))
             ev = evaluate_side(ref.get("p"), ref.get("best"), ref.get("med"))
@@ -501,11 +588,18 @@ def _build_rows(db: Session, rows, pre: dict | None = None) -> dict:
             # graded separately for the favourite and the underdog (the market misprices them
             # differently; see scripts/build_grade_table.py)
             fav = "red" if (pred.red_prob if pred else 0.5) >= 0.5 else "blue"
+            cell_sides = {}
             for key, p in cell.items():
                 corner, m = key.split("_")
                 lbl = f"{last[corner]} by {SIXWAY_LABEL[m]}"
-                add(f"sixway_{m}_{'fav' if corner == fav else 'dog'}", key, lbl, [prop_side(key, "yes", lbl, p)],
+                cell_sides[key] = prop_side(key, "yes", lbl, p)
+                add(f"sixway_{m}_{'fav' if corner == fav else 'dog'}", key, lbl, [cell_sides[key]],
                     q_prop(lambda s, k=key: k), captured(key))
+            # the six winner x method outcomes cover every decided result (draws ~1% aside)
+            # staleness goes by the oldest leg
+            ages = [captured(k) for k in cell_sides]
+            check_arb("sixway", "Winner × method (all six)", list(cell_sides.values()),
+                      min(ages) if all(ages) else None)
             dec = mp.distance_prob if mp.distance_prob is not None else mp.dec_prob
             add(lambda s: "decision_yes" if s == "yes" else "decision_no", "decision", "Goes to decision",
                 [prop_side("dec_yes", "yes", "Goes to decision", dec),
@@ -570,7 +664,8 @@ def _build_rows(db: Session, rows, pre: dict | None = None) -> dict:
                        ("red_ko", "red_sub", "red_dec", "blue_ko", "blue_sub", "blue_dec")}
                       if mp and mp.red_ko_prob is not None else None,
             "drivers": top_drivers(shap),
-            "markets": markets})
+            "markets": markets,
+            "arbs": sorted(arbs, key=lambda a: -a["margin"])})
     return {"event": event, "generated_at": now.isoformat(timespec="seconds"),
             "grade_table": {"version": (table or {}).get("version"), "built_at": (table or {}).get("built_at")},
             "fights": fights_out}

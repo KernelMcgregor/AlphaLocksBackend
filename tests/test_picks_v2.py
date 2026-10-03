@@ -79,3 +79,26 @@ def test_exchange_prices_skip_untraded_and_include_fees():
     side = merge_prices({"best": -150, "book": "FanDuel", "med": -160}, {"Kalshi": -120})
     assert side["book"] == "Kalshi" and side["med"] == -160 and side["books"] == {"FanDuel": -150, "Kalshi": -120}
     assert merge_prices({"best": None, "book": None, "med": None}, {"Polymarket": 300})["book"] == "Polymarket"
+
+
+def test_find_arb_and_stakes():
+    from app.services.ufc.picks_v2 import bettable_best, find_arb
+    # +110 at one book and +105 at another on a two-way market: 1/2.10 + 1/2.05 < 1
+    arb = find_arb([("Over", "FanDuel", 110), ("Under", "BetMGM", 105)])
+    assert arb and 0.03 < arb["margin"] < 0.04
+    assert abs(sum(l["stake"] for l in arb["legs"]) - 100) < 0.02
+    # every outcome pays the same
+    pays = [l["stake"] * (1 + l["american"] / 100) for l in arb["legs"]]
+    assert abs(pays[0] - pays[1]) < 0.05 and abs(pays[0] - arb["payout"]) < 0.05
+    # a normal market (vig) is not an arb
+    assert find_arb([("A", "x", -110), ("B", "y", -110)]) is None
+    # Pinnacle is a reference, never a leg
+    side = {"books": {"Pinnacle": 150, "FanDuel": 120}, "best": 150, "book": "Pinnacle"}
+    assert bettable_best(side) == ("FanDuel", 120)
+
+
+def test_exchange_contract_price_inverts_fee():
+    from app.services.ufc.picks_v2 import exchange_american, exchange_contract_price
+    for plat in ("kalshi", "polymarket"):
+        for p in (0.12, 0.35, 0.5, 0.81):
+            assert abs(exchange_contract_price(plat, exchange_american(plat, p)) - p) < 0.003
