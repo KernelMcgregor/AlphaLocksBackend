@@ -10,7 +10,9 @@ Bets are rebuilt from data in the repo + DB only, so this runs in CI after each 
   results        ufc_fights
 
 Rule (identical for every family): per fight and market, the side with the highest EV at the
-best price if EV > 0; flat 1 unit.
+typical book's price if EV > 0; flat 1 unit; ROI graded at that typical price. Prop
+probabilities are the model blended 50/50 (log-odds) with the de-vigged closing consensus,
+as the picks API serves them; moneyline probabilities are the ensemble's market stack.
 
 Usage:
     DATABASE_URL=... python -m scripts.build_grade_table
@@ -26,7 +28,7 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 
 from app.config import settings
-from app.services.ufc.grading import decimal, family_table, save_table
+from app.services.ufc.grading import blend_prob, decimal, family_table, save_table
 from app.services.ufc.method_ratings import method_class
 from app.services.ufc.round_hazard import anchor
 
@@ -49,29 +51,38 @@ def _results(engine) -> pd.DataFrame:
     return pd.DataFrame(out)
 
 
-def _bets(df: pd.DataFrame, sides: list[tuple[str, str, str]], family_of) -> pd.DataFrame:
-    """df has p_<side>, best_<side>, med_<side>, won_<side>. sides: (side, best col, med col).
-    Returns one row per bet (max-EV side with EV > 0)."""
+def _bets(df: pd.DataFrame, sides: list[tuple[str, str, str]], family_of, blend: bool = False) -> pd.DataFrame:
+    """df has p_<side>, best_<side>, med_<side>, won_<side> and, for props, q_<side> (the
+    de-vigged closing consensus). The probability is blend_prob(p, q) when blend=True, as the
+    picks API serves props. Each fight bets the side with the highest EV at the TYPICAL book's
+    price (median; best if no median) if that EV > 0. Returns one row per bet with profit at
+    the typical price (graded) and at the best price (shown)."""
     out = []
     for r in df.itertuples(index=False):
         rd = r._asdict()
         best = None
         for side, _, _ in sides:
-            d = decimal(rd.get(f"best_{side}"))
             p = rd.get(f"p_{side}")
-            if d is None or p is None or p != p:
+            if p is None or p != p:
                 continue
-            e = p * d - 1
+            if blend:
+                p = blend_prob(p, rd.get(f"q_{side}"))
+            d_typ = decimal(rd.get(f"med_{side}")) or decimal(rd.get(f"best_{side}"))
+            if d_typ is None:
+                continue
+            e = p * d_typ - 1
             if e > 0 and (best is None or e > best[1]):
-                best = (side, e, d)
+                best = (side, e, d_typ)
         if best is None:
             continue
-        side, e, d = best
+        side, e, d_typ = best
         won = bool(rd[f"won_{side}"])
-        dm = decimal(rd.get(f"med_{side}"))
-        out.append({"family": family_of(side), "ev": e, "decimal": d,
-                    "profit_best": d - 1 if won else -1.0,
-                    "profit_median": (dm - 1 if won else -1.0) if dm else np.nan})
+        code = family_of.__code__
+        fam = family_of(side, rd) if "rd" in code.co_varnames[:code.co_argcount] else family_of(side)
+        d_best = decimal(rd.get(f"best_{side}")) or d_typ
+        out.append({"family": fam, "ev": e, "decimal": d_typ,
+                    "profit_best": d_typ - 1 if won else -1.0,        # graded: typical book
+                    "profit_median": d_best - 1 if won else -1.0})    # shown: best price
     return pd.DataFrame(out)
 
 
@@ -87,8 +98,16 @@ def winner_bets(engine, res: pd.DataFrame) -> pd.DataFrame:
                                    "q_open", "q_close"])
     cons = oc[oc["book"] == "Consensus"].drop_duplicates("fight_id").set_index("fight_id")
     books = oc[~oc["book"].str.lower().str.contains("|".join(EXCHANGES))]
+    # median book = median DECIMAL price, back to American (a median of American odds is
+    # meaningless across even money: -110 and +100 would give -5)
+    def _am_median(x):
+        d = [decimal(v) for v in x if decimal(v)]
+        if not d:
+            return np.nan
+        m = float(np.median(d))
+        return (m - 1) * 100 if m >= 2 else -100 / (m - 1)
     best_close = books.groupby("fight_id").agg(best_red=("red_close", "max"), best_blue=("blue_close", "max"),
-                                               med_red=("red_close", "median"), med_blue=("blue_close", "median"))
+                                               med_red=("red_close", _am_median), med_blue=("blue_close", _am_median))
     d = oof.merge(res, on="fight_id").join(cons, on="fight_id", how="inner").join(best_close, on="fight_id")
     d = d[d["winner"].notna()]
     m = d["model_prob"].to_numpy(float)
@@ -108,13 +127,14 @@ def winner_bets(engine, res: pd.DataFrame) -> pd.DataFrame:
 
 def prop_prices(engine) -> pd.DataFrame:
     with engine.connect() as c:
-        df = pd.DataFrame(c.execute(text("""select fight_id::text fight_id, market, best_american, median_american
+        df = pd.DataFrame(c.execute(text("""select fight_id::text fight_id, market, best_american, median_american, prob
                                             from ufc.ufc_prop_odds_history
                                             where source = 'bfo_close' and best_american is not null""")).all(),
-                          columns=["fight_id", "market", "best", "med"])
+                          columns=["fight_id", "market", "best", "med", "prob"])
     best = df.pivot_table(index="fight_id", columns="market", values="best", aggfunc="last").add_prefix("best_")
     med = df.pivot_table(index="fight_id", columns="market", values="med", aggfunc="last").add_prefix("med_")
-    return best.join(med).reset_index()
+    q = df.pivot_table(index="fight_id", columns="market", values="prob", aggfunc="last").add_prefix("q_")
+    return best.join(med).join(q).reset_index()
 
 
 def prop_bets(engine, res: pd.DataFrame, px: pd.DataFrame) -> pd.DataFrame:
@@ -135,19 +155,26 @@ def prop_bets(engine, res: pd.DataFrame, px: pd.DataFrame) -> pd.DataFrame:
     # while "favourite by KO" is 23.9% vs 22.4%). Per fight and method, the better corner.
     x = pd.DataFrame({f"p_{c}": six[:, j] for j, c in enumerate(CELLS)})
     for c in CELLS:
-        x[f"best_{c}"] = d.get(f"best_{c}"); x[f"med_{c}"] = d.get(f"med_{c}")
+        x[f"best_{c}"] = d.get(f"best_{c}"); x[f"med_{c}"] = d.get(f"med_{c}"); x[f"q_{c}"] = d.get(f"q_{c}")
         side, m = c.split("_")
         x[f"won_{c}"] = ((d["winner"] == side) & (d["cls"] == m)).to_numpy()
+    # ...and separately for the favourite and the underdog: across 2,831 priced fights
+    # "favourite by decision" is de-vigged at 27.7% but happens 32.8%, while "underdog by
+    # decision" is priced about right (15.8% vs 16.4%).
+    x["fav"] = np.where(p_red >= 0.5, "red", "blue")
     for m in ("ko", "sub", "dec"):
-        out.append(_bets(x, [(f"red_{m}", "", ""), (f"blue_{m}", "", "")], lambda s, m=m: f"sixway_{m}"))
+        out.append(_bets(x, [(f"red_{m}", "", ""), (f"blue_{m}", "", "")],
+                         lambda s, rd, m=m: f"sixway_{m}_{'fav' if s.startswith(rd['fav']) else 'dog'}",
+                         blend=True))
     # decision yes / no
     dec = six[:, 2] + six[:, 5]
     x = pd.DataFrame({"p_dec_yes": dec, "p_dec_no": 1 - dec,
                       "best_dec_yes": d.get("best_dec_yes"), "best_dec_no": d.get("best_dec_no"),
                       "med_dec_yes": d.get("med_dec_yes"), "med_dec_no": d.get("med_dec_no"),
+                      "q_dec_yes": d.get("q_dec_yes"), "q_dec_no": d.get("q_dec_no"),
                       "won_dec_yes": (d["cls"] == "dec").to_numpy(), "won_dec_no": (d["cls"] != "dec").to_numpy()})
     out.append(_bets(x, [("dec_yes", "", ""), ("dec_no", "", "")],
-                     lambda s: "decision_yes" if s == "dec_yes" else "decision_no"))
+                     lambda s: "decision_yes" if s == "dec_yes" else "decision_no", blend=True))
     # inside the distance, per fighter
     for corner, cols in (("red", [0, 1]), ("blue", [3, 4])):
         itd = six[:, cols].sum(axis=1)
@@ -155,8 +182,10 @@ def prop_bets(engine, res: pd.DataFrame, px: pd.DataFrame) -> pd.DataFrame:
         x = pd.DataFrame({"p_y": itd, "p_n": 1 - itd,
                           "best_y": d.get(f"best_itd_{corner}_yes"), "best_n": d.get(f"best_itd_{corner}_no"),
                           "med_y": d.get(f"med_itd_{corner}_yes"), "med_n": d.get(f"med_itd_{corner}_no"),
+                          "q_y": d.get(f"q_itd_{corner}_yes"), "q_n": d.get(f"q_itd_{corner}_no"),
                           "won_y": hit, "won_n": ~hit})
-        out.append(_bets(x, [("y", "", ""), ("n", "", "")], lambda s: "itd_yes" if s == "y" else "itd_no"))
+        out.append(_bets(x, [("y", "", ""), ("n", "", "")], lambda s: "itd_yes" if s == "y" else "itd_no",
+                         blend=True))
     return pd.concat(out, ignore_index=True), d
 
 
@@ -184,10 +213,11 @@ def round_bets(engine, res: pd.DataFrame, px: pd.DataFrame, method_d: pd.DataFra
         x = pd.DataFrame({"p_o": A[:, k], "p_u": 1 - A[:, k],
                           "best_o": d.get(f"best_{over_key}"), "best_u": d.get(f"best_{under_key}"),
                           "med_o": d.get(f"med_{over_key}"), "med_u": d.get(f"med_{under_key}"),
+                          "q_o": d.get(f"q_{over_key}"), "q_u": d.get(f"q_{under_key}"),
                           "won_o": alive, "won_u": ~alive})
         yes, no = ("over", "under") if name.startswith("ou") else ("yes", "no")
         out.append(_bets(x, [("o", "", ""), ("u", "", "")],
-                         lambda s, n=name, y=yes, nn=no: f"{n}_{y if s == 'o' else nn}"))
+                         lambda s, n=name, y=yes, nn=no: f"{n}_{y if s == 'o' else nn}", blend=True))
     return pd.concat(out, ignore_index=True)
 
 
@@ -217,9 +247,9 @@ def main() -> None:
     for fam, g in allb.groupby("family"):
         families[fam] = family_table(g["ev"], g["profit_best"], g["profit_median"], g["decimal"])
         f = families[fam]
-        log.info(f"  {fam:14s} n={f['n']:5d} ROI {f['roi']:+6.1%} | " + " ".join(
-            f"[{b['lo']:.0%}+ n={b['n']} {b['roi'] if b['roi'] is None else format(b['roi'], '+.1%')} {b['grade']}]"
-            for b in f["buckets"]))
+        log.info(f"  {fam:14s} n={f['n']:5d} ROI {f['roi']:+6.1%} (exp {f['expected_roi']:+.1%}) | " + " ".join(
+            f"[{b['lo']:.0%}+ n={b['n']} raw {'—' if b['roi'] is None else format(b['roi'], '+.0%')} "
+            f"exp {b['expected_roi']:+.1%} {b['grade']}]" for b in f["buckets"]))
     table = save_table(families, forward_record(), {
         "ensemble_oof": "models/ufc/h2h/ensemble_oof.csv", "method_oof": "models/ufc/method/method_oof.csv",
         "rounds_oof": "models/ufc/method/rounds_oof.csv", "props": "ufc_prop_odds_history (bfo_close)",

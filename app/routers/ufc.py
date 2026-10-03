@@ -1154,13 +1154,20 @@ def get_arbitrage_opportunities(db: Session = Depends(get_db)):
     return _get_picks_data(db)
 
 
+PICKS_TTL = 120  # prices refresh every two hours; two minutes keeps filter changes instant
+
+
 @router.get("/picks/v2")
-def get_picks_v2(event_id: int | None = None, fight_id: int | None = None,
-                 db: Session = Depends(get_db)):
+def get_picks_v2(event_id: int | None = None, fight_id: int | None = None, all: bool = False):
     """A graded pick for every market on a card (default: the next event), or one fight.
+    all=true: every upcoming card, as a list of per-event payloads, from one batched load.
     See app/services/ufc/picks_v2.py; grades from models/ufc/grade_table.json."""
-    from app.services.ufc.picks_v2 import build
-    return build(db, event_id=event_id, fight_id=fight_id)
+    from app.services.ufc.picks_v2 import build, build_all
+    if all:
+        return response_cache.cached("picks-v2:all", with_session(build_all), PICKS_TTL)
+    return response_cache.cached(
+        f"picks-v2:{event_id}:{fight_id}",
+        with_session(lambda db: build(db, event_id=event_id, fight_id=fight_id)), PICKS_TTL)
 
 
 @router.get("/picks")

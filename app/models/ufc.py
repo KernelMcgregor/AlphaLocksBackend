@@ -482,6 +482,51 @@ class UFCFightOddsHistory(Base):
     days_to_fight: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
+class UFCBookMarketHistory(Base):
+    """Append-only snapshots of every market a sportsbook lists for a bout, read straight from
+    the book (app/services/ufc/fanduel.py), not via an aggregator.
+
+    One row per (book, selection, capture time), written only when the price or line moves.
+    Everything the book offers is kept -- winner x round, method x round, strike ladders,
+    specials -- including markets nothing prices yet: those can only be graded later if their
+    price history starts being recorded now.
+
+    market_key is this project's name for the selection when it maps onto a market the models
+    price (moneyline_red, red_ko, dec_yes, ou_2.5_over, sr_2_no, er_1, ...; see
+    fanduel.canonical_key), else null. `line` is the numeric threshold for ladders and totals
+    (Over 2.5 -> 2.5; "40+" strikes -> 39.5) so they can be priced as over/unders.
+    """
+
+    __tablename__ = "ufc_book_market_history"
+    __table_args__ = (
+        UniqueConstraint("book", "external_selection_id", "external_market_id", "captured_at"),
+        Index("ix_book_market_fight_captured", "fight_id", "captured_at"),
+        {"schema": UFC_SCHEMA},
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, index=True)
+    #: Nullable so an unmatched bout is a visible row to debug rather than a silent drop.
+    fight_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey(_fk("ufc_fights.id")), index=True, nullable=True)
+    book: Mapped[str] = mapped_column(String(40), index=True)
+    external_event_id: Mapped[str] = mapped_column(String(60))
+    external_market_id: Mapped[str] = mapped_column(String(60))
+    external_selection_id: Mapped[str] = mapped_column(String(60))
+    market_type: Mapped[str] = mapped_column(String(120))     # book's own type code
+    market_name: Mapped[str] = mapped_column(String(300))
+    selection: Mapped[str] = mapped_column(String(300))       # runner name, verbatim
+    #: Which corner the selection is about, when it names a fighter.
+    side: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    line: Mapped[float | None] = mapped_column(Float, nullable=True)
+    market_key: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    american: Mapped[int | None] = mapped_column(Integer, nullable=True)  # null = suspended
+    #: The book's maximum stake on this market, where it publishes one (Pinnacle). A sharp
+    #: book's limit is a read of how much it trusts its own price.
+    max_stake: Mapped[float | None] = mapped_column(Float, nullable=True)
+    captured_at: Mapped[dt.datetime] = mapped_column(DateTime, index=True)
+    days_to_fight: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
 class UFCMethodOdds(TimestampMixin, Base):
     __tablename__ = "ufc_method_odds"
     __table_args__ = (

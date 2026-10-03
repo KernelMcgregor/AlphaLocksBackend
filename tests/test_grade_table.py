@@ -9,18 +9,25 @@ from app.services.ufc.grading import (
 
 def test_thresholds_and_buckets():
     assert letter(0.09) == "A+" and letter(0.04) == "A-" and letter(0.0) == "C+" and letter(-0.2) == "F"
-    assert bucket_of(0.0) == 0 and bucket_of(0.03) == 1 and bucket_of(0.5) == 4
+    assert bucket_of(0.0) == 0 and bucket_of(0.05) == 1 and bucket_of(0.10) == 2 and bucket_of(0.5) == 3
 
 
-def test_grade_is_the_band_roi():
-    ev = np.array([0.01] * 60 + [0.12] * 60)
-    profit = np.array([-1.0] * 60 + [1.0] * 40 + [-1.0] * 20)     # band 0: -100%, band 3: +33%
-    t = family_table(ev, profit, profit, np.full(120, 2.0))
-    b = t["buckets"]
-    assert b[0]["roi"] == -1.0 and b[0]["grade"] == "F"
-    assert abs(b[3]["roi"] - 1 / 3) < 1e-9 and b[3]["grade"] == "A+"
-    assert b[1]["n"] == 0 and b[1]["grade"] is None                 # empty band: not rated
-    assert grade("fam", 0.03, {"families": {"fam": t}})[0] == "NR"
+def test_grade_is_the_banded_expected_roi():
+    rng = np.random.default_rng(0)
+    # a market that loses overall, with one tiny band that got lucky
+    ev = np.r_[np.full(400, 0.01), np.full(17, 0.20)]
+    profit = np.r_[np.where(rng.random(400) < 0.42, 1.0, -1.0), np.where(np.arange(17) < 13, 1.0, -1.0)]
+    t = family_table(ev, profit, profit, np.full(len(ev), 2.0))
+    lucky = t["buckets"][3]
+    assert lucky["roi"] > 0.4                          # raw: a fluke +50%
+    assert lucky["expected_roi"] < 0.01                # estimate: pulled back to the market
+    assert lucky["grade"] == letter(lucky["expected_roi"])
+    # a large consistent winning band keeps most of its size
+    ev2 = np.full(1500, 0.05)
+    profit2 = np.where(rng.random(1500) < 0.56, 1.0, -1.0)
+    t2 = family_table(ev2, profit2, profit2, np.full(1500, 2.0))
+    b = t2["buckets"][1]
+    assert b["expected_roi"] > 0.5 * b["roi"] > 0
 
 
 def test_no_pick_and_unrated():
@@ -33,5 +40,6 @@ def test_moneyline_open_beats_ko_cell_at_same_edge():
     """The owner's example: a 10% edge on the moneyline (opener) grades well above a 10% edge
     on a KO cell, because that band's ROI has been far better."""
     g_ml, _ = grade("winner_open", 0.10)
-    g_ko, _ = grade("sixway_ko", 0.10)
-    assert GRADE_ORDER.index(g_ko) - GRADE_ORDER.index(g_ml) >= 3
+    for fam in ("sixway_ko_fav", "sixway_ko_dog"):
+        g_ko, _ = grade(fam, 0.10)
+        assert GRADE_ORDER.index(g_ko) - GRADE_ORDER.index(g_ml) >= 3

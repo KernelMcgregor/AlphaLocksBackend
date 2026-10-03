@@ -76,6 +76,14 @@ jobs:
         id: watch
         run: python -m app.services.ufc.line_watcher
 
+      # Every market FanDuel, Bovada, BetRivers and Pinnacle list (round, method x round,
+      # strikes, takedowns...), read from the books directly into ufc_book_market_history.
+      # ~110 requests, about 3 minutes. Non-blocking: a book that refuses GitHub's runners
+      # (FanDuel serves per US state) must not stop the watcher.
+      - name: Record sportsbook markets (FanDuel, Bovada, BetRivers, Pinnacle)
+        continue-on-error: true
+        run: python -m app.services.ufc.book_markets
+
       - name: Sherdog records for new fighters
         if: steps.watch.outputs.unlinked != '0' && steps.watch.outputs.unlinked != ''
         continue-on-error: true

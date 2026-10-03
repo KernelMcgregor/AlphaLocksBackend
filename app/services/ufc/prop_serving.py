@@ -26,7 +26,13 @@ def _rows(db: Session, fight_id: int, source: str):
 
 def prop_markets(db: Session, fight_id: int) -> dict:
     watch = _rows(db, fight_id, "bfo_watch")
-    rows, source = (watch, "bfo_watch") if watch else (_rows(db, fight_id, "bfo_close"), "bfo_close")
+    return markets_from_rows(watch, [] if watch else _rows(db, fight_id, "bfo_close"))
+
+
+def markets_from_rows(watch: list, close: list) -> dict:
+    """prop_markets over rows already loaded (ascending captured_at), for callers that load
+    many fights at once."""
+    rows, source = (watch, "bfo_watch") if watch else (close, "bfo_close")
     out: dict[str, dict] = {}
     for h in rows:                      # ascending time: first seen = opening, last = latest
         cur = out.get(h.market)
