@@ -1,6 +1,6 @@
 {
- "version": "2026-10-03",
- "built_at": "2026-10-03T22:10:10",
+ "version": "2026-10-04",
+ "built_at": "2026-10-04T07:01:09",
  "buckets": [
   0.0,
   0.03,
@@ -1495,7 +1495,12 @@
    ]
   }
  },
- "forward": {},
+ "forward": {
+  "winner_open": {
+   "n": 1,
+   "roi": -1.0
+  }
+ },
  "sources": {
   "ensemble_oof": "models/ufc/h2h/ensemble_oof.csv",
   "method_oof": "models/ufc/method/method_oof.csv",
