@@ -1296,3 +1296,44 @@ class MMADFanScore(TimestampMixin, Base):
     score: Mapped[str] = mapped_column(String(10))
     pick: Mapped[str] = mapped_column(String(5))
     pct: Mapped[float] = mapped_column(Float)
+
+
+class UFCDeserveToWin(TimestampMixin, Base):
+    """Deserve to win (app/services/ufc/deserve_to_win.py): the share of simulated
+    replays, to the scheduled distance with three judges, that each corner wins.
+
+    p_* use average judges (the headline); panel_p_* use the assigned judges' leans
+    (decisions with known judges only). Finished fights are extrapolated: rounds never
+    fought are drawn from the fight's form (extrapolated=True)."""
+
+    __tablename__ = "ufc_deserve_to_win"
+    __table_args__ = (
+        UniqueConstraint("fight_id", "model_version", name="uq_deserve_to_win_fight_version"),
+        {"schema": UFC_SCHEMA},
+    )
+
+    fight_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_fights.id")), index=True)
+    model_version: Mapped[str] = mapped_column(String(20))
+    p_red: Mapped[float] = mapped_column(Float)
+    p_draw: Mapped[float] = mapped_column(Float)
+    p_blue: Mapped[float] = mapped_column(Float)
+    panel_p_red: Mapped[float | None] = mapped_column(Float, nullable=True)
+    panel_p_draw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    panel_p_blue: Mapped[float | None] = mapped_column(Float, nullable=True)
+    p_ud: Mapped[float | None] = mapped_column(Float, nullable=True)
+    p_sd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    p_md: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rounds_observed: Mapped[int] = mapped_column(Integer)
+    rounds_scheduled: Mapped[int] = mapped_column(Integer)
+    extrapolated: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: Seconds fought in the finishing round (finished fights only).
+    partial_round_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: JSON list: P(a judge gives red the round), rounds 1..scheduled
+    round_p_red: Mapped[str] = mapped_column(Text)
+    #: JSON [{"cards": ["29-28", ...], "p": .., "result": "red"|"blue"|"draw"}]
+    top_cards: Mapped[str] = mapped_column(Text)
+    #: "<red|blue|none>:<outcome_types kind>", e.g. "blue:sd", "red:ko", "none:draw"
+    official_outcome: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    #: Decisions: deserve-to-win share of the fighter the judges did NOT give it to.
+    robbery_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    n_sims: Mapped[int] = mapped_column(Integer)
