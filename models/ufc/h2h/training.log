@@ -9946,3 +9946,36 @@ weighted avg       0.76      0.76      0.76       557
 2026-10-03 17:22:46,707 INFO [model]   Added 195 upcoming fights using latest fighter features
 2026-10-03 17:22:46,707 INFO [model]   Loading odds for predictions...
 2026-10-03 17:22:47,915 INFO [model]   Odds matched: 2888/11353 fights (25.4%)
+2026-10-04 03:34:38,318 INFO [method_wf] 6284 decided fights; class shares [0.33227244 0.17886696 0.4888606 ]
+2026-10-04 03:34:38,367 INFO [method_wf]   base_rate fold 1/8
+2026-10-04 03:34:38,372 INFO [method_wf]   base_rate fold 2/8
+2026-10-04 03:34:38,379 INFO [method_wf]   base_rate fold 3/8
+2026-10-04 03:34:38,384 INFO [method_wf]   base_rate fold 4/8
+2026-10-04 03:34:38,391 INFO [method_wf]   base_rate fold 5/8
+2026-10-04 03:34:38,399 INFO [method_wf]   base_rate fold 6/8
+2026-10-04 03:34:38,406 INFO [method_wf]   base_rate fold 7/8
+2026-10-04 03:34:38,413 INFO [method_wf]   base_rate fold 8/8
+2026-10-04 03:34:43,736 INFO [method_wf]   v2_full fold 1/8
+2026-10-04 03:34:50,949 INFO [method_wf]   v2_full fold 2/8
+2026-10-04 03:34:57,147 INFO [method_wf]   v2_full fold 3/8
+2026-10-04 03:35:02,741 INFO [method_wf]   v2_full fold 4/8
+2026-10-04 03:35:10,753 INFO [method_wf]   v2_full fold 5/8
+2026-10-04 03:35:18,854 INFO [method_wf]   v2_full fold 6/8
+2026-10-04 03:35:29,166 INFO [method_wf]   v2_full fold 7/8
+2026-10-04 03:35:42,553 INFO [method_wf]   v2_full fold 8/8
+2026-10-04 03:35:50,030 INFO [method_wf]   v2_mkt fold 1/8
+2026-10-04 03:35:57,550 INFO [method_wf]   v2_mkt fold 2/8
+2026-10-04 03:36:06,227 INFO [method_wf]   v2_mkt fold 3/8
+2026-10-04 03:36:12,121 INFO [method_wf]   v2_mkt fold 4/8
+2026-10-04 03:36:21,045 INFO [method_wf]   v2_mkt fold 5/8
+2026-10-04 03:36:33,165 INFO [method_wf]   v2_mkt fold 6/8
+2026-10-04 03:36:48,477 INFO [method_wf]   v2_mkt fold 7/8
+2026-10-04 03:37:04,653 INFO [method_wf]   v2_mkt fold 8/8
+2026-10-04 03:37:12,354 INFO [method_wf]   v2_wp fold 1/8
+2026-10-04 03:37:22,130 INFO [method_wf]   v2_wp fold 2/8
+2026-10-04 03:37:35,483 INFO [method_wf]   v2_wp fold 3/8
+2026-10-04 03:37:44,990 INFO [method_wf]   v2_wp fold 4/8
+2026-10-04 03:37:57,795 INFO [method_wf]   v2_wp fold 5/8
+2026-10-04 03:38:05,317 INFO [method_wf]   v2_wp fold 6/8
+2026-10-04 03:38:19,242 INFO [method_wf]   v2_wp fold 7/8
+2026-10-04 03:38:34,533 INFO [method_wf]   v2_wp fold 8/8
