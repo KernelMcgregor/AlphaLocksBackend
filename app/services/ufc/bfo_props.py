@@ -13,6 +13,10 @@ Markets kept (keys use BFO's fighter order a/b; ``to_corners`` maps them to red/
   ou_{1.5|2.5|...}_{over|under}   total rounds
   sr_{N}_{yes|no}         "Fight starts round N" (lasts past the end of round N-1)
   er_{N}_{yes|no}         "Fight ends in round N"
+  {msig|mtd|msigr1}_{a|b} "<fighter> has more significant strikes | takedowns |
+                          significant strikes in round 1" (ties void; de-vigged as a pair)
+  tdz_{a|b}_{yes|no}      "<fighter> lands no takedowns" / "lands at least one takedown"
+Stat markets are thin: ~180-210 fights each, 2021+ (checked on the cache 2026-10-04).
 
 Consensus close = median implied probability across sportsbooks (exchange books excluded:
 they trade in-play), then de-vigged within each group (the six winner x method cells; the
@@ -49,6 +53,9 @@ _TAG = re.compile(r"<[^>]+>")
 _WM = re.compile(r"wins by (TKO/KO|submission|decision)$")
 _OU = re.compile(r"^(Over|Under) (\d+)(½)? rounds?$")
 _METHOD = {"TKO/KO": "ko", "submission": "sub", "decision": "dec"}
+_MORE = re.compile(r" has more (significant strikes in round 1|significant strikes|takedowns)$")
+_MORE_STAT = {"significant strikes": "msig", "takedowns": "mtd",
+              "significant strikes in round 1": "msigr1"}
 
 
 def _label_key(label: str, fighter: int | None) -> str | None:
@@ -76,6 +83,13 @@ def _label_key(label: str, fighter: int | None) -> str | None:
     if m:
         line = int(m.group(2)) + (0.5 if m.group(3) else 0.0)
         return f"ou_{line}_{m.group(1).lower()}"
+    m = _MORE.search(label)
+    if m and fighter in (1, 2):
+        return f"{_MORE_STAT[m.group(1)]}_{'ab'[fighter - 1]}"
+    if fighter in (1, 2) and label.endswith(" lands no takedowns"):
+        return f"tdz_{'ab'[fighter - 1]}_yes"
+    if fighter in (1, 2) and label.endswith(" lands at least one takedown"):
+        return f"tdz_{'ab'[fighter - 1]}_no"
     return None
 
 
@@ -148,6 +162,14 @@ def consensus(rows: list[dict], book_names: dict[int, str] | None = None) -> dic
                     n = k[len(fam):-4]
                     res.update({f"{kk}_nv": v for kk, v in
                                 _devig_group(med, [f"{fam}{n}_yes", f"{fam}{n}_no"]).items()})
+            if k.startswith("tdz_") and k.endswith("_yes"):
+                fam = k[:-4]
+                res.update({f"{kk}_nv": v for kk, v in
+                            _devig_group(med, [f"{fam}_yes", f"{fam}_no"]).items()})
+            if k in ("msig_a", "mtd_a", "msigr1_a"):   # "A has more X" vs "B has more X"
+                stat = k[:-2]
+                res.update({f"{kk}_nv": v for kk, v in
+                            _devig_group(med, [f"{stat}_a", f"{stat}_b"]).items()})
             if k.startswith("ou_") and k.endswith("_over"):
                 line = k[3:-5]
                 res.update({f"{kk}_nv": v for kk, v in
@@ -203,6 +225,12 @@ def corner_markets(c: dict, swapped: bool) -> dict[str, dict]:
             put(k[:-3], v, k[:-3])                       # sr_2_no
         elif k.startswith("er_") and k.endswith("_part"):
             put(k[:-5], v, f"{k[:-5]}_yes", c.get("overround_er"))   # er_1 = ends in round 1
+    for stat in ("msig", "mtd", "msigr1"):   # more_sig_red = P(red lands more), ties void
+        for side in "ab":
+            put(f"more_{stat[1:]}_{corner[side]}", c.get(f"{stat}_{side}_nv"), f"{stat}_{side}")
+    for side in "ab":                        # tdz_red = P(red lands no takedowns)
+        put(f"tdz_{corner[side]}", c.get(f"tdz_{side}_yes_nv"), f"tdz_{side}_yes")
+        put(f"tdz_{corner[side]}_no", c.get(f"tdz_{side}_no_nv"), f"tdz_{side}_no")
     return out
 
 

@@ -10,6 +10,7 @@ Arms:
   v2_base     conditional model, winner-matrix features only
   v2_full     + method ratings, Sherdog method shares, alignment features
   v2_mkt      + the winner's devigged market probability
+  v2_wp       + the winner's ensemble OOF probability instead (mismatch without odds)
   v2_full_nocal / v2_full_cb / v2_full_mc   calibration / member / structure variants
 
 Metrics (lower is better), with paired bootstrap CIs vs base_rate:
@@ -43,7 +44,20 @@ V2_ARMS = {
     "v2_full_nocal": ("full", {"calibrate": False}),          # members on all rows, raw
     "v2_full_cb": ("full", {"calibrate": False, "backends": ("catboost",)}),
     "v2_full_mc": ("full", {"structure": "multiclass"}),      # one 3-class CatBoost
+    "v2_wp": ("full_mkt", {}),   # mismatch from the winner ensemble's OOF P(win), no odds
 }
+OOF_LONG = MODEL_DIR / "ensemble_oof_long.csv"
+
+
+def _with_model_wp(frames, matchup: pd.DataFrame, w_is_red) -> None:
+    """Overwrite mkt_w_prob with the winner ensemble's out-of-fold P(win) (Elo expectation
+    where no OOF exists), so the mismatch feature carries no market information."""
+    oof = pd.read_csv(OOF_LONG, dtype={"fight_id": str}).drop_duplicates("fight_id")
+    p_red = (matchup["fight_id"].astype(str).map(oof.set_index("fight_id")["model_prob"])
+             .to_numpy(float))
+    for f, wr in zip(frames, w_is_red):
+        p = np.where(wr, p_red, 1 - p_red)
+        f["mkt_w_prob"] = np.where(np.isnan(p), f["w_elo_expected"].to_numpy(float), p)
 
 
 def build_matrix(rebuild: bool) -> pd.DataFrame:
@@ -95,6 +109,10 @@ def run(matchup: pd.DataFrame, arms, n_folds: int = 8, eval_frac: float = 0.4) -
     y = matchup["outcome_method_class"].to_numpy(int)
     res = matchup[["fight_id", "date", "red_wins", "outcome_method_class"]].iloc[eval_start:].copy()
     for arm in arms:
+        fa, fr, fb = or_actual, or_red, or_blue
+        if arm == "v2_wp":
+            fa, fr, fb = (f.copy() for f in (or_actual, or_red, or_blue))
+            _with_model_wp((fa, fr, fb), matchup, (red_won, np.ones(n, bool), np.zeros(n, bool)))
         cr = np.full((n, 3), np.nan); cb = np.full((n, 3), np.nan); mg = np.full((n, 3), np.nan)
         for k in range(n_folds):
             lo, hi = bounds[k], bounds[k + 1]
@@ -105,10 +123,10 @@ def run(matchup: pd.DataFrame, arms, n_folds: int = 8, eval_frac: float = 0.4) -
                 mg[lo:hi] = old_style(tr, te)
             else:
                 fs, kw = V2_ARMS[arm]
-                feats = feature_names(or_actual, fs)
-                model = ConditionalMethodModel(feats, **kw).fit(or_actual.iloc[:lo], y[:lo])
-                cr[lo:hi] = model.predict(or_red.iloc[lo:hi])
-                cb[lo:hi] = model.predict(or_blue.iloc[lo:hi])
+                feats = feature_names(fa, fs)
+                model = ConditionalMethodModel(feats, **kw).fit(fa.iloc[:lo], y[:lo])
+                cr[lo:hi] = model.predict(fr.iloc[lo:hi])
+                cb[lo:hi] = model.predict(fb.iloc[lo:hi])
             log.info(f"  {arm} fold {k + 1}/{n_folds}")
         for j, c in enumerate(("ko", "sub", "dec")):
             res[f"{arm}_red_{c}"] = cr[eval_start:, j]

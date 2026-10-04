@@ -485,6 +485,14 @@ def _build_fight(db: Session, fight_id: int):
     from app.services.ufc.expected_stats_serving import expected_stats_payload
     result["expected_stats"] = expected_stats_payload(db, fight_id)
 
+    # Post-fight review (grade, deserve-to-win, judges, line move) once the bout has a
+    # result. `method` rather than winner_id so draws and no contests get one too.
+    if fight.method or fight.winner_id:
+        from app.services.ufc.fight_review import review_payload
+        result["review"] = review_payload(db, fight, pred, method_pred)
+    else:
+        result["review"] = None
+
     return result
 
 

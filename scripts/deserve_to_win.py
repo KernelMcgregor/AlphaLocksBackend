@@ -72,6 +72,11 @@ def load_rounds(eng) -> pd.DataFrame:
     red = st.rename(columns={c: f"r_{c}" for c in RAW}).rename(columns={"fighter_id": "red"})
     blue = st.rename(columns={c: f"b_{c}" for c in RAW}).rename(columns={"fighter_id": "blue"})
     df = f.merge(red, on=["fight_id", "red"]).merge(blue, on=["fight_id", "blue", "round"])
+    # UFCStats pads some bouts with all-zero rows past the finish (out to round 23;
+    # common since mid-2026). Left in, they make observed rounds exceed the scheduled
+    # count and fight_inputs drops the fight — which silently stopped scoring every
+    # bout after 2026-08-29. finish_round is authoritative for rounds contested.
+    df = df[df["finish_round"].isna() | (df["round"] <= df["finish_round"])]
     return df.sort_values(["fight_id", "round"]).reset_index(drop=True)
 
 
