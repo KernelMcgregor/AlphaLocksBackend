@@ -1,7 +1,9 @@
 """Forward test of the method model (method_v2): every fight logged BEFORE it happens.
 
-Accuracy only for now: no betting rule is registered. Rows are append-only and never
-re-priced; settlement fills in the result and closing prices only.
+Accuracy is the main question. One betting hypothesis is registered (H3, from 2026-10-04;
+see PREREGISTRATION_METHOD.md): "favourite by decision" is underpriced. Each row logged from then
+on carries an `h3` block with the bet decision frozen at log time. Rows are append-only and
+never re-priced; settlement fills in the result and closing prices only.
 
 When a fight is logged: the first time the line watcher has recorded BestFightOdds prop
 prices for it (its OPENING prop line, ufc_prop_odds_history source 'bfo_watch'). If no
@@ -40,6 +42,10 @@ LOG_PATH = Path(os.environ.get("METHOD_FORWARD_LOG_PATH")
 LOG_VERSION = "method-v1-2026-09-30"
 CELLS = ("red_ko", "red_sub", "red_dec", "blue_ko", "blue_sub", "blue_dec")
 PROP_MARKETS = CELLS + ("dec_yes", "ou_1.5_over", "ou_2.5_over")
+#: H3 (registered 2026-10-04): minimum EV at the typical price for a "favourite by decision"
+#: bet, the same 3% picks_v2 uses (MIN_PICK_EV).
+H3_MIN_EV = 0.03
+H3_CHECKPOINT = 150   # settled bets before H3 is judged
 
 
 def _read() -> list[dict]:
@@ -57,13 +63,41 @@ def _props(db, fight_id: int, first: bool, before: datetime | None = None) -> di
                                             UFCPropOddsHistory.source == "bfo_watch")
     if before is not None:
         q = q.filter(UFCPropOddsHistory.captured_at < before)
-    out, ts = {}, None
+    out, am, ts = {}, {}, None
     for h in q.order_by(UFCPropOddsHistory.captured_at.asc() if first
                         else UFCPropOddsHistory.captured_at.desc()):
         if h.market not in out:
             out[h.market] = h.prob
             ts = ts or h.captured_at
-    return {"prices": out, "captured_at": ts.isoformat() if ts else None} if out else {}
+        # first (or last) snapshot that carries a price: the earliest watcher rows predate
+        # the price columns
+        if h.market not in am and h.median_american is not None:
+            am[h.market] = h.median_american
+    if not out:
+        return {}
+    return {"prices": out, "american": am, "captured_at": ts.isoformat() if ts else None}
+
+
+def h3_decision(model: dict, opening: dict | None) -> dict | None:
+    """H3 (PREREGISTRATION_METHOD.md): bet the favourite by decision, 1 unit at the opening
+    typical (median) price, when the picks probability (model blended 50/50 in log-odds with
+    the de-vigged market, grading.blend_prob) has EV >= 3% at that price. The favourite is
+    the corner with the higher de-vigged market win probability (sum of its three opening
+    six-way cells). None when the opening six-way market or the price is missing."""
+    from app.services.ufc.grading import blend_prob, ev
+    prices = (opening or {}).get("prices") or {}
+    if not all(c in prices for c in CELLS):
+        return None
+    fav = "red" if sum(prices[f"red_{m}"] for m in ("ko", "sub", "dec")) >= 0.5 else "blue"
+    cell = f"{fav}_dec"
+    american = ((opening or {}).get("american") or {}).get(cell)
+    if american is None or model.get(cell) is None:
+        return None
+    p = blend_prob(model[cell], prices[cell])
+    e = ev(p, american)
+    return {"fav": fav, "cell": cell, "p_model": model[cell], "q_open": prices[cell],
+            "p": round(p, 4), "american": american, "ev": None if e is None else round(e, 4),
+            "bet": e is not None and e >= H3_MIN_EV}
 
 
 def _model_version() -> str | None:
@@ -113,15 +147,17 @@ def log_upcoming() -> int:
             if not opening and e.date > today + timedelta(days=1):
                 continue  # wait for the opening prop line
             nm = lambda i: f"{names[i].first_name} {names[i].last_name}".strip() if i in names else "?"
+            model = ({c: getattr(mp, f"{c}_prob") for c in CELLS}
+                     | {"ko": mp.ko_prob, "sub": mp.sub_prob, "dec": mp.dec_prob,
+                        "distance": mp.distance_prob})
             new.append({
                 "log_version": LOG_VERSION, "model_version": version,
                 "fight_id": str(f.id), "event": e.name, "event_date": e.date.isoformat(),
                 "red": nm(f.red_fighter_id), "blue": nm(f.blue_fighter_id),
                 "logged_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "model": {c: getattr(mp, f"{c}_prob") for c in CELLS}
-                         | {"ko": mp.ko_prob, "sub": mp.sub_prob, "dec": mp.dec_prob,
-                            "distance": mp.distance_prob},
+                "model": model,
                 "open": opening or None,
+                "h3": h3_decision(model, opening),
                 "result": None,
             })
     finally:
@@ -199,7 +235,27 @@ def report(entries: list[dict] | None = None) -> int:
         if ok.sum():
             print(f"  vs props at {src}: model {m[ok].mean():.4f}  market {k[ok].mean():.4f}  "
                   f"(n={int(ok.sum())})")
+    h3_report(done)
     return len(done)
+
+
+def h3_report(done: list[dict]) -> None:
+    """H3: flat 1-unit bets on the favourite by decision. ROI at the logged opening typical
+    price, and closing-line value (de-vigged close minus de-vigged open, in points)."""
+    from app.services.ufc.grading import decimal
+    bets = [e for e in done if (e.get("h3") or {}).get("bet")]
+    if not bets:
+        return
+    won = np.array([e["result"]["winner"] == e["h3"]["fav"] and e["result"]["class"] == "dec"
+                    for e in bets])
+    profit = np.where(won, [decimal(e["h3"]["american"]) - 1 for e in bets], -1.0)
+    clv = [100 * (((e.get("close") or {}).get("prices") or {}).get(e["h3"]["cell"]) - e["h3"]["q_open"])
+           for e in bets if ((e.get("close") or {}).get("prices") or {}).get(e["h3"]["cell"]) is not None]
+    rng = np.random.default_rng(0)
+    bs = [profit[rng.integers(0, len(profit), len(profit))].mean() for _ in range(2000)]
+    clv_txt = f", CLV {np.mean(clv):+.2f} pts (n={len(clv)})" if clv else ""
+    print(f"H3 favourite by decision: {len(bets)} bets ({H3_CHECKPOINT} needed), hit {won.mean():.1%}, "
+          f"ROI {profit.mean():+.1%} (one-sided 95% lower bound {np.percentile(bs, 5):+.1%}){clv_txt}")
 
 
 def main() -> None:
