@@ -208,6 +208,9 @@ def run_migrations():
     # the .sql migrations, so create it explicitly; checkfirst makes this a no-op after.
     from app.models.shared import AdminActionRun
     AdminActionRun.__table__.create(bind=engine, checkfirst=True)
+    # BMF / P4P rankings (ufc_alt_rankings). Same reason: the SQLite branch would miss it.
+    from app.models.ufc import UFCAltRanking
+    UFCAltRanking.__table__.create(bind=engine, checkfirst=True)
 
 
 #: The stats chain, in dependency order. Each entry is (label, "module:function").
@@ -236,11 +239,15 @@ POST_EVENT_CHAIN = [
     # Must follow the rankings step: publish_rankings overwrites ufc_fighter_rankings,
     # so without this the previous standings are lost and rank history never grows.
     ("Record Rank History", "app.services.ufc.rank_history_backfill:record_rank_history"),
+    # BMF and P4P read fights, stats and Tapology opponent tiers only — not Glicko — but
+    # sit after the stats steps so last night's knockdowns are in.
+    ("BMF + P4P Rankings", "app.services.ufc.alt_rankings_publisher:publish_alt_rankings"),
     ("Fighter Similarity", "app.services.ufc.style_service:compute_and_save_similarity"),
 ]
 
 #: Steps that take a db session as their first positional argument.
-_CHAIN_NEEDS_DB = {"Glicko Ratings + Rankings", "Record Rank History", "Fighter Similarity"}
+_CHAIN_NEEDS_DB = {"Glicko Ratings + Rankings", "Record Rank History", "BMF + P4P Rankings",
+                   "Fighter Similarity"}
 
 
 def refresh_after_event() -> dict[str, str]:

@@ -130,6 +130,12 @@ jobs:
         if: steps.check.outputs.event_happened == 'true'
         run: python -m app.services.ufc.ranking_service
 
+      # BMF + P4P. Never blocks predictions: these lists are display-only.
+      - name: BMF and P4P rankings
+        if: steps.check.outputs.event_happened == 'true'
+        continue-on-error: true
+        run: python -m app.services.ufc.alt_rankings_publisher
+
       - name: Generate winner predictions
         if: steps.check.outputs.event_happened == 'true'
         run: python -m app.services.ufc.model --predict

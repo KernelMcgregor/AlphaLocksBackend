@@ -80,6 +80,17 @@ def current_champions(db, as_of: date | None = None,
     return champions_as_of(load_title_bouts(db), as_of or date.today(), divisions)
 
 
+#: Belt changes with no bout to mark them: a champion retired or vacated and the interim
+#: champion was elevated. The bout data cannot see these, so they are the one curated
+#: input here — (date, division). From that date the belt belongs to the division's most
+#: recent INTERIM title winner, unless a decided undisputed title bout after it says
+#: otherwise. Dates are when UFC.com's rankings changed (archived monthly snapshots).
+ELEVATIONS: list[tuple[date, str]] = [
+    (date(2025, 6, 21), "heavyweight"),     # Jon Jones retires; Tom Aspinall elevated
+    (date(2026, 9, 29), "heavyweight"),     # Aspinall vacates; Ciryl Gane elevated
+]
+
+
 def champions_as_of(title_bouts: list[tuple], as_of: date,
                     divisions: dict | None = None) -> dict[str, int]:
     """`current_champions` as a pure function over prefetched rows.
@@ -92,6 +103,7 @@ def champions_as_of(title_bouts: list[tuple], as_of: date,
     # Every title-bout win, undisputed or interim, oldest first. Used to identify the
     # sitting champion when a title defence produces no result.
     title_wins: dict[str, list[tuple[date, int]]] = {}
+    interim_wins: dict[str, list[tuple[date, int]]] = {}
     for f_date, wc, method, winner_id, _red, _blue in reversed(rows):
         if f_date > as_of:
             continue
@@ -104,8 +116,12 @@ def champions_as_of(title_bouts: list[tuple], as_of: date,
             div = classify_weight_class(wc)
             if div != "unknown":
                 title_wins.setdefault(div, []).append((f_date, winner_id))
+                if "interim" in low:
+                    interim_wins.setdefault(div, []).append((f_date, winner_id))
 
     champs: dict[str, int] = {}
+    #: Date of the undisputed bout that decided each belt, for the elevation check.
+    decided_on: dict[str, date] = {}
     for f_date, wc, method, winner_id, red_id, blue_id in rows:
         if f_date > as_of:
             continue
@@ -117,6 +133,7 @@ def champions_as_of(title_bouts: list[tuple], as_of: date,
 
         if is_decided(method, winner_id):
             champs[div] = winner_id
+            decided_on[div] = f_date
             continue
 
         # A waved-off title fight does not transfer the belt, and it is also the only
@@ -130,9 +147,18 @@ def champions_as_of(title_bouts: list[tuple], as_of: date,
         for when, prior_winner in reversed(prior):
             if prior_winner in (red_id, blue_id):
                 champs[div] = prior_winner
+                decided_on[div] = f_date
                 log.debug(f"  Champions: {div} title bout on {f_date} had no result; "
                           f"belt stays with the prior title winner ({when})")
                 break
+
+    for when, div in ELEVATIONS:
+        if when > as_of or decided_on.get(div, date.min) > when:
+            continue                   # not yet, or a later title bout already settled it
+        interim = [w for w in interim_wins.get(div, []) if w[0] <= when]
+        if interim:
+            champs[div] = interim[-1][1]
+            decided_on[div] = when
 
     if divisions is not None:
         # `divisions` maps a fighter to the class(es) they currently compete in. Tapology
