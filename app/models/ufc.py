@@ -751,6 +751,33 @@ class UFCRankingHistory(Base):
     sos: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
+class UFCAltRanking(TimestampMixin, Base):
+    """Cross-division rankings that are not Tapology's: BMF and P4P.
+
+    Both are opinionated composites, so the table stores each fighter's 0-100 components
+    rather than only a final number — the page recombines them with the viewer's own
+    weights. `default_score`/`default_rank` are the result at the published default
+    weights. Rewritten whole on every publish by `alt_rankings_publisher`.
+    """
+    __tablename__ = "ufc_alt_rankings"
+    __table_args__ = (
+        UniqueConstraint("kind", "fighter_id", "pool"),
+        {"schema": UFC_SCHEMA},
+    )
+
+    kind: Mapped[str] = mapped_column(String(8), index=True)     # "bmf" | "p4p"
+    fighter_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_fighters.id")), index=True)
+    pool: Mapped[str] = mapped_column(String(8))                  # "men" | "women"
+    division: Mapped[str] = mapped_column(String(30))
+    as_of: Mapped[dt.date] = mapped_column(Date)
+    components: Mapped[str] = mapped_column(Text)   # JSON: {key: 0-100, "raw": {...}}
+    default_score: Mapped[float] = mapped_column(Float)
+    default_rank: Mapped[int] = mapped_column(Integer)
+    n_bouts: Mapped[int] = mapped_column(Integer)
+    last_fight_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    ledger: Mapped[str] = mapped_column(Text)        # JSON list, newest bout first
+
+
 # Canonical names of the rating-confidence columns. glicko_service stores the same
 # quantities in its in-memory snapshot dict under a leading underscore ("_meta_sigma"),
 # so the dict key is always "_" + the column name.

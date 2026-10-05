@@ -1165,6 +1165,30 @@ response_cache.register_warmer("upcoming", _upcoming_build, UPCOMING_TTL)
 response_cache.register_warmer("rankings", _rankings_build, RANKINGS_TTL)
 
 
+#: Cross-division lists published by alt_rankings_publisher. Each row ships its 0-100
+#: components and the defaults, so the page re-ranks on the client as sliders move.
+ALT_RANKING_KINDS = ("bmf", "p4p")
+
+
+@router.get("/alt-rankings/{kind}")
+def get_alt_rankings(kind: str):
+    """BMF or P4P rankings across all divisions, men's and women's pools."""
+    if kind not in ALT_RANKING_KINDS:
+        raise HTTPException(status_code=404, detail=f"Unknown ranking '{kind}'")
+    return response_cache.cached(f"alt-rankings:{kind}", _alt_rankings_builders[kind],
+                                 RANKINGS_TTL)
+
+
+def _alt_rankings_build(kind: str):
+    from app.services.ufc.alt_rankings_publisher import get_alt_rankings
+    return get_alt_rankings(kind)
+
+
+_alt_rankings_builders = {k: (lambda k=k: _alt_rankings_build(k)) for k in ALT_RANKING_KINDS}
+for _k, _build in _alt_rankings_builders.items():
+    response_cache.register_warmer(f"alt-rankings:{_k}", _build, RANKINGS_TTL)
+
+
 @router.get("/arbitrage")
 def get_arbitrage_opportunities(db: Session = Depends(get_db)):
     """Find arbitrage opportunities across bookmakers for upcoming fights."""
