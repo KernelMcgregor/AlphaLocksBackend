@@ -259,11 +259,20 @@ def get_similar_fighters(
 def list_career_stats(
     limit: int = Query(default=500, le=2000),
     offset: int = 0,
+    fighter_ids: str | None = Query(default=None, description="Comma-separated fighter ids"),
     db: Session = Depends(get_db),
 ):
+    q = db.query(UFCFighterCareerStats)
+    if fighter_ids:
+        # One query for a whole division, so the Fighter Stats page needs a single
+        # request instead of two per fighter.
+        try:
+            ids = [int(x) for x in fighter_ids.split(",") if x.strip()]
+        except ValueError:
+            raise HTTPException(status_code=422, detail="fighter_ids must be comma-separated integers")
+        q = q.filter(UFCFighterCareerStats.fighter_id.in_(ids))
     return (
-        db.query(UFCFighterCareerStats)
-        .order_by(UFCFighterCareerStats.fighter_id)
+        q.order_by(UFCFighterCareerStats.fighter_id)
         .offset(offset)
         .limit(limit)
         .all()

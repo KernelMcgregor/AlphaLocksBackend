@@ -850,6 +850,12 @@ def get_rankings() -> dict:
             if led and str(led[0].get("opponent_id", "")).isdigit():
                 last_opp_ids.add(int(led[0]["opponent_id"]))
         last_details = _last_fight_details(db, last_ids)
+        # The publisher pins the reigning champion to #1, but a vacant division puts a
+        # contender there, so the board needs the fact itself rather than rank == 1.
+        # Requiring both also drops a champion-of-record who has moved divisions:
+        # current_champions without `divisions` still names them, but they are not #1.
+        from app.services.ufc.champions import current_champions
+        champions = current_champions(db)
         # Portraits for the last-fight opponents. The ledger stores only a name and id,
         # and the board shows a headshot per bout, so the photo is joined here rather
         # than fetched per row on the client.
@@ -895,6 +901,7 @@ def get_rankings() -> dict:
                 "country_code": fighter.country_code,
                 "image_url": fighter.image_url,
                 "rank": ranking.rank,
+                "is_champion": ranking.rank == 1 and champions.get(ranking.weight_class) == fighter.id,
                 "score": round(ranking.score, 1),
                 "dimensions": {d: profile.get(d, 0) for d in DIMENSIONS},
                 "uncertainty": profile.get("uncertainty", 0),
@@ -923,6 +930,14 @@ def get_rankings() -> dict:
                 },
                 "next_fight": next_fights.get(ranking.fighter_id),
             })
+
+        # The number shown on the board, UFC-style: the champion is 'C' (None here) and
+        # the first contender is #1. A vacant division has no champion, so its numbers
+        # are the ranks themselves.
+        for fighters in wc_map.values():
+            offset = 1 if any(f["is_champion"] for f in fighters) else 0
+            for f in fighters:
+                f["display_rank"] = None if f["is_champion"] else f["rank"] - offset
 
         return {
             "weight_classes": [
