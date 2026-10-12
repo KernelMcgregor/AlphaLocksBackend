@@ -399,3 +399,55 @@ def gather_matchup_context(fight_id: int, db: Session) -> dict | None:
         "edges": glicko_matchup_edges(red_ctx["glicko"], blue_ctx["glicko"]),
         "common_opponents": _common_opponents(db, red.id, blue.id),
     }
+
+
+def _home_division(db: Session, fighter_id: int) -> str | None:
+    """The division a fighter is ranked in, as a bout name the classifier reads back."""
+    from app.services.ufc.hypothetical import DIVISIONS
+    row = (
+        db.query(UFCFighterRanking.weight_class)
+        .filter(UFCFighterRanking.fighter_id == fighter_id, UFCFighterRanking.rank > 0)
+        .first()
+    )
+    return f"{DIVISIONS[row[0]]} Bout" if row and row[0] in DIVISIONS else None
+
+
+def gather_pair_context(red_id: int, blue_id: int, weight_class: str, rounds: int,
+                        db: Session) -> dict | None:
+    """The matchup payload for two fighters who are not booked against each other.
+
+    Same shape as gather_matchup_context, built through the same per-corner reads on a
+    stand-in bout. With no snapshot for that bout, ratings fall back to each fighter's
+    most recent one (as for any announced bout). Skill percentiles are divisional: in a
+    cross-division bout a fighter has none in the division they are visiting, so they
+    come from the division the fighter is ranked in instead.
+    """
+    from types import SimpleNamespace
+
+    red = db.query(UFCFighter).filter(UFCFighter.id == red_id).first()
+    blue = db.query(UFCFighter).filter(UFCFighter.id == blue_id).first()
+    if not red or not blue:
+        return None
+    bout = SimpleNamespace(id=0, weight_class=weight_class,
+                           time_format="5-5-5-5-5" if rounds == 5 else "5-5-5")
+
+    def corner(f):
+        ctx = _corner(db, bout, f)
+        g = ctx["glicko"]
+        if not g or not any(d.get("percentile") is not None for d in g["dimensions"].values()):
+            home = _home_division(db, f.id)
+            if home and classify_weight_class(home) != classify_weight_class(weight_class):
+                ctx["glicko"] = _get_glicko_data(db, bout.id, f.id, home) or g
+                ctx["glicko_division"] = classify_weight_class(home)
+        return ctx
+
+    red_ctx, blue_ctx = corner(red), corner(blue)
+    return {
+        "fight_id": None,
+        "weight_class": weight_class,
+        "scheduled_rounds": rounds,
+        "red": red_ctx,
+        "blue": blue_ctx,
+        "edges": glicko_matchup_edges(red_ctx["glicko"], blue_ctx["glicko"]),
+        "common_opponents": _common_opponents(db, red.id, blue.id),
+    }

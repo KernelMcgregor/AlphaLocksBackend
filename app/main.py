@@ -425,6 +425,16 @@ def scheduled_scrape():
         log.error(f"Method prediction generation failed: {e}")
         record_run("Method Predictions", "error", str(e))
 
+    # Fighter features for the hypothetical-bout page, as of today. Built here so the first
+    # visitor of the day does not wait on it; the page also rebuilds a stale copy itself.
+    try:
+        from app.services.ufc import hypothetical
+        hypothetical.refresh(blocking=True)
+        record_run("Hypothetical Features", "done")
+    except Exception as e:
+        log.error(f"Hypothetical feature build failed: {e}")
+        record_run("Hypothetical Features", "error", str(e))
+
     # On event nights refresh_after_event already published rankings, on fresh derived and
     # career stats. On quiet nights they still need republishing: eligibility and the
     # inactivity sigma inflation are both functions of today's date, so the table drifts

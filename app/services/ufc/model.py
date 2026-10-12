@@ -141,7 +141,7 @@ def _assert_ids_exact(df: pd.DataFrame) -> None:
             )
 
 
-def load_fight_data(include_upcoming: bool = False) -> pd.DataFrame:
+def load_fight_data(include_upcoming: bool = False, extra_unplayed: list | None = None) -> pd.DataFrame:
     """Load one row per fighter per fight.
 
     `include_upcoming` appends unplayed bouts (no winner, no method, no stats) as rows
@@ -149,6 +149,11 @@ def load_fight_data(include_upcoming: bool = False) -> pd.DataFrame:
     same way as training: every shifted window, streak, Elo and Glicko value then
     describes the fighter AFTER their latest bout. Training callers leave it off; the
     rows would be dropped anyway because their label is NaN.
+
+    `extra_unplayed` adds bouts that are not in the database, through the same row
+    construction as booked ones: objects with the UFCFight attributes that loop reads
+    (id, date, event_id, card_position, red/blue_fighter_id, weight_class, time_format).
+    hypothetical.py uses it to give every fighter an "as of today" feature row.
     """
     log.info("Loading data from database...")
     db = SessionLocal()
@@ -228,7 +233,7 @@ def load_fight_data(include_upcoming: bool = False) -> pd.DataFrame:
             "event_country": event_country.get(fight.event_id),
         })
 
-    if include_upcoming:
+    if include_upcoming or extra_unplayed:
         played = {r["fight_id"] for r in rows}
         # Only bouts after the latest played fight. Earlier unplayed rows are cancelled
         # bouts that were never cleaned up; inserted mid-history they would shift every
@@ -239,7 +244,8 @@ def load_fight_data(include_upcoming: bool = False) -> pd.DataFrame:
             .filter(UFCFight.winner_id.is_(None))
             .filter((UFCFight.method.is_(None)) | (UFCFight.method == ""))
             .all()
-        )
+        ) if include_upcoming else []
+        upcoming = list(upcoming) + list(extra_unplayed or [])
         n_up = 0
         for fight in upcoming:
             if fight.id in played or not fight.date or (last_played and fight.date <= last_played):
@@ -367,6 +373,15 @@ def _classify_weight_class(wc: str | None) -> str:
     if "middleweight" in wc: return "middleweight"
     if "heavyweight" in wc: return "heavyweight"
     return "unknown"
+
+
+# Division ladder for the weight-class movement features (moved_up, division_rank_delta).
+# Women's and men's sit on separate runs so a cross-ladder delta is visibly large.
+DIVISION_ORDER = {
+    "w_strawweight": 0, "w_flyweight": 1, "w_bantamweight": 2, "w_featherweight": 3,
+    "flyweight": 10, "bantamweight": 11, "featherweight": 12, "lightweight": 13,
+    "welterweight": 14, "middleweight": 15, "light_heavyweight": 16, "heavyweight": 17,
+}
 
 
 def _is_title_bout(wc: str | None) -> bool:
@@ -1293,11 +1308,6 @@ def build_features(
     # the literature, where the often-cited win-rate drop is about what regression to
     # the mean predicts on its own. Built at explicit request; expectations low.
     log.info("  Computing weight-class movement...")
-    DIVISION_ORDER = {
-        "w_strawweight": 0, "w_flyweight": 1, "w_bantamweight": 2, "w_featherweight": 3,
-        "flyweight": 10, "bantamweight": 11, "featherweight": 12, "lightweight": 13,
-        "welterweight": 14, "middleweight": 15, "light_heavyweight": 16, "heavyweight": 17,
-    }
     df["division_rank"] = df["division"].map(DIVISION_ORDER).astype(float)
     prev_div = df.groupby("stats_fighter_id")["division"].shift(1)
     prev_rank = df.groupby("stats_fighter_id")["division_rank"].shift(1)

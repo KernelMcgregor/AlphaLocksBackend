@@ -600,6 +600,115 @@ def _build_fight_context(db: Session, fight_id: int):
     return context
 
 
+# --- Hypothetical bouts ---
+# Any two fighters, scored on request by the served models (services/ufc/hypothetical.py).
+
+HYPOTHETICAL_TTL = 60 * 60
+
+
+@router.get("/hypothetical/fighters")
+def hypothetical_fighters():
+    """Everyone with a completed UFC bout, for the matchup picker: identity, record,
+    current division, divisional rank, status."""
+    from app.services.ufc.hypothetical import fighter_index
+    return response_cache.cached("hypothetical:fighters", with_session(fighter_index), RANKINGS_TTL)
+
+
+@router.get("/hypothetical/status")
+def hypothetical_status():
+    from app.services.ufc.hypothetical import status
+    return status()
+
+
+@router.get("/hypothetical/predict")
+def hypothetical_predict(
+    red: int,
+    blue: int,
+    division: str | None = None,
+    title: bool = False,
+    rounds: int | None = Query(default=None, ge=3, le=5),
+):
+    """A bout that is not booked: both fighters, the model's winner / method / length
+    predictions, and the matchup context, in the shapes the fight page already reads.
+
+    `division` defaults to the heavier fighter's. 503 while the feature cache builds."""
+    from app.services.ufc.hypothetical import NotReady
+
+    if red == blue:
+        raise HTTPException(status_code=400, detail="Pick two different fighters")
+    key = f"hypothetical:{red}:{blue}:{division}:{int(title)}:{rounds}"
+    try:
+        return response_cache.cached(
+            key, with_session(_build_hypothetical, red, blue, division, title, rounds),
+            HYPOTHETICAL_TTL,
+        )
+    except NotReady as e:
+        raise HTTPException(status_code=503, detail=f"Model features are warming up ({e}). "
+                                                    "It reloads on its own when ready.")
+
+
+def _build_hypothetical(db: Session, red_id: int, blue_id: int, division: str | None,
+                        title: bool, rounds: int | None):
+    from app.services.ufc import hypothetical as hyp
+    from app.services.ufc.fight_context_service import gather_pair_context
+
+    fighters = {f.id: f for f in db.query(UFCFighter).filter(UFCFighter.id.in_([red_id, blue_id]))}
+    if red_id not in fighters or blue_id not in fighters:
+        raise HTTPException(status_code=404, detail="Fighter not found")
+
+    index = {f["id"]: f for f in hyp.fighter_index_cached(db)}
+    red_i, blue_i = index.get(str(red_id)), index.get(str(blue_id))
+    if not red_i or not blue_i:
+        raise HTTPException(status_code=404, detail="No UFC history to build features from")
+    # Men's and women's divisions are separate ladders; the model has never seen a bout
+    # across them and has nothing sensible to say about one.
+    if red_i["sex"] != blue_i["sex"]:
+        raise HTTPException(status_code=400, detail="Men's and women's fighters can't be matched")
+    division = division or hyp.default_division(red_i["division"], blue_i["division"])
+    if division not in hyp.DIVISIONS:
+        raise HTTPException(status_code=400, detail=f"Unknown division {division}")
+    if division != "catchweight" and hyp.is_womens(division) != (red_i["sex"] == "F"):
+        raise HTTPException(status_code=400, detail="That division is on the other ladder")
+    rounds = rounds or (5 if title else 3)
+    if rounds not in (3, 5):
+        raise HTTPException(status_code=400, detail="Rounds must be 3 or 5")
+
+    try:
+        pred = hyp.predict(red_id, blue_id, division, title, rounds)
+    except hyp.UnknownFighter:
+        raise HTTPException(status_code=404, detail="No UFC history to build features from")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    def fighter_payload(f):
+        out = UFCFighterResponse.model_validate(f).model_dump()
+        out["has_image"] = bool(f.image_url) or index.get(str(f.id), {}).get("has_image", False)
+        return out
+
+    return {
+        "fight": {
+            "id": f"hypothetical-{red_id}-{blue_id}",
+            "hypothetical": True,
+            "weight_class": pred["weight_class"],
+            "division": division,
+            "time_format": "5-5-5-5-5" if rounds == 5 else "5-5-5",
+            "red_fighter": fighter_payload(fighters[red_id]),
+            "blue_fighter": fighter_payload(fighters[blue_id]),
+            "prediction": pred["prediction"],
+            "method_prediction": pred["method_prediction"],
+            "round_prediction": pred["round_prediction"],
+            "shap_values": pred["shap_values"],
+            "expected_stats": None,
+            "odds": [], "method_odds": None, "preview": None,
+            "prediction_markets": None, "market_consensus": None, "prop_markets": None,
+            "notes": pred["notes"],
+            "weight_lbs": pred["weight_lbs"],
+            "as_of": pred["as_of"],
+        },
+        "context": gather_pair_context(red_id, blue_id, pred["weight_class"], rounds, db),
+    }
+
+
 @router.get("/fights/{fight_id}/market-history")
 def get_fight_market_history(
     fight_id: int,

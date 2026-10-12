@@ -36,3 +36,6 @@ models/ufc/method/rounds_wf/
 
 # xs_eval walk-forward predictions and frames (regenerable)
 models/ufc/xs_eval/
+
+# Daily fighter-feature cache for hypothetical bouts (services/ufc/hypothetical.py)
+models/ufc/h2h/hypothetical_state.pkl
