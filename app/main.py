@@ -211,6 +211,21 @@ def run_migrations():
     # BMF / P4P rankings (ufc_alt_rankings). Same reason: the SQLite branch would miss it.
     from app.models.ufc import UFCAltRanking
     UFCAltRanking.__table__.create(bind=engine, checkfirst=True)
+    # Fighter Styles page (ufc_fighter_style, ufc_style_families). Same reason.
+    from app.models.ufc import UFCFighterStyle, UFCStyleFamily
+    UFCFighterStyle.__table__.create(bind=engine, checkfirst=True)
+    UFCStyleFamily.__table__.create(bind=engine, checkfirst=True)
+    # 3D map columns, added after ufc_fighter_style first shipped. Both dialects: the
+    # table may predate them on either.
+    from sqlalchemy import inspect as sa_inspect, text as sa_text
+    from app.models.ufc import STYLE_3D_COLS, UFC_SCHEMA
+    style_tbl = f"{UFC_SCHEMA}.ufc_fighter_style" if UFC_SCHEMA else "ufc_fighter_style"
+    style_existing = {c["name"] for c in sa_inspect(engine).get_columns("ufc_fighter_style", schema=UFC_SCHEMA)}
+    style_missing = [(c, d) for c, d in STYLE_3D_COLS if c not in style_existing]
+    if style_missing:
+        with engine.begin() as conn:
+            for col, ddl in style_missing:
+                conn.execute(sa_text(f"ALTER TABLE {style_tbl} ADD COLUMN {col} {ddl}"))
 
 
 #: The stats chain, in dependency order. Each entry is (label, "module:function").
@@ -284,6 +299,34 @@ def refresh_after_event() -> dict[str, str]:
             log.exception(f"{label} failed")
             results[label] = f"error: {e}"
     return results
+
+
+def post_event_chain_stale(db) -> bool:
+    """True when results have landed since the chain last finished.
+
+    `run_recent_update` only reports events *it* scraped, but it is not the only writer:
+    post-event.yml scrapes the same results at 06:00 UTC, three hours earlier, and runs its
+    own copy of the chain. When that workflow writes the results and then dies partway
+    (it has no continue-on-error on the stats steps), both triggers go quiet — the nightly
+    job sees nothing new, and the workflow sees no fight missing a method — so career
+    stats, rankings and similarity stay stale until the next card.
+
+    Similarity is the last step of the chain and career stats an early one, so the chain
+    counts as complete only when BOTH ran after the newest result. Similarity alone is not
+    enough: a manual style run would otherwise mark the whole chain fresh while career
+    stats and Glicko never saw the card. A completed fight's updated_at moves only when its
+    result is written, which makes it a clean "new results since" signal; all three columns
+    are server-side UTC.
+    """
+    from sqlalchemy import func
+    from app.models.ufc import UFCFight, UFCFighterCareerStats, UFCFighterSimilarity
+    marks = [db.query(func.max(UFCFighterSimilarity.computed_at)).scalar(),
+             db.query(func.max(UFCFighterCareerStats.computed_at)).scalar()]
+    last_chain = None if any(m is None for m in marks) else min(m.replace(tzinfo=None) for m in marks)
+    last_result = db.query(func.max(UFCFight.updated_at)).filter(UFCFight.method.isnot(None)).scalar()
+    if last_result is None:
+        return False
+    return last_chain is None or last_result.replace(tzinfo=None) > last_chain.replace(tzinfo=None)
 
 
 def _event_fighter_ids(event_id: int) -> set[int]:
@@ -405,7 +448,18 @@ def scheduled_scrape():
         log.info(f"{len(new_events)} new event(s) — running post-event chain: {names}")
         refresh_after_event()
     else:
-        log.info("No new events; skipping the post-event stats chain")
+        from app.database import SessionLocal as _CheckSession
+        _db = _CheckSession()
+        try:
+            stale = post_event_chain_stale(_db)
+        finally:
+            _db.close()
+        if stale:
+            log.warning("Results landed since the chain last completed (another writer "
+                        "scraped them and did not finish) — running post-event chain")
+            refresh_after_event()
+        else:
+            log.info("No new events; skipping the post-event stats chain")
 
     try:
         from app.services.ufc.model import generate_predictions

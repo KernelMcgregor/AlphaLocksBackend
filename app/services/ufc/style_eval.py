@@ -1,238 +1,251 @@
-"""Does the style space mean anything? — offline validation for style_service.
+"""Style space benchmark and gate — the numbers quoted in style_service / style_page_service.
 
-The temptation with a similarity feature is to eyeball a few lists, agree that they look
-reasonable, and ship. That tests nothing: any distance metric over fighter stats produces
-plausible-looking neighbours, because every pair of fighters shares *something*.
+READ-ONLY: one read-only DB session, then everything runs in memory. Nothing is written
+except --out (a JSON of the results).
 
-THE TEST: STYLE SHOULD PREDICT TRANSFER
----------------------------------------
-If A and B genuinely fight alike, then they present the same problems to an opponent, so a
-third fighter C who has faced both should tend to get the same RESULT against both. That
-is a real, falsifiable, leakage-free claim, and 11,333 fights contain enough shared
-opponents to measure it.
+What it measures, for the FROZEN space and map in models/ufc/style/:
 
-For every (A, B) pair with at least one common opponent C, we ask whether C's outcomes
-against A and against B agree, then bucket pairs by style similarity and check that
-agreement rises with it.
+  self-recognition  Split each fighter (6+ bouts) into two halves of their fights —
+                    odd/even AND early/late career — fingerprint each half through the
+                    frozen space, and rank the fighter's other half among every candidate.
+                    Reported on a fixed held-out half of fighters (crc32(id) odd); the other
+                    half is where settings were tuned.
+  quality R^2       5-fold ridge R^2 of overall Glicko quality from the style vector. How
+                    much skill leaks into "style"; lower is better.
+  labels            UFC.com fighting_style, bucketed (wrestler / bjj / kickboxer / boxer;
+                    generic "Striker" only at the coarse striker-vs-grappler level): share of
+                    a labelled fighter's 10 nearest labelled neighbours with the same bucket,
+                    as a multiple of chance. Noisy (SD ~0.035 fine, ~0.02 coarse).
+  transfer          Common-opponent agreement, residualised on a 10 x 5 grid of (|quality
+                    gap|, pair mean quality): top-decile lift. Quality alone scores ~0.
+  --families        Per-family bootstrap Jaccard of KMeans(k) for k = 2..8 against a Gaussian
+                    null with the data's covariance, and the blend-temperature calibration
+                    against fight-bootstrap assignment frequencies.
 
-    PASS = agreement increases across similarity deciles, with the top decile materially
-           above the all-pairs baseline.
+GATE: self-recognition on the held-out odd/even split must find the fighter first at least
+25x chance and put the median rank inside the top 5% of the pool. Exit status 1 on FAIL.
 
-A flat curve means the space is measuring something that is not style, and the feature
-should be retuned (BLOCK_B_WEIGHT, the Block A column set) before it ships.
-
-One caveat on reading the headline number: the raw lift is inflated by a fighter-QUALITY
-confound, because similar-style pairs also tend to be similar-quality pairs. Quality alone
-scores +0.059 on this metric — better than style does. The figure that isolates this
-space's contribution is the lift computed WITHIN quality strata (+0.018). See the MEASURED
-block in style_service for both numbers and why the stratified one is the honest one.
-This is the gate, not a report.
-
-Note the direction of the claim. We are NOT asserting that similar fighters beat each
-other, or that similarity predicts a head-to-head winner — that would be a model feature,
-and this table is display-only. We are asserting the weaker and checkable thing: shared
-style implies shared results against shared opposition.
-
-SECONDARY, SANITY ONLY
-----------------------
-A hand-labelled set of pairs most fans would call obvious comps. Reported as recall@K, and
-worth glancing at, but it is a handful of subjective labels and must not be used to tune
-anything — that is how you overfit a metric to your own priors.
-
-Run: python -m app.services.ufc.style_eval
+Run:  python -m app.services.ufc.style_eval [--families] [--out results.json]
 """
-
 from __future__ import annotations
 
+import argparse
+import json
 import logging
+import zlib
 from collections import defaultdict
 
 import numpy as np
+from sqlalchemy import text
 
 from app.database import SessionLocal
-from app.models.ufc import UFCFight, UFCFighter
+from app.models.ufc import UFC_SCHEMA
+from app.services.ufc import style_habits as sh
+from app.services.ufc import style_page_service as sp
+from app.services.ufc import style_service as ss
 from app.services.ufc.fighter_registry import is_decided
-from app.services.ufc.style_service import (
-    ALL_FEATURES,
-    build_matrix,
-    fit_space,
-    load_space,
-    transform,
-)
 
 log = logging.getLogger("style_eval")
+MIN_SPLIT = 6
 
-#: Pairs are bucketed into this many equal-count similarity bins.
-N_BUCKETS = 10
-
-#: A pair needs at least this many common opponents to contribute. 1 is usable but noisy;
-#: the trend is reported at 1 and re-reported at 2 as a robustness check.
-MIN_COMMON = 1
-
-#: Obvious-comp sanity set. Names are matched case-insensitively on "first last".
-#: Deliberately short and deliberately not used for tuning.
-SANITY_PAIRS = [
-    ("khabib nurmagomedov", "islam makhachev"),
-    ("stephen thompson", "lyoto machida"),
-    ("charles oliveira", "brian ortega"),
-    ("max holloway", "alexander volkanovski"),
-    ("jose aldo", "cody garbrandt"),
-]
+BUCKETS = {
+    "Wrestling": "wrestle", "Wrestler": "wrestle", "Sambo": "wrestle",
+    "Jiu-Jitsu": "bjj", "Brazilian Jiu-Jitsu": "bjj", "Grappler": "bjj", "Judo": "bjj",
+    "Muay Thai": "kick", "Kickboxer": "kick", "Karate": "kick", "Taekwondo": "kick",
+    "Kung Fu": "kick", "Kung-Fu": "kick",
+    "Boxing": "box", "Boxer": "box", "Brawler": "box",
+    "Striker": "striker",
+}
 
 
-def _common_opponent_agreement(db, fids: list[int]) -> dict[tuple[int, int], tuple[int, int]]:
-    """{(a, b): (n_agree, n_total)} over common opponents, for a in fids, b in fids.
+def load(db):
+    inputs = ss.build_inputs(db)
+    bouts = sh.load_bouts(db)
+    model = sh.fit_opponent_model(bouts)
+    P = f"{UFC_SCHEMA}." if UFC_SCHEMA else ""
+    labels = {int(r.id): r.fighting_style for r in db.execute(text(
+        f"SELECT id, fighting_style FROM {P}ufc_fighters WHERE coalesce(fighting_style,'') <> ''"))}
+    fights = db.execute(text(
+        f"SELECT red_fighter_id, blue_fighter_id, winner_id, method, date FROM {P}ufc_fights")).fetchall()
+    return inputs, bouts, model, labels, fights
 
-    Only decided bouts count — a no-contest tells you nothing about whether two fighters
-    present the same problem. `is_decided` is reused so this agrees with what the rating
-    services consider a result.
-    """
-    eligible = set(fids)
 
-    # opponent -> {fighter: won?}  for every decided bout involving an eligible fighter
-    results: dict[int, dict[int, bool]] = defaultdict(dict)
-    for f in db.query(UFCFight).all():
-        if not is_decided(f.method, f.winner_id):
+def unit(Z):
+    return Z / np.maximum(np.linalg.norm(Z, axis=1, keepdims=True), 1e-12)
+
+
+def vectors(rows_bouts, keys, inputs, model, space):
+    X = np.array([[sh.style_features(bs, model)[c] for c in ss.ALL_FEATURES] for bs in rows_bouts])
+    prime = np.array([inputs.prime[inputs.fids.index(k)] for k in keys])
+    return unit(ss.transform(X, prime, [inputs.divisions[k] for k in keys], space))
+
+
+def self_recognition(inputs, bouts, model, space):
+    pool = [f for f in inputs.fids if len(bouts[f]) >= MIN_SPLIT]
+    held = np.array([zlib.crc32(str(f).encode()) % 2 == 1 for f in pool])
+    out = {"n": len(pool)}
+    for split in ("oddeven", "chrono"):
+        halves = []
+        for h in (0, 1):
+            hb = []
+            for f in pool:
+                bs = bouts[f]
+                n = len(bs) // 2
+                hb.append(bs[h::2] if split == "oddeven" else (bs[:n] if h == 0 else bs[n:]))
+            halves.append(vectors(hb, pool, inputs, model, space))
+        S = halves[0] @ halves[1].T
+        d = np.diag(S)
+        ranks = np.concatenate([(S > d[:, None]).sum(1) + 1, (S.T > d[:, None]).sum(1) + 1])
+        ev = np.concatenate([held, held])
+        out[split] = {"held_out_top1": round(float(np.mean(ranks[ev] == 1)), 4),
+                      "held_out_median_rank": float(np.median(ranks[ev])),
+                      "tuning_top1": round(float(np.mean(ranks[~ev] == 1)), 4),
+                      "tuning_median_rank": float(np.median(ranks[~ev]))}
+    return out
+
+
+def quality(inputs):
+    return np.array([np.mean([inputs.profiles[f][c] for c in ss.SKILL_FEATURES]) for f in inputs.fids])
+
+
+def quality_r2(Z, q):
+    from sklearn.linear_model import RidgeCV
+    from sklearn.model_selection import KFold, cross_val_predict
+    pred = cross_val_predict(RidgeCV(alphas=np.logspace(-2, 3, 12)), Z, q, cv=KFold(5, shuffle=True, random_state=0))
+    return float(1 - np.sum((q - pred) ** 2) / np.sum((q - q.mean()) ** 2))
+
+
+def label_lift(U, fids, labels, coarse):
+    lab = {f: BUCKETS.get(labels.get(f)) for f in fids}
+    pos = {f: i for i, f in enumerate(fids)}
+    keep = [f for f in fids if lab[f] and (coarse or lab[f] != "striker")]
+    y = np.array([("S" if lab[f] in ("kick", "box", "striker") else "G") if coarse else lab[f] for f in keep])
+    V = U[[pos[f] for f in keep]]
+    S = V @ V.T
+    np.fill_diagonal(S, -np.inf)
+    nn = np.argsort(-S, axis=1)[:, :10]
+    obs = np.mean(y[nn] == y[:, None])
+    _, cnt = np.unique(y, return_counts=True)
+    chance = float(np.sum(cnt / cnt.sum() * (cnt - 1) / (cnt.sum() - 1)))
+    return round(float(obs / chance), 3)
+
+
+def transfer(U, fids, q, fights):
+    eligible, pos = set(fids), {f: i for i, f in enumerate(fids)}
+    res = defaultdict(dict)
+    for f in sorted(fights, key=lambda x: (x.date is None, x.date)):
+        if not is_decided(f.method, f.winner_id) or f.red_fighter_id is None or f.blue_fighter_id is None:
             continue
-        r, b = f.red_fighter_id, f.blue_fighter_id
-        if r is None or b is None:
-            continue
-        r, b = int(r), int(b)
-        w = int(f.winner_id)
-        # Record from the perspective of each eligible fighter, keyed by their opponent.
+        r, b, w = int(f.red_fighter_id), int(f.blue_fighter_id), int(f.winner_id)
         if r in eligible:
-            results[b][r] = (w == r)
+            res[b][r] = w == r
         if b in eligible:
-            results[r][b] = (w == b)
-
-    agree: dict[tuple[int, int], list[int]] = defaultdict(lambda: [0, 0])
-    for _opp, seen in results.items():
-        if len(seen) < 2:
-            continue
-        items = sorted(seen.items())
-        for i in range(len(items)):
-            for j in range(i + 1, len(items)):
-                a, a_won = items[i]
-                b, b_won = items[j]
-                rec = agree[(a, b)]
+            res[r][b] = w == b
+    agree = defaultdict(lambda: [0, 0])
+    for seen in res.values():
+        it = sorted(seen.items())
+        for i in range(len(it)):
+            for j in range(i + 1, len(it)):
+                rec = agree[(it[i][0], it[j][0])]
                 rec[1] += 1
-                if a_won == b_won:
-                    rec[0] += 1
-
-    return {k: (v[0], v[1]) for k, v in agree.items()}
-
-
-def _bucket_report(sims: np.ndarray, agrees: np.ndarray, totals: np.ndarray, label: str):
-    """Print agreement by similarity decile and return (deciles, rates, baseline)."""
-    order = np.argsort(sims)
-    baseline = agrees.sum() / totals.sum()
-
-    edges = np.linspace(0, len(order), N_BUCKETS + 1).astype(int)
-    rates, mids = [], []
-    log.info(f"\n  {label} — {int(totals.sum())} common-opponent observations "
-             f"across {len(sims)} pairs")
-    log.info(f"  {'decile':<8}{'sim range':<22}{'pairs':>8}{'obs':>8}{'agree':>9}")
-    for i in range(N_BUCKETS):
-        sl = order[edges[i]:edges[i + 1]]
-        if len(sl) == 0:
-            continue
-        tot = totals[sl].sum()
-        if tot == 0:
-            continue
-        rate = agrees[sl].sum() / tot
-        rates.append(rate)
-        mids.append(float(np.mean(sims[sl])))
-        log.info(
-            f"  {i + 1:<8}{sims[sl].min():.3f}-{sims[sl].max():.3f}      "
-            f"{len(sl):>8}{int(tot):>8}{rate:>9.3f}"
-        )
-    log.info(f"  {'baseline':<8}{'(all pairs)':<22}{len(sims):>8}"
-             f"{int(totals.sum()):>8}{baseline:>9.3f}")
-    return np.array(mids), np.array(rates), baseline
+                rec[0] += it[i][1] == it[j][1]
+    a = np.array([pos[x] for x, _ in agree]); b = np.array([pos[y] for _, y in agree])
+    v = np.array(list(agree.values()), dtype=float)
+    gap, mean = np.abs(q[a] - q[b]), (q[a] + q[b]) / 2
+    cell = (np.digitize(gap, np.quantile(gap, np.linspace(0, 1, 11)[1:-1])) * 5
+            + np.digitize(mean, np.quantile(mean, np.linspace(0, 1, 6)[1:-1])))
+    cm = {c: v[cell == c, 0].sum() / v[cell == c, 1].sum() for c in np.unique(cell)}
+    resid = v[:, 0] / v[:, 1] - np.array([cm[c] for c in cell])
+    s = np.sum(U[a] * U[b], 1)
+    top = s >= np.quantile(s, 0.9)
+    return round(float(np.sum(resid[top] * v[top, 1]) / v[top, 1].sum()), 4)
 
 
-def evaluate(refit: bool = False) -> dict:
+def clusterboot(X, k, B=30, seed=0):
+    """Hennig-style per-cluster stability: mean over bootstraps of max Jaccard."""
+    from sklearn.cluster import KMeans
+    rng = np.random.default_rng(seed)
+    base = KMeans(k, n_init=10, random_state=0).fit(X).labels_
+    J = np.zeros((B, k))
+    for b in range(B):
+        idx = np.unique(rng.integers(0, len(X), len(X)))
+        lab = KMeans(k, n_init=10, random_state=b + 1).fit(X[idx]).labels_
+        for c in range(k):
+            C = set(idx[base[idx] == c])
+            J[b, c] = max((len(C & set(idx[lab == c2])) / len(C | set(idx[lab == c2])) for c2 in range(k)), default=0)
+    return J.mean(0)
+
+
+def families(Z, inputs, bouts, model, space, m):
+    """Z: the space before unit-normalising; the null is a Gaussian with its mean and covariance."""
+    rng = np.random.default_rng(1)
+    U = unit(Z)
+    N = unit(rng.multivariate_normal(Z.mean(0), np.cov(Z.T), size=len(Z)))
+    stab = {}
+    for k in range(2, 9):
+        jr, jn = clusterboot(U, k), clusterboot(N, k)
+        stab[k] = {"real_min": round(float(jr.min()), 2), "real_median": round(float(np.median(jr)), 2),
+                   "null_min": round(float(jn.min()), 2), "null_median": round(float(np.median(jn)), 2)}
+        log.info(f"  k={k}: real {stab[k]['real_min']}/{stab[k]['real_median']}  null {stab[k]['null_min']}/{stab[k]['null_median']}")
+    # Blend calibration: how often each fighter lands in each family when their own fights
+    # are resampled, vs the softmax shares at several temperatures.
+    freq = np.zeros((len(inputs.fids), sp.N_FAMILIES))
+    B = 40
+    for _ in range(B):
+        rs = [[bouts[f][i] for i in rng.integers(0, len(bouts[f]), len(bouts[f]))] for f in inputs.fids]
+        Ub = vectors(rs, inputs.fids, inputs, model, space)
+        freq[np.arange(len(Ub)), sp.assign_families(Ub, m)] += 1
+    freq /= B
+    calib = {}
+    for tau in (0.05, 0.10, 0.15, 0.20, 0.30):
+        P = sp.blends(U, dict(m, blend_tau=tau))
+        calib[tau] = round(float(np.mean(np.abs(P - freq))), 3)
+    P = sp.blends(U, m)
+    top = P.max(1)
+    return {"stability": stab, "blend_gap_by_tau": calib,
+            "share_clear_ge_0.8": round(float(np.mean(top >= 0.8)), 3),
+            "share_hybrid_lt_0.6": round(float(np.mean(top < 0.6)), 3),
+            "family_sizes": np.bincount(P.argmax(1), minlength=sp.N_FAMILIES).tolist()}
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--families", action="store_true", help="also run family stability + blend calibration")
+    ap.add_argument("--out", help="write results JSON here")
+    a = ap.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     db = SessionLocal()
+    db.execute(text("SET TRANSACTION READ ONLY")) if db.get_bind().dialect.name == "postgresql" else None
     try:
-        fids, X, divisions = build_matrix(db)
-        if len(fids) < 50:
-            log.error(f"Only {len(fids)} eligible fighters — run the stats pipeline first")
-            return {}
-
-        space = None if refit else load_space()
-        if space is None:
-            log.info("No frozen space on disk; fitting one for evaluation only "
-                     "(not saved — style_service owns the artifact)")
-            space = fit_space(X)
-        E = transform(X, space)
-
-        # Cosine similarity of every pair, in the same space retrieval uses.
-        norms = np.linalg.norm(E, axis=1, keepdims=True)
-        norms[norms == 0] = 1.0
-        En = E / norms
-        S = En @ En.T
-
-        pos = {f: i for i, f in enumerate(fids)}
-        agreement = _common_opponent_agreement(db, fids)
-        log.info(f"  {len(agreement)} fighter pairs share at least one opponent")
-
-        result: dict = {"verdict": "INCONCLUSIVE"}
-        for min_common in (MIN_COMMON, 2):
-            sims, agrees, totals = [], [], []
-            for (a, b), (n_agree, n_tot) in agreement.items():
-                if n_tot < min_common or a not in pos or b not in pos:
-                    continue
-                sims.append(S[pos[a], pos[b]])
-                agrees.append(n_agree)
-                totals.append(n_tot)
-
-            if len(sims) < N_BUCKETS * 5:
-                log.warning(f"  Too few pairs at min_common={min_common}; skipping")
-                continue
-
-            mids, rates, baseline = _bucket_report(
-                np.array(sims), np.array(agrees, dtype=float),
-                np.array(totals, dtype=float),
-                f"min_common={min_common}",
-            )
-
-            if min_common == MIN_COMMON:
-                # Spearman-style monotonicity: correlation of decile index with rate.
-                rho = float(np.corrcoef(np.arange(len(rates)), rates)[0, 1])
-                lift = float(rates[-1] - baseline)
-                log.info(f"\n  monotonicity (corr of decile vs agreement): {rho:+.3f}")
-                log.info(f"  top-decile lift over baseline:              {lift:+.3f}")
-                verdict = "PASS" if rho > 0.5 and lift > 0.02 else "FAIL"
-                log.info(f"  VERDICT: {verdict}")
-                result = {"rho": rho, "lift": lift, "baseline": baseline,
-                          "verdict": verdict, "n_pairs": len(sims)}
-
-        _sanity(db, fids, S, pos)
-        return result
+        inputs, bouts, model, labels, fights = load(db)
     finally:
+        db.rollback()
         db.close()
-
-
-def _sanity(db, fids, S, pos):
-    """Recall@K on the hand-labelled comps. Glance at it; do not tune on it."""
-    name_to_id = {}
-    for f in db.query(UFCFighter).all():
-        key = f"{f.first_name} {f.last_name}".strip().lower()
-        name_to_id[key] = int(f.id)
-
-    log.info("\n  Sanity comps (hand-labelled, NOT a tuning target):")
-    for a_name, b_name in SANITY_PAIRS:
-        a, b = name_to_id.get(a_name), name_to_id.get(b_name)
-        if a is None or b is None or a not in pos or b not in pos:
-            log.info(f"    {a_name} / {b_name}: not both in the eligible set")
-            continue
-        row = S[pos[a]].copy()
-        row[pos[a]] = -np.inf
-        rank = int((row > row[pos[b]]).sum()) + 1
-        log.info(f"    {a_name} -> {b_name}: rank {rank} of {len(fids) - 1} "
-                 f"(sim {S[pos[a], pos[b]]:.3f})")
+    space = ss.load_space()
+    if space is None:
+        raise SystemExit(f"No frozen style space {ss.SPACE_VERSION}")
+    U = unit(ss.embed(inputs, space))
+    q = quality(inputs)
+    res = {"space": space["version"], "n_fighters": len(inputs.fids),
+           "self_recognition": self_recognition(inputs, bouts, model, space),
+           "quality_r2": round(quality_r2(ss.embed(inputs, space), q), 3),
+           "label_lift_fine": label_lift(U, inputs.fids, labels, coarse=False),
+           "label_lift_coarse": label_lift(U, inputs.fids, labels, coarse=True),
+           "transfer_resid_lift": transfer(U, inputs.fids, q, fights)}
+    if a.families:
+        m = sp.load_map()
+        res["map"] = m["version"]
+        res["families"] = families(ss.embed(inputs, space), inputs, bouts, model, space, m)
+    sr = res["self_recognition"]
+    n = sr["n"]
+    ok = sr["oddeven"]["held_out_top1"] >= 25.0 / n and sr["oddeven"]["held_out_median_rank"] <= 0.05 * n
+    res["verdict"] = "PASS" if ok else "FAIL"
+    print(json.dumps(res, indent=2))
+    if a.out:
+        with open(a.out, "w") as fh:
+            json.dump(res, fh, indent=2)
+    return res["verdict"]
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    evaluate()
+    raise SystemExit(0 if main() == "PASS" else 1)

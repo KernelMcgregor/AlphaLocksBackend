@@ -1201,8 +1201,13 @@ def load_glicko_data():
     return fight_map, rounds_by_fight, derived_totals, fighter_info, baselines
 
 
-def compute_and_save_snapshots(db, params: GlickoParams | None = None):
+def compute_and_save_snapshots(db, params: GlickoParams | None = None, persist: bool = True):
     """Run Glicko computation and persist snapshots to DB.
+
+    `persist=False` replays without touching ufc_glicko_snapshots — for display-only
+    callers (style similarity) that need the ratings but run after publish_rankings has
+    already written the same snapshots. Rewriting them there was redundant and left the
+    table the model serves from briefly empty.
 
     Called by ranking_service.generate_rankings().
 
@@ -1221,6 +1226,13 @@ def compute_and_save_snapshots(db, params: GlickoParams | None = None):
                     pre_ufc=sherdog_pre_ufc_records(fight_map))
 
     # --- Persist pre-fight Glicko snapshots to DB (used by ML model) ---
+    if persist:
+        _save_snapshots(db, fight_rating_snapshots)
+    return _finish_ratings(params, ratings, fighter_round_count, fighter_fight_count,
+                           fighter_last_fight_date, fighter_weight_class, sorted_fight_ids)
+
+
+def _save_snapshots(db, fight_rating_snapshots) -> None:
     log.info(f"  Saving {len(fight_rating_snapshots)} Glicko snapshots to DB...")
     db.query(UFCGlickoSnapshot).delete()
     db.commit()
@@ -1239,6 +1251,9 @@ def compute_and_save_snapshots(db, params: GlickoParams | None = None):
     db.commit()
     log.info(f"  Saved {len(snapshot_rows)} snapshots")
 
+
+def _finish_ratings(params, ratings, fighter_round_count, fighter_fight_count,
+                    fighter_last_fight_date, fighter_weight_class, sorted_fight_ids):
     # --- Apply Glicko inactivity: sigma inflation + rating decay ---
     log.info("  Applying inactivity sigma inflation and rating decay...")
     today = date.today()

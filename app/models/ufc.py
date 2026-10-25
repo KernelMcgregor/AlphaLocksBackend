@@ -799,6 +799,9 @@ METHOD_JOINT_COLS = ["red_ko_prob", "red_sub_prob", "red_dec_prob", "blue_ko_pro
 RANKING_HISTORY_COLS = [
     ("sos", "INTEGER"),
 ]
+#: 3D map position on ufc_fighter_style, added after the table shipped. Nullable with no
+#: default, so on Postgres the ALTER is metadata-only.
+STYLE_3D_COLS = [("x3", "FLOAT"), ("y3", "FLOAT"), ("z3", "FLOAT")]
 
 
 FIGHTER_BIO_COLS = [
@@ -891,7 +894,7 @@ class UFCFighterSimilarity(Base):
         {"schema": UFC_SCHEMA},
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     fighter_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_fighters.id")), index=True)
     similar_fighter_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_fighters.id")))
     rank: Mapped[int] = mapped_column(Integer)
@@ -911,6 +914,67 @@ class UFCFighterSimilarity(Base):
 
     fighter: Mapped["UFCFighter"] = relationship(foreign_keys=[fighter_id])
     similar_fighter: Mapped["UFCFighter"] = relationship(foreign_keys=[similar_fighter_id])
+
+
+class UFCFighterStyle(Base):
+    """One row per style-eligible fighter: family, map position, lineage, trait profile.
+
+    Feeds the Fighter Styles page. DISPLAY-ONLY for the same reason as
+    `ufc_fighter_similarity` (career-to-date inputs), and it must never reach
+    `model.build_features()`.
+
+    Family, position and ancestors are read in the ERA-ADJUSTED space (`style_page_service`),
+    not the space the similarity table is retrieved in: several style features drift with
+    the era a fighter fought in, which made raw families partly a proxy for decade.
+    Rewritten whole by `style_page_service` straight after the similarity step.
+    """
+    __tablename__ = "ufc_fighter_style"
+    __table_args__ = ({"schema": UFC_SCHEMA},)
+
+    fighter_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_fighters.id")), primary_key=True)
+    family: Mapped[int] = mapped_column(Integer, index=True)
+    division: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    #: Unit-square map coordinates in the frozen layout (style_map_<version>.pkl).
+    x: Mapped[float] = mapped_column(Float)
+    y: Mapped[float] = mapped_column(Float)
+    first_year: Mapped[int] = mapped_column(Integer)
+    last_year: Mapped[int] = mapped_column(Integer)
+    #: Position in the frozen 3D layout (style_map3d_<version>.pkl), each in -1..1.
+    #: Nullable: added after the table shipped (STYLE_3D_COLS), filled by the next run.
+    x3: Mapped[float | None] = mapped_column(Float, nullable=True)
+    y3: Mapped[float | None] = mapped_column(Float, nullable=True)
+    z3: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #: Midpoint of the UFC career; what the lineage view places on its time axis.
+    prime_year: Mapped[float] = mapped_column(Float)
+    active: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: Mean raw Glicko percentile, 0-99: the overall-quality axis the style space removes.
+    quality: Mapped[float] = mapped_column(Float)
+    notable: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: JSON {feature: 0-99 percentile}. Block A within-division (after shrinkage), Glicko raw.
+    profile: Mapped[str] = mapped_column(Text)
+    #: JSON [{"id": ..., "sim": ...}] — closest fighters whose prime is >= LINEAGE_GAP years
+    #: earlier; `notable_ancestors` restricts the pool to notable fighters.
+    ancestors: Mapped[str] = mapped_column(Text)
+    notable_ancestors: Mapped[str] = mapped_column(Text)
+    map_version: Mapped[str] = mapped_column(String(10))
+    computed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class UFCStyleFamily(Base):
+    """The style families on the Fighter Styles page — one row per frozen cluster."""
+    __tablename__ = "ufc_style_families"
+    __table_args__ = ({"schema": UFC_SCHEMA},)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    name: Mapped[str] = mapped_column(String(60))
+    blurb: Mapped[str] = mapped_column(Text)
+    #: JSON [feature, ...] — most over-weighted features of the centroid, strongest first.
+    traits: Mapped[str] = mapped_column(Text)
+    #: JSON {feature: mean 0-99 percentile across members}.
+    profile: Mapped[str] = mapped_column(Text)
+    n_fighters: Mapped[int] = mapped_column(Integer)
+    map_version: Mapped[str] = mapped_column(String(10))
+    computed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class UFCFighterCareerStats(Base):

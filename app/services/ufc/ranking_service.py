@@ -59,8 +59,11 @@ def compute_dimension_profiles(
     as_of: date | None = None,
     crit: Eligibility | None = None,
     params: GlickoParams | None = None,
+    persist_snapshots: bool = True,
 ) -> dict[tuple[int, str], dict]:
     """Compute Glicko ratings, persist ML snapshots, and return radar profiles.
+
+    `persist_snapshots=False` for display-only callers; see compute_and_save_snapshots.
 
     Returns {(fighter_id, division): {dim: percentile, ..., "uncertainty": sigma}}.
     """
@@ -69,7 +72,7 @@ def compute_dimension_profiles(
 
     log.info("  Computing Glicko dimension ratings...")
     ratings, _round_count, _fight_count, _last_date, _wc, _fids = \
-        compute_and_save_snapshots(db, params)
+        compute_and_save_snapshots(db, params, persist=persist_snapshots)
 
     # Division and eligibility come from the registry, never re-derived here. That
     # divergence is exactly what produced rank=0 rows.

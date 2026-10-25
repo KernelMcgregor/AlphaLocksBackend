@@ -10,8 +10,10 @@ from sqlalchemy.orm import Session, aliased, joinedload
 from app.database import get_db
 from app.services import response_cache
 from app.services.response_cache import with_session
+from app.services.ufc.style_habits import STYLE_FEATURES
 from app.models.ufc import (
-    UFCEvent, UFCFight, UFCFighter, UFCFighterCareerStats, UFCFighterSimilarity,
+    UFCEvent, UFCFight, UFCFighter, UFCFighterCareerStats, UFCFighterSimilarity, UFCFighterStyle,
+    UFCStyleFamily,
     UFCFightOdds, UFCMethodOdds,
     UFCFightPrediction, UFCFightPreview, UFCMethodPrediction, UFCFightShapValue, UFCFightStats,
     UFCRankingHistory, METHOD_JOINT_COLS,
@@ -253,6 +255,152 @@ def get_similar_fighters(
             previous_rank=sim.previous_rank,
         ))
     return out
+
+
+# --- Fighter Styles page ---
+# Families, map, lineage and trait profiles from ufc_fighter_style / ufc_style_families,
+# written by style_page_service after every event. Ids are strings: JS loses precision
+# past 2**53 and some fighter ids are larger.
+
+#: Comps returned with a fighter's style detail (the similarity table stores 20).
+STYLE_COMPS = 12
+#: Comps shipped inline with every fighter in the /styles overview, so the map can switch
+#: fighters with no request (ids + scores only; names and photos are in the same payload).
+STYLE_OVERVIEW_COMPS = 5
+#: The habit columns the style vector is built from, as shipped in the overview.
+STYLE_HABIT_KEYS = STYLE_FEATURES
+
+
+def _style_row(style, fighter, with_profile: bool = False) -> dict:
+    row = {
+        "id": str(fighter.id),
+        "name": f"{fighter.first_name} {fighter.last_name}".strip(),
+        "nickname": fighter.nickname,
+        "image_url": fighter.image_url,
+        "country_code": fighter.country_code,
+        "record": f"{fighter.wins or 0}-{fighter.losses or 0}-{fighter.draws or 0}",
+        # Bio for the Style Map's fighter card, as on the profile page.
+        "height": fighter.height, "weight": fighter.weight, "reach": fighter.reach,
+        "leg_reach": fighter.leg_reach, "stance": fighter.stance, "fighting_style": fighter.fighting_style,
+        "dob": fighter.dob.isoformat() if fighter.dob else None,
+        "octagon_debut": fighter.octagon_debut.isoformat() if fighter.octagon_debut else None,
+        "birthplace": fighter.birthplace, "trains_at": fighter.trains_at,
+        "division": style.division,
+        "family": style.family,
+        "x": style.x,
+        "y": style.y,
+        "first_year": style.first_year,
+        "last_year": style.last_year,
+        "prime_year": style.prime_year,
+        "active": style.active,
+        "quality": style.quality,
+        "notable": style.notable,
+        "ancestors": [{**a, "id": str(a["id"])} for a in json.loads(style.ancestors or "[]")],
+        "notable_ancestors": [{**a, "id": str(a["id"])} for a in json.loads(style.notable_ancestors or "[]")],
+    }
+    profile = json.loads(style.profile or "{}")
+    # The family blend is stored inside the profile JSON (style_page_service); lift it out.
+    # Rows written before v5 have none: a blend of one, the family itself.
+    row["blend"] = profile.pop("_blend", None) or [{"family": style.family, "share": 1.0}]
+    if with_profile:
+        row["profile"] = profile
+    else:
+        # Habit percentiles only, in STYLE_HABIT_KEYS order: enough for the map's area lens
+        # to average whatever region it covers, without shipping every full profile.
+        row["habits"] = [None if profile.get(k) is None else round(profile[k]) for k in STYLE_HABIT_KEYS]
+    return row
+
+
+def _build_styles(db: Session) -> dict:
+    families = db.query(UFCStyleFamily).order_by(UFCStyleFamily.id).all()
+    rows = (
+        db.query(UFCFighterStyle, UFCFighter)
+        .join(UFCFighter, UFCFighter.id == UFCFighterStyle.fighter_id)
+        .all()
+    )
+    computed = max((s.computed_at for s, _ in rows if s.computed_at), default=None)
+    comps: dict[int, list[dict]] = {}
+    for sim in (db.query(UFCFighterSimilarity)
+                .filter(UFCFighterSimilarity.rank <= STYLE_OVERVIEW_COMPS)
+                .order_by(UFCFighterSimilarity.fighter_id, UFCFighterSimilarity.rank)):
+        comps.setdefault(sim.fighter_id, []).append(
+            {"id": str(sim.similar_fighter_id), "similarity": sim.similarity})
+    # Completed UFC bouts and the latest one per fighter, for the bio card.
+    n_fights: dict[int, int] = {}
+    last_fight: dict[int, dt.date] = {}
+    first_fight: dict[int, dt.date] = {}
+    for red, blue, day in (db.query(UFCFight.red_fighter_id, UFCFight.blue_fighter_id, UFCFight.date)
+                           .filter(UFCFight.method.isnot(None))):
+        for fid in (red, blue):
+            if fid is None:
+                continue
+            n_fights[fid] = n_fights.get(fid, 0) + 1
+            if day and (fid not in last_fight or day > last_fight[fid]):
+                last_fight[fid] = day
+            if day and (fid not in first_fight or day < first_fight[fid]):
+                first_fight[fid] = day
+    return {
+        "version": families[0].map_version if families else None,
+        "computed_at": computed.isoformat() if computed else None,
+        "habit_keys": STYLE_HABIT_KEYS,
+        "families": [
+            {"id": f.id, "name": f.name, "blurb": f.blurb, "traits": json.loads(f.traits),
+             "profile": json.loads(f.profile), "n_fighters": f.n_fighters}
+            for f in families
+        ],
+        "fighters": [{**_style_row(s, f), "comps": comps.get(f.id, []), "ufc_fights": n_fights.get(f.id),
+                      "last_fight": last_fight[f.id].isoformat() if f.id in last_fight else None,
+                      "first_fight": first_fight[f.id].isoformat() if f.id in first_fight else None}
+                     for s, f in rows],
+    }
+
+
+@router.get("/styles")
+def get_styles():
+    """Every style-eligible fighter's family, map position and lineage, plus the families.
+
+    Profiles are left off (37 numbers x ~1,500 fighters); the per-fighter route has them.
+    """
+    return response_cache.cached("styles", with_session(_build_styles), RANKINGS_TTL)
+
+
+def _build_style_detail(db: Session, fighter_id: int) -> dict:
+    hit = (
+        db.query(UFCFighterStyle, UFCFighter)
+        .join(UFCFighter, UFCFighter.id == UFCFighterStyle.fighter_id)
+        .filter(UFCFighterStyle.fighter_id == fighter_id)
+        .first()
+    )
+    if hit is None:
+        raise HTTPException(status_code=404, detail="No style profile for this fighter")
+    comps = (
+        db.query(UFCFighterSimilarity, UFCFighterStyle, UFCFighter)
+        .join(UFCFighterStyle, UFCFighterStyle.fighter_id == UFCFighterSimilarity.similar_fighter_id)
+        .join(UFCFighter, UFCFighter.id == UFCFighterSimilarity.similar_fighter_id)
+        .filter(UFCFighterSimilarity.fighter_id == fighter_id)
+        .order_by(UFCFighterSimilarity.rank)
+        .limit(STYLE_COMPS)
+        .all()
+    )
+    return {
+        "fighter": _style_row(*hit, with_profile=True),
+        # Comps come from the similarity table — the same list the profile page serves —
+        # so the two pages never disagree about who a fighter's comparables are.
+        "comps": [
+            {**_style_row(style, fighter, with_profile=True),
+             "similarity": sim.similarity,
+             "top_drivers": json.loads(sim.top_drivers or "[]")}
+            for sim, style, fighter in comps
+        ],
+    }
+
+
+@router.get("/styles/fighters/{fighter_id}")
+def get_style_detail(fighter_id: int):
+    """One fighter's trait profile and their comps with profiles, for the explorer."""
+    return response_cache.cached(
+        f"styles:{fighter_id}", with_session(_build_style_detail, fighter_id), RANKINGS_TTL,
+    )
 
 
 @router.get("/career-stats", response_model=list[UFCFighterCareerStatsResponse])
