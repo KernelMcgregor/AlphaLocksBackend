@@ -115,3 +115,13 @@ def test_round_curve_reanchored_to_market_decision():
     # market says 60% decision (model 50%): finish mass shrinks by 0.4/0.5, timing kept
     assert abs(_round_s_market(rp, 7.5, 0.6, five=False) - (1 - 0.3 * 0.8)) < 1e-9
     assert abs(_round_s_market(rp, 15.0, 0.6, five=False) - 0.6) < 1e-9
+
+
+def test_exchange_consensus_ignores_zero_prices():
+    """A settled exchange market (last price 0 on both sides) took down /ufc/picks/v2 (2026-10-26)."""
+    from types import SimpleNamespace as N
+    from app.services.ufc.picks_v2 import _exchanges
+    rows = [(N(market_type="moneyline", side="red", platform="kalshi", outcome_key=None), N(bid=0.3, ask=0.32, price=0.0, volume=10)),
+            (N(market_type="moneyline", side="blue", platform="kalshi", outcome_key=None), N(bid=0.66, ask=0.68, price=0.0, volume=10))]
+    out = _exchanges(None, 1, rows)
+    assert "ml_q_red" not in out and "ml_red" in out

@@ -175,11 +175,13 @@ def _exchanges(db: Session, fight_id: int, rows: list | None = None) -> dict:
         # a venue can list the same fight twice; keep its better price
         if name not in cur or decimal(a) > decimal(cur[name]):
             cur[name] = a
-        if key.startswith("ml_"):
+        # the consensus uses last prices; a missing or settled (0 / 1) price is not a market
+        if key.startswith("ml_") and q.price is not None and 0 < q.price < 1:
             mids[m.side].append(q.price)
     if mids["red"] and mids["blue"]:
         r = sum(mids["red"]) / len(mids["red"]); b = sum(mids["blue"]) / len(mids["blue"])
-        out["ml_q_red"] = r / (r + b)
+        if r + b > 0:
+            out["ml_q_red"] = r / (r + b)
     return out
 
 
