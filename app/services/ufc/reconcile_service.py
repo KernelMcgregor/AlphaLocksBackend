@@ -41,11 +41,33 @@ log = logging.getLogger("reconcile")
 
 FIGHT_ID_RE = re.compile(r"fight-details/([0-9a-f]{16})")
 
-#: Every table keyed on a fight, deepest dependency first.
+#: Tables keyed on a fight that need explicit ordering (kept for readability; every other
+#: table with a foreign key to ufc_fights is found from the model metadata, see _fight_tables).
 _DEPENDENTS = (
     UFCFightStats, UFCFightPrediction, UFCMethodPrediction, UFCFightShapValue,
     UFCFightOdds, UFCFightOddsHistory, UFCMethodOdds, UFCFightPreview, UFCGlickoSnapshot,
 )
+
+
+def _fight_tables():
+    """(table, column) for every mapped table with a foreign key to ufc_fights, except the
+    prediction-market catalog (its children are cleared first, by market id).
+
+    A hand-kept list drifted: round predictions, expected stats, prop odds and five more tables
+    were added after it, and deleting a pulled bout that had any of them failed the whole
+    post-event workflow on a foreign-key violation (Oct 2026: settlement stopped for 3 cards).
+    """
+    from app.models.ufc import Base
+    out = []
+    for t in Base.metadata.sorted_tables:
+        if t.name in (UFCFight.__tablename__, UFCPredictionMarket.__tablename__):
+            continue
+        for fk in t.foreign_keys:
+            if fk.column.table.name == UFCFight.__tablename__:
+                out.append((t, fk.parent))
+    # children before parents: reverse dependency order
+    order = {t.name: i for i, t in enumerate(Base.metadata.sorted_tables)}
+    return sorted(out, key=lambda tc: -order[tc[0].name])
 
 
 def live_fight_ids(scraper: Scraper, event_ufcstats_id: str) -> set[str]:
@@ -71,8 +93,8 @@ def _delete_fight(db, fight: UFCFight) -> None:
             UFCPredictionMarketQuote.market_id.in_(market_ids)))
         db.execute(delete(UFCPredictionMarket).where(UFCPredictionMarket.id.in_(market_ids)))
 
-    for model in _DEPENDENTS:
-        db.execute(delete(model).where(model.fight_id == fight.id))
+    for table, col in _fight_tables():
+        db.execute(delete(table).where(col == fight.id))
     db.execute(delete(UFCFight).where(UFCFight.id == fight.id))
 
 
