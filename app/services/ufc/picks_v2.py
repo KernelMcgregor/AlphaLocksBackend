@@ -344,6 +344,24 @@ def _round_s(rp, t: float) -> float | None:
     return None
 
 
+def _round_s_market(rp, t: float, q_dec: float | None, five: bool) -> float | None:
+    """S(t) with the finish mass re-anchored to the MARKET's P(decision), keeping the rounds
+    model's timing shape (round_hazard.anchor): S'(t) = 1 - (1 - S(t)) (1 - q) / (1 - S(end)).
+
+    Measured 2026-10-26 (scripts/prop_benchmark.py + cross-market check, 1,891 priced fights):
+    the market prices WHETHER a fight finishes better than the model, the model prices WHEN.
+    Market finish rate x model timing, blended 50/50 with the O/U / starts-round close, beats
+    the close by -0.0013 log loss pooled over the four round markets [-0.0025, -0.0001],
+    the same in 2022-24 and 2024-26. Falls back to the model's own curve when unpriced."""
+    s_t = _round_s(rp, t)
+    if s_t is None or q_dec is None:
+        return s_t
+    s_end = _round_s(rp, 25.0 if five else 15.0)
+    if s_end is None or s_end >= 1 - 1e-4:
+        return s_t
+    return float(min(max(1 - (1 - s_t) * (1 - q_dec) / (1 - s_end), 1e-4), 1.0))
+
+
 def _event_fights(db: Session, event_id=None, fight_id=None, all_upcoming=False):
     from app.models.ufc import UFCEvent, UFCFight
     q = db.query(UFCFight, UFCEvent).join(UFCEvent, UFCEvent.id == UFCFight.event_id)
@@ -613,9 +631,12 @@ def _build_rows(db: Session, rows, pre: dict | None = None) -> dict:
                      prop_side(f"itd_{corner}_no", "no", f"Not {last[corner]} inside the distance", 1 - itd)],
                     q_prop(lambda s, c=corner: f"itd_{c}_{s}"), captured(f"itd_{corner}_yes"))
         if rp:
-            lines = [("ou_1_5", "1.5", rp.over_1_5), ("ou_2_5", "2.5", rp.over_2_5)]
+            q_dec = props.get("dec_yes", {}).get("prob")
+            lines = [("ou_1_5", "1.5", _round_s_market(rp, 7.5, q_dec, five)),
+                     ("ou_2_5", "2.5", _round_s_market(rp, 12.5, q_dec, five))]
             if five:
-                lines += [("ou_3_5", "3.5", rp.over_3_5), ("ou_4_5", "4.5", rp.over_4_5)]
+                lines += [("ou_3_5", "3.5", _round_s_market(rp, 17.5, q_dec, five)),
+                          ("ou_4_5", "4.5", _round_s_market(rp, 22.5, q_dec, five))]
             for fam, line, p in lines:
                 if p is None:
                     continue
@@ -624,7 +645,7 @@ def _build_rows(db: Session, rows, pre: dict | None = None) -> dict:
                      prop_side(f"ou_{line}_under", "under", f"Under {line} rounds", 1 - p)],
                     q_prop(lambda s, l=line: f"ou_{l}_{s}"), captured(f"ou_{line}_over"))
             for n, t in ((2, 5.0), (3, 10.0)):
-                p = _round_s(rp, t)
+                p = _round_s_market(rp, t, q_dec, five)
                 if p is None:
                     continue
                 add(lambda s, n=n: f"starts_r{n}_{s}", f"starts_r{n}", f"Fight starts round {n}",

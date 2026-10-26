@@ -3,7 +3,8 @@
 Bets are rebuilt from data in the repo + DB only, so this runs in CI after each event:
   probabilities  ensemble OOF (models/ufc/h2h/ensemble_oof.csv) with the ensemble's market
                  stacks; method_v2 OOF (models/ufc/method/method_oof.csv); rounds OOF
-                 (models/ufc/method/rounds_oof.csv, anchored to method_v2's decision prob)
+                 (models/ufc/method/rounds_oof.csv, anchored to the market's decision price when priced,
+                  else method_v2's decision prob)
   prices         moneyline open/close: ufc_fight_odds_open_close (opening = the consensus
                  price; closing = best across sportsbooks); props: ufc_prop_odds_history
                  rows with source 'bfo_close' (best and median American price)
@@ -200,6 +201,10 @@ def round_bets(engine, res: pd.DataFrame, px: pd.DataFrame, method_d: pd.DataFra
     md = method_d.drop_duplicates("fight_id").set_index("fight_id")
     pr = d["fight_id"].map(md["p_red"])
     dec_p = pr * d["fight_id"].map(md["red_dec"]) + (1 - pr) * d["fight_id"].map(md["blue_dec"])
+    # as served (picks_v2._round_s_market): the market's P(decision) sets the finish mass when
+    # priced, the rounds model only the timing
+    if "q_dec_yes" in d:
+        dec_p = d["q_dec_yes"].where(d["q_dec_yes"].notna(), dec_p)
     curves = d[[f"S_{e:g}" for e in np.arange(0, 25.01, 2.5)]].to_numpy(float)
     A = anchor(curves, dec_p.to_numpy(float), d["sched"].to_numpy(float))
     t = d["t"].to_numpy(float)

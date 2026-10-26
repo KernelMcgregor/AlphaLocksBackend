@@ -102,3 +102,16 @@ def test_exchange_contract_price_inverts_fee():
     for plat in ("kalshi", "polymarket"):
         for p in (0.12, 0.35, 0.5, 0.81):
             assert abs(exchange_contract_price(plat, exchange_american(plat, p)) - p) < 0.003
+
+
+def test_round_curve_reanchored_to_market_decision():
+    import json
+    from types import SimpleNamespace
+    from app.services.ufc.picks_v2 import _round_s_market
+    curve = [{"t": t, "s": s} for t, s in ((0, 1.0), (5.0, 0.8), (7.5, 0.7), (10.0, 0.62), (12.5, 0.56), (15.0, 0.5))]
+    rp = SimpleNamespace(curve=json.dumps(curve))
+    # unpriced: the model's own curve
+    assert _round_s_market(rp, 7.5, None, five=False) == 0.7
+    # market says 60% decision (model 50%): finish mass shrinks by 0.4/0.5, timing kept
+    assert abs(_round_s_market(rp, 7.5, 0.6, five=False) - (1 - 0.3 * 0.8)) < 1e-9
+    assert abs(_round_s_market(rp, 15.0, 0.6, five=False) - 0.6) < 1e-9
