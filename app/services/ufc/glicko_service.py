@@ -652,6 +652,14 @@ def sherdog_pre_ufc_records(fight_map: dict) -> dict | None:
     return out
 
 
+def _has_real_rounds(round_data) -> bool:
+    """True when a bout's round rows hold any non-zero stat (placeholders are all zero)."""
+    if not round_data:
+        return False
+    return any(v for fighters in round_data.values() for stats in fighters.values()
+               for v in stats.values() if isinstance(v, (int, float)))
+
+
 def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
                 params: GlickoParams | None = None, pre_ufc: dict | None = None):
     """Run the full Glicko rating computation over all fights. Returns ratings and metadata."""
@@ -695,7 +703,11 @@ def _run_glicko(fight_map, rounds_by_fight, fighter_info, baselines,
         if not fight["winner_id"] and not fight["method"]:
             # Unplayed (upcoming) bout: record the pre-fight snapshot so serving sees the
             # rating AFTER each fighter's latest bout, then move on without updating.
-            if not rounds_by_fight.get(fight_id):
+            # Booked bouts carry all-zero placeholder round rows in ufc_fight_stats, so
+            # "no rounds" alone skipped every one of them and upcoming fights were served
+            # with glicko_* = 0. A bout with real stats but no result yet (results not
+            # scraped) is still skipped.
+            if not _has_real_rounds(rounds_by_fight.get(fight_id)):
                 for fid in (fight["red_id"], fight["blue_id"]):
                     _seed_newcomer(ratings, fid, fighter_seeded, fighter_info, ufc_w, ufc_l, pre_ufc)
                     prev = fighter_last_fight_date.get(fid)

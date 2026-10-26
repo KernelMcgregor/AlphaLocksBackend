@@ -3662,7 +3662,10 @@ def _generate_predictions_ensemble(ens) -> None:
     log.info(f"  Serving ensemble trained {ens.meta.get('trained_at')} "
              f"(members: {[m.name for m in ens.members]}, stack: {ens.stack})")
     df, round_data = load_fight_data(include_upcoming=True)
-    df = build_features(df, round_data)
+    # In-memory Glicko, as training uses: the stored ufc_glicko_snapshots table only has
+    # what the last publish_rankings wrote, which can lag this job by a night.
+    from app.services.ufc.glicko_service import run_glicko_inmemory
+    df = build_features(df, round_data, glicko_snapshots=run_glicko_inmemory())
     matchup = build_serving_matchup(df)
 
     model_p = ens.model_prob(matchup)
