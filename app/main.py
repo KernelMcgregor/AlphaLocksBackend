@@ -47,6 +47,11 @@ def run_migrations():
         pred_existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_fight_predictions)").fetchall()}
         if pred_existing and "model_prob" not in pred_existing:
             conn.execute("ALTER TABLE ufc_fight_predictions ADD COLUMN model_prob REAL")
+        # 016: venue close / card start on ufc_prediction_markets
+        pm_existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_prediction_markets)").fetchall()}
+        for col in ("venue_closed_at", "card_start_at"):
+            if pm_existing and col not in pm_existing:
+                conn.execute(f"ALTER TABLE ufc_prediction_markets ADD COLUMN {col} TIMESTAMP")
         # 013: winner x method grid on ufc_method_predictions
         mp_existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_method_predictions)").fetchall()}
         for col in METHOD_JOINT_COLS:
@@ -147,6 +152,14 @@ def run_migrations():
         if "model_prob" not in pred_existing:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE ufc.ufc_fight_predictions ADD COLUMN model_prob FLOAT"))
+
+        # 016: venue close / card start on ufc_prediction_markets (bout cutoffs). Nullable,
+        # no default -> metadata-only.
+        pm_existing = {c["name"] for c in insp.get_columns("ufc_prediction_markets", schema="ufc")}
+        for col in ("venue_closed_at", "card_start_at"):
+            if pm_existing and col not in pm_existing:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE ufc.ufc_prediction_markets ADD COLUMN {col} TIMESTAMP"))
 
         # 013: winner x method grid from method_v2. Nullable, no default -> metadata-only.
         mp_existing = {c["name"] for c in insp.get_columns("ufc_method_predictions", schema="ufc")}

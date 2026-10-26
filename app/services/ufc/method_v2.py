@@ -405,8 +405,12 @@ def generate_predictions(model: ConditionalMethodModel | None = None) -> int:
     has_joint = all(c in cols for c in joint_cols)
     db = SessionLocal()
     try:
-        db.query(UFCMethodPrediction).delete()
+        from app.services.ufc.prediction_freeze import clear_unfrozen, frozen_fight_ids
+        frozen = frozen_fight_ids(db, UFCMethodPrediction)
+        clear_unfrozen(db, UFCMethodPrediction, frozen)
         for r in preds.itertuples(index=False):
+            if int(r.fight_id) in frozen:
+                continue
             probs = (r.ko_prob, r.sub_prob, r.dec_prob)
             k = int(np.argmax(probs))
             row = dict(fight_id=int(r.fight_id), predicted_method=CLASS_NAMES[k],

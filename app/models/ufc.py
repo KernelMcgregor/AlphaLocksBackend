@@ -606,6 +606,14 @@ class UFCPredictionMarket(TimestampMixin, Base):
     #: 1.0 / 0.0 / 0.5 once settled. Comparing this against ufc_fights.winner_id is the
     #: cheapest end-to-end check that matching and corner orientation are both correct.
     resolved_outcome: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #: When the venue actually closed this market. Kalshi closes a UFC market minutes after the
+    #: result, so this is the bout's *end*. Null while open: an open market's `close_time` is a
+    #: scheduled placeholder, not an observation. Polymarket's `closedTime` is the resolution,
+    #: which can lag the bout by days, so it is not recorded here.
+    venue_closed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    #: Card start as the venue publishes it (Polymarket `gameStartTime`; Kalshi has none).
+    #: Shared by every bout on the card, so it bounds when any of them can have started.
+    card_start_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
     fight: Mapped["UFCFight"] = relationship()
 

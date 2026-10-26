@@ -21,7 +21,7 @@ from app.services.ufc.prediction_markets.polymarket import (
 __all__ = [
     "run_kalshi_backfill", "run_kalshi_live",
     "run_polymarket_backfill", "run_polymarket_live",
-    "run_live", "run_backfill",
+    "run_live", "run_backfill", "run_repair",
 ]
 
 
@@ -43,3 +43,12 @@ def run_backfill(venue: str = "both", curves: str = "all", since: str | None = N
     if venue in ("polymarket", "both"):
         out["polymarket"] = run_polymarket_backfill(since=since, curves=curves, dry_run=dry_run)
     return out
+
+
+def run_repair() -> dict:
+    """One-off: record venue close / card-start times on stored markets, then realign every curve
+    so `days_to_fight` = 0 is the bout's cutoff. Polymarket first, so Kalshi's realign sees the
+    card starts. Safe to re-run."""
+    from app.services.ufc.prediction_markets.kalshi import backfill_closed_at
+    from app.services.ufc.prediction_markets.polymarket import backfill_card_start
+    return {"polymarket": backfill_card_start(), "kalshi": backfill_closed_at()}

@@ -150,13 +150,21 @@ def exchange_buy_price(bid, ask, last, volume) -> float | None:
 # data
 # ---------------------------------------------------------------------------
 
+def _pre_fight(db: Session, rows: list) -> list:
+    """Drop (market, quote) rows whose bout is past its cutoff. An "open" market there is
+    trading in play, or is a finished bout the refresh has not yet read as closed."""
+    from app.services.ufc.prediction_markets.common import cutoffs_for_fights, fight_started
+    cutoffs = cutoffs_for_fights(db, {m.fight_id for m, _ in rows})
+    return [(m, q) for m, q in rows if not fight_started(cutoffs.get(m.fight_id))]
+
+
 def _exchanges(db: Session, fight_id: int, rows: list | None = None) -> dict:
     """{market_key: {"Kalshi": american, ...}} for traded exchange quotes, plus "ml_q_red", the
     exchange consensus (mean mid per side, normalised) for fights no sportsbook prices."""
     from app.models.ufc import UFCPredictionMarket as M, UFCPredictionMarketQuote as Q
     if rows is None:
-        rows = (db.query(M, Q).join(Q, Q.market_id == M.id)
-                .filter(M.fight_id == fight_id, M.status == "open").all())
+        rows = _pre_fight(db, db.query(M, Q).join(Q, Q.market_id == M.id)
+                          .filter(M.fight_id == fight_id, M.status == "open").all())
     out: dict = {}
     mids = {"red": [], "blue": []}
     for m, q in rows:
@@ -410,8 +418,9 @@ def _preload(db: Session, fight_ids: list, has_rounds: bool) -> dict:
             UFCFightOddsHistory.fight_id.in_(ids), UFCFightOddsHistory.bookmaker.like("BFO:%"))
             .order_by(UFCFightOddsHistory.captured_at).all() if ids else []),
         "ml_fallback": group(db.query(UFCFightOdds).filter(UFCFightOdds.fight_id.in_(ids)).all() if ids else []),
-        "exchanges": _grouped(db.query(PM, PQ).join(PQ, PQ.market_id == PM.id)
-                              .filter(PM.fight_id.in_(ids), PM.status == "open").all() if ids else [],
+        "exchanges": _grouped(_pre_fight(db, db.query(PM, PQ).join(PQ, PQ.market_id == PM.id)
+                                         .filter(PM.fight_id.in_(ids), PM.status == "open").all())
+                              if ids else [],
                               None, defaultdict(list), key=lambda r: r[0].fight_id),
         # the directly-read book table is created by the first scraper run; until then, none
         "direct": group(db.query(*_DIRECT_COLS(H)).filter(H.fight_id.in_(ids))

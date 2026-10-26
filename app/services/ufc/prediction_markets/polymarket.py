@@ -17,10 +17,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from app.services.ufc.prediction_markets.common import (
-    NoSuchCard, _fold_match, align_fight_anchor, days_to_fight, name_matches, fetch_json, last_history_ts, match_fight,
+    NoSuchCard, _fold_match, days_to_fight, name_matches, fetch_json, last_history_ts, match_fight, parse_ts, realign_cards,
     open_session, record_history, split_versus, upsert_market, upsert_quote,
 )
 
@@ -112,10 +112,13 @@ def classify_market(question: str, red=None, blue=None):
     return "unknown", None, None
 
 
-def list_fight_events(closed: bool | None = None) -> list[dict]:
-    """Per-fight UFC events, paginated. Gamma caps `limit` at 100."""
+def list_fight_events(closed: bool | None = None, newest_pages: int | None = None) -> list[dict]:
+    """Per-fight UFC events, newest first, paginated. Gamma caps `limit` at 100.
+
+    `newest_pages` stops early: the live run only wants the last few days of closed events.
+    """
     events, offset = [], 0
-    while True:
+    while newest_pages is None or offset < newest_pages * 100:
         params = {"tag_slug": "ufc", "limit": 100, "offset": offset,
                   "order": "startDate", "ascending": "false"}
         if closed is not None:
@@ -182,7 +185,17 @@ def _num(value) -> float | None:
         return None
 
 
-def _ingest_event(db, event: dict, *, curves: str, dry_run: bool) -> str:
+def card_start(event: dict, market: dict | None = None) -> datetime | None:
+    """The card's start: `gameStartTime` on a market, else the event's `startTime`.
+
+    Card-level, not bout-level -- every bout on a card carries the same value -- but it is a real
+    published time, and nothing on the card can be in play before it.
+    """
+    return parse_ts((market or {}).get("gameStartTime")) or parse_ts(event.get("startTime"))
+
+
+def _ingest_event(db, event: dict, *, curves: str, dry_run: bool,
+                  touched: set | None = None) -> str:
     slug = event.get("slug") or ""
     fight_date = _slug_date(slug)
     names = split_versus(event.get("title") or "")
@@ -219,7 +232,8 @@ def _ingest_event(db, event: dict, *, curves: str, dry_run: bool) -> str:
                        outcome_key=token_sides[i], side=token_sides[i],
                        label=outcomes[i] if i < len(outcomes) else None,
                        price=_num(prices[i]) if i < len(prices) else None,
-                       fight_date=fight_date, curves=curves)
+                       fight_date=fight_date, curves=curves,
+                       starts=card_start(event, market))
         else:
             # Every other market is a Yes/No pair; only the Yes leg carries information, since
             # No is its complement. Storing both would double the row count and the request
@@ -230,21 +244,18 @@ def _ingest_event(db, event: dict, *, curves: str, dry_run: bool) -> str:
                    outcome_key=outcome_key, side=side,
                    label=market.get("question"),
                    price=_num(prices[0]) if prices else None,
-                   fight_date=fight_date, curves=curves)
+                   fight_date=fight_date, curves=curves,
+                   starts=card_start(event, market))
 
-
-    # Put both venues on one time reference. Kalshi anchors on a bout-specific close_time
-    # and Polymarket on midnight of the event date, which for UFC 331 differ by 31 hours —
-    # so without this, `days_to_fight` means something different depending on who wrote the
-    # row, and any CLV or line-movement query silently mixes the two. No-op once aligned.
-    align_fight_anchor(db, fight.id)
     db.commit()
+    if touched is not None:
+        touched.add(fight.id)
     return "ok"
 
 
 def _store(db, fight, event_slug: str, market: dict, token: str, market_type: str, *,
            outcome_key: str, side: str | None, label: str | None, price: float | None,
-           fight_date: date, curves: str) -> None:
+           fight_date: date, curves: str, starts: datetime | None = None) -> None:
     closed = bool(market.get("closed"))
     resolved = None
     if closed and price is not None:
@@ -263,6 +274,7 @@ def _store(db, fight, event_slug: str, market: dict, token: str, market_type: st
         fight_id=fight.id,
         status="settled" if closed else "open",
         resolved_outcome=resolved,
+        card_start_at=starts,
     )
 
     if price is not None:
@@ -302,10 +314,11 @@ def _store(db, fight, event_slug: str, market: dict, token: str, market_type: st
 def _run(events: list[dict], *, curves: str, dry_run: bool, label: str) -> dict:
     db = open_session()
     stats: dict[str, int] = {}
+    touched: set[int] = set()
     try:
         for i, event in enumerate(events, 1):
             try:
-                status = _ingest_event(db, event, curves=curves, dry_run=dry_run)
+                status = _ingest_event(db, event, curves=curves, dry_run=dry_run, touched=touched)
             except Exception as e:
                 db.rollback()
                 log.warning(f"  {event.get('slug')} failed: {e.__class__.__name__}: {e}")
@@ -313,15 +326,27 @@ def _run(events: list[dict], *, curves: str, dry_run: bool, label: str) -> dict:
             stats[status] = stats.get(status, 0) + 1
             if i % 25 == 0:
                 log.info(f"  [{label}] {i}/{len(events)} events — {stats}")
+        # Once per run, not per fight: a bout's cutoff depends on its neighbours on the card.
+        realigned = realign_cards(db, touched)
+        db.commit()
     finally:
         db.close()
-    log.info(f"Polymarket {label} done: {stats}")
+    log.info(f"Polymarket {label} done: {stats} ({realigned} curve points realigned)")
     return stats
 
 
+#: Same reasoning as Kalshi's: a market has to be read once more after it closes, or it stays
+#: "open" in our tables quoting the post-result price.
+RECENT_CLOSED_DAYS = 4
+
+
 def run_polymarket_live(curves: str = "all") -> dict:
-    events = list_fight_events(closed=False)
-    log.info(f"Polymarket live: {len(events)} open per-fight events")
+    since = date.today() - timedelta(days=RECENT_CLOSED_DAYS)
+    events = list_fight_events(closed=False) + [
+        e for e in list_fight_events(closed=True, newest_pages=2)
+        if (_slug_date(e.get("slug") or "") or date.min) >= since
+    ]
+    log.info(f"Polymarket live: {len(events)} open or recently closed per-fight events")
     return _run(events, curves=curves, dry_run=False, label="live")
 
 
@@ -333,3 +358,41 @@ def run_polymarket_backfill(since: str | None = None, curves: str = "all",
         events = [e for e in events if (_slug_date(e.get("slug") or "") or date.min) >= cutoff]
     log.info(f"Polymarket backfill: {len(events)} events{' (dry run)' if dry_run else ''}")
     return _run(events, curves=curves, dry_run=dry_run, label="backfill")
+
+
+def backfill_card_start() -> dict:
+    """One-off repair: record the card start on every stored Polymarket market.
+
+    Markets ingested before `card_start_at` existed have none, and a closed market whose curve is
+    already stored is skipped by the normal run, so nothing else would ever fill it in.
+    """
+    from app.models.ufc import UFCPredictionMarket
+
+    db = open_session()
+    stats = {"events": 0, "markets": 0}
+    try:
+        rows = (
+            db.query(UFCPredictionMarket)
+            .filter(UFCPredictionMarket.platform == "polymarket",
+                    UFCPredictionMarket.fight_id.isnot(None))
+            .all()
+        )
+        by_slug: dict[str, list] = {}
+        for row in rows:
+            by_slug.setdefault(row.external_event_id, []).append(row)
+        for slug, markets in by_slug.items():
+            found = fetch_json(HOST, f"{GAMMA}/events", {"slug": slug}) or []
+            if not found:
+                continue
+            stats["events"] += 1
+            start = card_start(found[0], (found[0].get("markets") or [None])[0])
+            if start is None:
+                continue
+            for row in markets:
+                row.card_start_at = start
+                stats["markets"] += 1
+        db.commit()
+    finally:
+        db.close()
+    log.info(f"Polymarket card-start backfill done: {stats}")
+    return stats

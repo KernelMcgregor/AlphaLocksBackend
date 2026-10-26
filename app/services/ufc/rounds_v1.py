@@ -293,8 +293,12 @@ def generate_predictions(model: HazardModel | None = None) -> int:
 
     db = SessionLocal()
     try:
-        db.query(UFCRoundPrediction).delete()
+        from app.services.ufc.prediction_freeze import clear_unfrozen, frozen_fight_ids
+        frozen = frozen_fight_ids(db, UFCRoundPrediction)
+        clear_unfrozen(db, UFCRoundPrediction, frozen)
         for fid, sm in zip(ids, summaries):
+            if int(fid) in frozen:
+                continue
             db.add(UFCRoundPrediction(fight_id=int(fid), curve=json.dumps(sm.pop("curve")),
                                       **{k: (None if v is None else round(v, 4)) for k, v in sm.items()}))
         db.commit()

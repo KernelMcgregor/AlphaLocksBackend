@@ -1,0 +1,118 @@
+{
+ "label": "style_replace: +14 cols, -3",
+ "n_eval": 2533,
+ "n_priced": 2085,
+ "rows": [
+  {
+   "member": "noodds_catboost_0",
+   "kind": "cal",
+   "base": 0.6402202208892604,
+   "cand": 0.6432145536437872,
+   "delta": 0.002994332754526718,
+   "lo": -0.0036781390627081095,
+   "hi": 0.009959727546120997
+  },
+  {
+   "member": "noodds_catboost_0",
+   "kind": "anc",
+   "base": 0.5936506988501365,
+   "cand": 0.5956176780866892,
+   "delta": 0.001966979236552572,
+   "lo": -0.000649252698145475,
+   "hi": 0.004672137461612648
+  },
+  {
+   "member": "noodds_noraw_catboost_0",
+   "kind": "cal",
+   "base": 0.6427415044470688,
+   "cand": 0.6460263020171538,
+   "delta": 0.003284797570084995,
+   "lo": -0.005054696635657201,
+   "hi": 0.011214236517446028
+  },
+  {
+   "member": "noodds_noraw_catboost_0",
+   "kind": "anc",
+   "base": 0.5951110565841482,
+   "cand": 0.5959678336516014,
+   "delta": 0.0008567770674531389,
+   "lo": -0.0022119821435018284,
+   "hi": 0.004050242057295458
+  },
+  {
+   "member": "noodds_hgb_0",
+   "kind": "cal",
+   "base": 0.6398093899261359,
+   "cand": 0.6422915470958419,
+   "delta": 0.0024821571697059936,
+   "lo": -0.004635012365579723,
+   "hi": 0.009218646105301632
+  },
+  {
+   "member": "noodds_hgb_0",
+   "kind": "anc",
+   "base": 0.5935885910556363,
+   "cand": 0.5940311956226029,
+   "delta": 0.00044260456696656835,
+   "lo": -0.002181221270750456,
+   "hi": 0.0029720168222626925
+  },
+  {
+   "member": "noodds_nosn_logit_0",
+   "kind": "cal",
+   "base": 0.6446552884046665,
+   "cand": 0.6499950809440662,
+   "delta": 0.00533979253939968,
+   "lo": 0.0007879316417736415,
+   "hi": 0.010440890445685184
+  },
+  {
+   "member": "noodds_nosn_logit_0",
+   "kind": "anc",
+   "base": 0.5923962252381453,
+   "cand": 0.5931921408273155,
+   "delta": 0.0007959155891702194,
+   "lo": -0.0011391888595901616,
+   "hi": 0.002873444835157798
+  },
+  {
+   "member": "ensemble",
+   "kind": "cal",
+   "base": 0.6308838992996583,
+   "cand": 0.633468934111227,
+   "delta": 0.0025850348115686746,
+   "lo": -0.0003913478296815706,
+   "hi": 0.005511234210725574
+  },
+  {
+   "member": "ensemble",
+   "kind": "anc",
+   "base": 0.5922473228668937,
+   "cand": 0.5931660212088883,
+   "delta": 0.0009186983419945367,
+   "lo": -0.0005063616826352633,
+   "hi": 0.00232884454449597
+  }
+ ],
+ "columns": [
+  "diff_sty_like_n60",
+  "diff_sty_like_n75",
+  "diff_sty_atyp",
+  "diff_sty_like_max",
+  "diff_sty_like_resid_p1",
+  "diff_sty_like_resid_p4",
+  "diff_sty_like_top3_resid",
+  "diff_sty_like_xs_sig",
+  "diff_sty_like_xs_td",
+  "diff_sty_like_xs_ctrl",
+  "fight_sty_cos",
+  "diff_sty_analog_resid_p1",
+  "diff_sty_analog_resid_p4",
+  "fight_sty_analog_neff_p4"
+ ],
+ "dropped": [
+  "diff_style_matchup_adv",
+  "red_style_matchup_adv",
+  "blue_style_matchup_adv"
+ ]
+}

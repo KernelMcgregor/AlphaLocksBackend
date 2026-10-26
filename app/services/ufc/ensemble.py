@@ -130,7 +130,8 @@ def fit_backend(backend: str, X: np.ndarray, y: np.ndarray, names: list[str],
         from sklearn.pipeline import make_pipeline
         from sklearn.preprocessing import StandardScaler
         Xa, ya = _corner_swap_augment(X, y, names)
-        m = make_pipeline(StandardScaler(), LogisticRegression(C=0.05, max_iter=3000))
+        C = (params or {}).get("C", 0.05)
+        m = make_pipeline(StandardScaler(), LogisticRegression(C=C, max_iter=3000))
         return _Symmetric(m.fit(Xa, ya), names)
     if backend == "xgboost":
         from xgboost import XGBClassifier

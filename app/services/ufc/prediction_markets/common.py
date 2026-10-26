@@ -10,6 +10,7 @@ import logging
 import threading
 import time
 import unicodedata
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
 import httpx
@@ -337,7 +338,9 @@ def split_versus(title: str) -> tuple[str, str] | None:
 def upsert_market(db, *, platform: str, external_event_id: str, external_market_id: str,
                   market_type: str, outcome_key: str, outcome_label: str | None,
                   side: str | None, fight_id: int | None, status: str = "open",
-                  resolved_outcome: float | None = None) -> UFCPredictionMarket:
+                  resolved_outcome: float | None = None,
+                  venue_closed_at: datetime | None = None,
+                  card_start_at: datetime | None = None) -> UFCPredictionMarket:
     """Insert or refresh the catalog row, returning it. Keyed on (platform, external_market_id)."""
     row = (
         db.query(UFCPredictionMarket)
@@ -361,6 +364,10 @@ def upsert_market(db, *, platform: str, external_event_id: str, external_market_
         row.fight_id = fight_id
     if resolved_outcome is not None:
         row.resolved_outcome = resolved_outcome
+    if venue_closed_at is not None:
+        row.venue_closed_at = _naive_utc(venue_closed_at)
+    if card_start_at is not None:
+        row.card_start_at = _naive_utc(card_start_at)
 
     db.flush()  # populate row.id for the quote/history writers
     return row
@@ -455,65 +462,248 @@ def open_session():
     return SessionLocal()
 
 
-def align_fight_anchor(db, fight_id: int) -> int:
-    """Put every venue's curve for one fight on a single time reference.
+def _naive_utc(ts: datetime) -> datetime:
+    """Every timestamp in these tables is naive UTC; normalise anything a venue hands back."""
+    if ts.tzinfo is not None:
+        ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
+    return ts
 
-    Each venue stores `days_to_fight` against its own idea of when the bout is: Kalshi against a
-    per-market `close_time` or the event's `occurrence_datetime`, Polymarket against midnight on
-    the event's date, because Polymarket publishes no bout time at all. For UFC 331 those differ
-    by 31 hours -- at the same instant Kalshi read 6.31 days out and Polymarket 5.00.
 
-    That is not merely cosmetic. `days_to_fight` exists so price can be analysed as a function of
-    time-to-event, and CLV compares a closing line against a bout time; a column that means
-    something different depending on which venue wrote the row quietly corrupts both.
+def parse_ts(raw: str | None) -> datetime | None:
+    """A venue timestamp as naive UTC. Both '2026-09-19T21:00:00Z' and Polymarket's
+    '2026-09-19 21:00:00+00' spellings occur, sometimes on the same object."""
+    if not raw:
+        return None
+    text = raw.strip().replace("Z", "+00:00")
+    if text.endswith("+00"):
+        text += ":00"
+    try:
+        return _naive_utc(datetime.fromisoformat(text))
+    except ValueError:
+        return None
 
-    The latest anchor wins, because it is the one derived from a real event time rather than a
-    date rounded down to midnight. Returns the number of rows rewritten.
+
+# --------------------------------------------------------------------------- bout cutoffs
+
+#: Subtracted from a bout's own close when nothing earlier on the card bounds its start. Kalshi
+#: closes a UFC market a few minutes after the result, so close is bout *end*; a five-round fight
+#: plus walkouts and the settlement delay runs past 40 minutes. Erring early is deliberate -- a
+#: closing line taken slightly too soon is merely a little stale, while one taken slightly too late
+#: is the market reading the result off the screen.
+BOUT_LEAD = timedelta(minutes=45)
+
+#: An earlier bout's close only bounds this bout's start if it is at least this far before this
+#: bout's own close. Guards against a wrong `card_position` (a bout moved on the night) turning
+#: this bout's own in-play window into "before the fight".
+_MIN_BOUT = timedelta(minutes=10)
+
+
+@dataclass(frozen=True)
+class Bout:
+    fight_id: int
+    card_position: int | None      # 0 = main event, ascending *down* the card (= earlier)
+    closed_at: datetime | None     # venue close of this bout's market (its end), if settled
+    card_start: datetime | None    # the venue's card start, if published
+    event_date: date | None
+    resolved_by: datetime | None = None  # last normal price before the curve pinned at 0/1
+
+
+def bout_cutoffs(bouts: list[Bout]) -> dict[int, datetime | None]:
+    """The last moment each bout on one card can be priced as *pre-fight*.
+
+    Neither venue publishes a per-bout start time, but the card itself bounds it: a bout cannot
+    begin until the one before it has finished, and the one before it finished no later than its
+    own market closed. So the cutoff for a bout is the latest close among the bouts below it on
+    the card, floored at the card's published start. Nothing on the card can be in play before the
+    card starts, so the first bout is cut at that start.
+
+    Every fallback errs early:
+      * nothing below it has closed and no card start is known, but it has closed itself:
+        its own close minus `BOUT_LEAD`;
+      * nothing at all (an upcoming Kalshi-only card): midnight UTC on the event date. That
+        is before the first prelim for every venue the UFC uses, as far east as Japan.
+
+    On top of all that, the curve itself caps the cutoff. Once the result is in, a market pins at
+    0 or 1, so the last price before that tail is no later than the end of the bout, and the
+    cutoff is held `BOUT_LEAD` before it. That catches bad venue timestamps the rules above
+    cannot: older Kalshi markets often closed an hour or more after the result (one hit 0.99 at
+    00:00 and closed at 02:48), and those late closes would otherwise bound the next bout's start.
+    Measured on 610 settled fights, the cap takes the share of closing lines at >=95% on the
+    eventual winner from 1.8% (Kalshi) / 0.7% (Polymarket) to zero.
+
+    The old anchor was Kalshi's `occurrence_datetime`, which is a scheduled per-bout slot,
+    not an observation: an early prelim on 19 Sep 2026 carried 03:00 UTC while its market had
+    closed on the result at 22:00. Five hours of post-result trading counted as "before the fight".
     """
-    from sqlalchemy import func, literal, update
+    out: dict[int, datetime | None] = {}
+    card_start = max((b.card_start for b in bouts if b.card_start), default=None)
+    for bout in bouts:
+        own = bout.closed_at
+        earlier = [
+            b.closed_at for b in bouts
+            if b.fight_id != bout.fight_id and b.closed_at is not None
+            and b.card_position is not None and bout.card_position is not None
+            and b.card_position > bout.card_position
+            and (own is None or b.closed_at <= own - _MIN_BOUT)
+        ]
+        bounds = [t for t in (card_start, max(earlier, default=None)) if t is not None]
+        if bounds:
+            cutoff = max(bounds)
+        elif own is not None:
+            cutoff = own - BOUT_LEAD
+        elif bout.event_date is not None:
+            cutoff = datetime.combine(bout.event_date, datetime.min.time())
+        else:
+            cutoff = None
+        # A card start that postdates the bout's own result is bad data, not a bound.
+        if cutoff is not None and own is not None and cutoff > own - _MIN_BOUT:
+            cutoff = own - BOUT_LEAD
+        if bout.resolved_by is not None:
+            cap = bout.resolved_by - BOUT_LEAD
+            cutoff = cap if cutoff is None else min(cutoff, cap)
+        out[bout.fight_id] = cutoff
+    return out
 
-    # Latest observation per market, in two portable queries. The obvious single-query form needs
-    # Postgres-only date arithmetic (make_interval / DISTINCT ON), and this module has to run on
-    # the SQLite database used for local development too.
-    latest = (
+
+def cutoffs_for_fights(db, fight_ids) -> dict[int, datetime | None]:
+    """`bout_cutoffs` for these fights, read from stored venue timestamps -- no venue requests.
+
+    Evaluated a whole card at a time, because each bout's cutoff depends on its neighbours.
+    """
+    fight_ids = list(fight_ids)
+    if not fight_ids:
+        return {}
+    event_ids = {
+        e for (e,) in db.query(UFCFight.event_id).filter(UFCFight.id.in_(fight_ids)).distinct()
+    }
+    card = (
+        db.query(UFCFight.id, UFCFight.event_id, UFCFight.card_position, UFCEvent.date)
+        .join(UFCEvent, UFCEvent.id == UFCFight.event_id)
+        .filter(UFCFight.event_id.in_(event_ids))
+        .all()
+    )
+    resolved = _resolved_by(db, [c.id for c in card])
+    times: dict[int, tuple[datetime | None, datetime | None]] = {}
+    for fid, closed, start in (
+        db.query(UFCPredictionMarket.fight_id,
+                 func.min(UFCPredictionMarket.venue_closed_at),
+                 func.min(UFCPredictionMarket.card_start_at))
+        .filter(UFCPredictionMarket.fight_id.in_([c.id for c in card]),
+                UFCPredictionMarket.market_type == "moneyline")
+        .group_by(UFCPredictionMarket.fight_id)
+    ):
+        times[fid] = (closed, start)
+
+    by_event: dict[int, list[Bout]] = {}
+    for c in card:
+        closed, start = times.get(c.id, (None, None))
+        by_event.setdefault(c.event_id, []).append(
+            Bout(c.id, c.card_position, closed, start, c.date, resolved.get(c.id)))
+    out: dict[int, datetime | None] = {}
+    for bouts in by_event.values():
+        out.update(bout_cutoffs(bouts))
+    wanted = set(fight_ids)
+    return {k: v for k, v in out.items() if k in wanted}
+
+
+#: A price this close to 0 or 1 is the market reading a result, not pricing a bout. Pre-fight UFC
+#: favourites essentially never trade past it (that is about -6500).
+_PINNED = 0.015
+
+
+def _resolved_by(db, fight_ids: list[int]) -> dict[int, datetime]:
+    """Per fight, the last normal (unpinned) moneyline price before a curve that ends pinned.
+
+    Per market: the newest point strictly inside (_PINNED, 1 - _PINNED), kept only if points
+    follow it -- i.e. the curve ends in a pinned tail. A market whose losing side lingers at a
+    stale mid price after settlement simply has no tail and contributes nothing. The earliest
+    across the fight's markets wins.
+    """
+    from sqlalchemy import and_, case
+
+    if not fight_ids:
+        return {}
+    H = UFCPredictionMarketHistory
+    normal = and_(H.price > _PINNED, H.price < 1 - _PINNED)
+    rows = (
+        db.query(UFCPredictionMarket.fight_id,
+                 func.max(case((normal, H.captured_at))),
+                 func.max(H.captured_at))
+        .join(H, H.market_id == UFCPredictionMarket.id)
+        .filter(UFCPredictionMarket.fight_id.in_(fight_ids),
+                UFCPredictionMarket.market_type == "moneyline")
+        .group_by(UFCPredictionMarket.fight_id, UFCPredictionMarket.id)
+        .all()
+    )
+    out: dict[int, datetime] = {}
+    for fight_id, last_normal, last in rows:
+        if last_normal is None or last is None or last <= last_normal:
+            continue
+        out[fight_id] = min(out.get(fight_id, last_normal), last_normal)
+    return out
+
+
+def fight_started(cutoff: datetime | None, now: datetime | None = None) -> bool:
+    """Whether a live quote can no longer be trusted as a pre-fight price."""
+    if cutoff is None:
+        return False
+    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
+    return now >= cutoff
+
+
+def realign_cards(db, fight_ids) -> int:
+    """Rewrite `days_to_fight` so zero is each bout's cutoff, on every card these fights are on.
+
+    `days_to_fight >= 0` is what every consumer (closing lines, CLV, the movement chart) uses to
+    mean "before the fight", so the cutoff lives in this column rather than beside it. A whole card
+    is realigned because one bout settling moves the cutoff of the next bout up the card.
+
+    Skips a market whose stored anchor is already within a minute of the cutoff, so a refresh
+    that changed nothing rewrites nothing. Returns rows rewritten. Caller commits.
+    """
+    from sqlalchemy import literal, update
+
+    fight_ids = list(fight_ids)
+    if not fight_ids:
+        return 0
+    event_ids = {
+        e for (e,) in db.query(UFCFight.event_id).filter(UFCFight.id.in_(fight_ids)).distinct()
+    }
+    card_ids = [i for (i,) in db.query(UFCFight.id).filter(UFCFight.event_id.in_(event_ids))]
+    cutoffs = cutoffs_for_fights(db, card_ids)
+
+    # Current anchor per market, reconstructed from its newest point.
+    newest = (
         db.query(UFCPredictionMarketHistory.market_id,
                  func.max(UFCPredictionMarketHistory.captured_at))
-        .join(UFCPredictionMarket,
-              UFCPredictionMarket.id == UFCPredictionMarketHistory.market_id)
-        .filter(UFCPredictionMarket.fight_id == fight_id,
-                UFCPredictionMarketHistory.days_to_fight.isnot(None))
+        .join(UFCPredictionMarket, UFCPredictionMarket.id == UFCPredictionMarketHistory.market_id)
+        .filter(UFCPredictionMarket.fight_id.in_(card_ids))
         .group_by(UFCPredictionMarketHistory.market_id)
         .all()
     )
-    if not latest:
-        return 0
-
-    anchors: dict[int, datetime] = {}
-    for market_id, captured in latest:
-        row = (
+    fight_of = dict(
+        db.query(UFCPredictionMarket.id, UFCPredictionMarket.fight_id)
+        .filter(UFCPredictionMarket.fight_id.in_(card_ids))
+    )
+    updated = 0
+    for market_id, captured in newest:
+        cutoff = cutoffs.get(fight_of.get(market_id))
+        if cutoff is None:
+            continue
+        dtf = (
             db.query(UFCPredictionMarketHistory.days_to_fight)
             .filter(UFCPredictionMarketHistory.market_id == market_id,
                     UFCPredictionMarketHistory.captured_at == captured)
-            .first()
+            .scalar()
         )
-        if row and row[0] is not None:
-            anchors[market_id] = captured + timedelta(days=row[0])
-    if not anchors:
-        return 0
-
-    anchor = max(anchors.values())
-    updated = 0
-    for market_id, market_anchor in anchors.items():
-        # A minute of slack: the anchors are reconstructed from a rounded column, and rewriting
-        # thousands of rows to move them by seconds is pure churn.
-        if abs((anchor - market_anchor).total_seconds()) < 60:
+        if dtf is not None and abs((captured + timedelta(days=dtf) - cutoff).total_seconds()) < 60:
             continue
         result = db.execute(
             update(UFCPredictionMarketHistory)
             .where(UFCPredictionMarketHistory.market_id == market_id)
             .values(days_to_fight=(
                 func.extract("epoch",
-                             literal(anchor) - UFCPredictionMarketHistory.captured_at) / 86400.0
+                             literal(cutoff) - UFCPredictionMarketHistory.captured_at) / 86400.0
             ))
         )
         updated += result.rowcount or 0

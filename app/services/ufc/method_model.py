@@ -1437,9 +1437,13 @@ def _generate_legacy_predictions():
     from app.models.ufc import UFCMethodPrediction
     db = SessionLocal()
     try:
-        db.query(UFCMethodPrediction).delete()
+        from app.services.ufc.prediction_freeze import clear_unfrozen, frozen_fight_ids
+        frozen = frozen_fight_ids(db, UFCMethodPrediction)
+        clear_unfrozen(db, UFCMethodPrediction, frozen)
         count = 0
         for fight_id, proba in zip(matchup.index, scaled):
+            if int(fight_id) in frozen:
+                continue
             predicted_class = int(np.argmax(proba))
             db.add(UFCMethodPrediction(
                 fight_id=int(fight_id),

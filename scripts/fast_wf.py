@@ -81,6 +81,9 @@ def fit_predict(backend: str, X_fit, y_fit, X_eval_list, names):
         import json
         params = json.loads((MODEL_DIR / "catboost_tuning.json").read_text())["best_params"]
         backend = "catboost"
+    elif backend.startswith("logit@"):          # e.g. logit@0.2 = logistic member with C=0.2
+        params = {"C": float(backend.split("@", 1)[1])}
+        backend = "logit"
     model = fit_backend(backend, X_fit, y_fit, names, params)
     return [model.predict(X) for X in X_eval_list]
 

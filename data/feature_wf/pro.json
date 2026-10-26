@@ -1,0 +1,121 @@
+{
+ "label": "pro: +21 cols, -0",
+ "n_eval": 2533,
+ "n_priced": 2085,
+ "rows": [
+  {
+   "member": "noodds_catboost_0",
+   "kind": "cal",
+   "base": 0.6402202208892604,
+   "cand": 0.6411276402599445,
+   "delta": 0.0009074193706840699,
+   "lo": -0.007397398598870044,
+   "hi": 0.009679421404959435
+  },
+  {
+   "member": "noodds_catboost_0",
+   "kind": "anc",
+   "base": 0.5936506988501365,
+   "cand": 0.595864555647595,
+   "delta": 0.0022138567974583742,
+   "lo": -0.001441442669043048,
+   "hi": 0.006014395046255362
+  },
+  {
+   "member": "noodds_noraw_catboost_0",
+   "kind": "cal",
+   "base": 0.6427415044470688,
+   "cand": 0.6445215111354369,
+   "delta": 0.0017800066883681322,
+   "lo": -0.007258171453028876,
+   "hi": 0.010744019197070284
+  },
+  {
+   "member": "noodds_noraw_catboost_0",
+   "kind": "anc",
+   "base": 0.5951110565841482,
+   "cand": 0.5968434152588873,
+   "delta": 0.0017323586747391756,
+   "lo": -0.0019193860242955013,
+   "hi": 0.005478459784440453
+  },
+  {
+   "member": "noodds_hgb_0",
+   "kind": "cal",
+   "base": 0.6398093899261359,
+   "cand": 0.6424417213177626,
+   "delta": 0.0026323313916267028,
+   "lo": -0.00506706192383292,
+   "hi": 0.010720534054229316
+  },
+  {
+   "member": "noodds_hgb_0",
+   "kind": "anc",
+   "base": 0.5935885910556363,
+   "cand": 0.5949863671645534,
+   "delta": 0.0013977761089171406,
+   "lo": -0.0017424401022720696,
+   "hi": 0.0045352667455363024
+  },
+  {
+   "member": "noodds_nosn_logit_0",
+   "kind": "cal",
+   "base": 0.6446552884046665,
+   "cand": 0.6469146105191682,
+   "delta": 0.002259322114501735,
+   "lo": -0.00533954548659169,
+   "hi": 0.010184668600214466
+  },
+  {
+   "member": "noodds_nosn_logit_0",
+   "kind": "anc",
+   "base": 0.5923962252381453,
+   "cand": 0.5939250489297634,
+   "delta": 0.0015288236916180297,
+   "lo": -0.001055410541526823,
+   "hi": 0.004356211403412362
+  },
+  {
+   "member": "ensemble",
+   "kind": "cal",
+   "base": 0.6328308689973178,
+   "cand": 0.6341481722677786,
+   "delta": 0.0013173032704607696,
+   "lo": -0.003948731407823788,
+   "hi": 0.006653236737749476
+  },
+  {
+   "member": "ensemble",
+   "kind": "anc",
+   "base": 0.592160556842222,
+   "cand": 0.5936855576202905,
+   "delta": 0.0015250007780685656,
+   "lo": -0.0007256331360684824,
+   "hi": 0.003635772353957393
+  }
+ ],
+ "columns": [
+  "diff_pro2_am_n",
+  "diff_pro2_am_wpct",
+  "diff_pro2_rating",
+  "red_pro2_rating",
+  "blue_pro2_rating",
+  "diff_pro2_rd",
+  "red_pro2_rd",
+  "blue_pro2_rd",
+  "diff_pro2_opp_mean",
+  "diff_pro2_best_win",
+  "diff_pro2_worst_loss",
+  "diff_pro2_qwins",
+  "diff_pro2_promo_mean",
+  "diff_pro2_top_tier",
+  "diff_pro2_dwcs_win",
+  "diff_pro2_tuf",
+  "diff_pro2_streak",
+  "diff_pro2_days_since_loss",
+  "diff_pro2_years_pro",
+  "diff_pro2_active2y",
+  "diff_pro2_finish_rate"
+ ],
+ "dropped": []
+}

@@ -3591,10 +3591,12 @@ def generate_predictions():
 
 def _store_predictions(fight_ids, probs, shap_values_arr, features, X,
                        va_low=None, va_high=None, model_probs=None) -> None:
-    """Replace ufc_fight_predictions / ufc_fight_shap_values with a fresh run."""
+    """Replace ufc_fight_predictions / ufc_fight_shap_values with a fresh run, keeping the
+    served pre-fight rows of fights that have started (see prediction_freeze)."""
     from sqlalchemy import inspect as _inspect
     from app.database import engine
     from app.models.ufc import UFCFightPrediction, UFCFightShapValue
+    from app.services.ufc.prediction_freeze import clear_unfrozen, frozen_fight_ids
 
     # model_prob arrives with the ensemble. The prediction job can run before the API
     # has applied the startup migration that adds the column, so only write it once
@@ -3605,14 +3607,17 @@ def _store_predictions(fight_ids, probs, shap_values_arr, features, X,
 
     db = SessionLocal()
     try:
+        frozen = frozen_fight_ids(db, UFCFightPrediction)
         for Model in [UFCFightShapValue, UFCFightPrediction]:
-            db.query(Model).delete(synchronize_session=False)
+            clear_unfrozen(db, Model, frozen)
             db.commit()
-            log.info(f"  Cleared {Model.__tablename__}")
+            log.info(f"  Cleared {Model.__tablename__} (kept {len(frozen)} started fights' served rows)")
 
         count = 0
         shap_count = 0
         for i, (fight_id, prob) in enumerate(zip(fight_ids, probs)):
+            if int(fight_id) in frozen:
+                continue
             pred = UFCFightPrediction(
                 fight_id=int(fight_id),
                 predicted_winner="red" if prob >= 0.5 else "blue",

@@ -1,0 +1,25 @@
+{
+ "label": "cap_logit02: members ['noodds:catboost:0', 'noodds_noraw:catboost:0', 'noodds:hgb:0', 'noodds_nosn:logit@0.2:0']",
+ "n_eval": 2533,
+ "n_priced": 2085,
+ "rows": [
+  {
+   "member": "ensemble",
+   "kind": "cal",
+   "base": 0.6308838992996583,
+   "cand": 0.6315414294573337,
+   "delta": 0.0006575301576754558,
+   "lo": -0.0002580316792116335,
+   "hi": 0.0016078792918681763
+  },
+  {
+   "member": "ensemble",
+   "kind": "anc",
+   "base": 0.5922473228668937,
+   "cand": 0.5925228981776504,
+   "delta": 0.0002755753107566328,
+   "lo": -0.00011660578217480649,
+   "hi": 0.0007018025685458408
+  }
+ ]
+}

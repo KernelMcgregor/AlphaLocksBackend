@@ -14,8 +14,8 @@ from datetime import date, datetime, timedelta, timezone
 
 from app.models.ufc import UFCPredictionMarket
 from app.services.ufc.prediction_markets.common import (
-    NoSuchCard, align_fight_anchor, days_to_fight, fetch_json, last_history_ts, match_fight, open_session,
-    record_history, upsert_market, upsert_quote,
+    BOUT_LEAD, NoSuchCard, days_to_fight, fetch_json, last_history_ts, match_fight, open_session,
+    parse_ts, realign_cards, record_history, upsert_market, upsert_quote,
 )
 
 log = logging.getLogger("prediction_markets.kalshi")
@@ -146,29 +146,27 @@ def _event_date(markets: list[dict]) -> date | None:
     return None
 
 
-#: Subtracted from a settled market's `close_time` to estimate when its bout began. Kalshi closes
-#: a UFC market minutes after the result, so close_time is bout *end*; 30 minutes clears a
-#: full three-round fight plus walkouts and the settlement delay. Erring early is deliberate --
-#: a closing line taken slightly too soon is merely a little stale, while one taken slightly too
-#: late is the market reading the result off the screen.
-_BOUT_LEAD = timedelta(minutes=30)
+def closed_at(market: dict) -> datetime | None:
+    """When the market really closed -- the bout's end -- or None while it is still open.
+
+    Only a closed market's `close_time` is an observation. On an open market it is a scheduled
+    placeholder, and so is `occurrence_datetime`: a per-bout *slot* that can sit hours after the
+    bout (an early prelim on 19 Sep 2026 had 03:00 UTC and closed on its result at 22:00).
+    """
+    if market.get("status") in ("finalized", "settled", "closed"):
+        return parse_ts(market.get("close_time"))
+    return None
 
 
 def bout_reference(market: dict) -> datetime | date | None:
-    """When this specific bout started, as well as Kalshi will say.
+    """Provisional anchor for a curve point at write time.
 
-    `occurrence_datetime` is the *event's* time and is identical across every bout on the card, so
-    it cannot be used to place a prelim -- see `days_to_fight`. A settled market's `close_time`
-    is per-bout and is the only bout-specific timestamp Kalshi publishes.
+    Only provisional: `realign_cards` rewrites every point against the card-aware cutoff at the
+    end of each run. Deliberately ignores `occurrence_datetime` (see `closed_at`) -- with nothing
+    observed, the caller falls back to the event date, which is early rather than late.
     """
-    close = market.get("close_time")
-    status = market.get("status")
-    if close and status in ("finalized", "settled", "closed"):
-        return datetime.fromisoformat(close.replace("Z", "+00:00")) - _BOUT_LEAD
-    occ = market.get("occurrence_datetime")
-    if occ:
-        return datetime.fromisoformat(occ.replace("Z", "+00:00"))
-    return None
+    close = closed_at(market)
+    return close - BOUT_LEAD if close else None
 
 
 def _is_historical(market: dict, cutoff: datetime | None) -> bool:
@@ -186,7 +184,7 @@ def _is_historical(market: dict, cutoff: datetime | None) -> bool:
 
 
 def _ingest_event(db, event: dict, cutoff: datetime | None, *, fine_grained: bool = False,
-                  dry_run: bool = False) -> str:
+                  dry_run: bool = False, touched: set | None = None) -> str:
     """Ingest one fight. Returns a status string for the run summary."""
     event_ticker = event["event_ticker"]
     markets = fetch_markets(event_ticker)
@@ -234,6 +232,7 @@ def _ingest_event(db, event: dict, cutoff: datetime | None, *, fine_grained: boo
             fight_id=fight.id,
             status=status,
             resolved_outcome=_RESULT_TO_OUTCOME.get(result),
+            venue_closed_at=closed_at(market),
         )
 
         upsert_quote(
@@ -247,13 +246,9 @@ def _ingest_event(db, event: dict, cutoff: datetime | None, *, fine_grained: boo
 
         _pull_curve(db, row, market, fight_date, historical=historical, fine_grained=fine_grained)
 
-
-    # Put both venues on one time reference. Kalshi anchors on a bout-specific close_time
-    # and Polymarket on midnight of the event date, which for UFC 331 differ by 31 hours —
-    # so without this, `days_to_fight` means something different depending on who wrote the
-    # row, and any CLV or line-movement query silently mixes the two. No-op once aligned.
-    align_fight_anchor(db, fight.id)
     db.commit()
+    if touched is not None:
+        touched.add(fight.id)
     return "ok"
 
 
@@ -333,10 +328,12 @@ def _run(events: list[dict], *, fine_grained: bool, dry_run: bool, label: str) -
     db = open_session()
     cutoff = _cutoff()
     stats: dict[str, int] = {}
+    touched: set[int] = set()
     try:
         for i, event in enumerate(events, 1):
             try:
-                status = _ingest_event(db, event, cutoff, fine_grained=fine_grained, dry_run=dry_run)
+                status = _ingest_event(db, event, cutoff, fine_grained=fine_grained, dry_run=dry_run,
+                                       touched=touched)
             except Exception as e:
                 db.rollback()
                 log.warning(f"  {event.get('event_ticker')} failed: {e.__class__.__name__}: {e}")
@@ -344,23 +341,36 @@ def _run(events: list[dict], *, fine_grained: bool, dry_run: bool, label: str) -
             stats[status] = stats.get(status, 0) + 1
             if i % 50 == 0:
                 log.info(f"  [{label}] {i}/{len(events)} events — {stats}")
+        # Once per run, not per fight: a bout's cutoff depends on its neighbours on the card.
+        realigned = realign_cards(db, touched)
+        db.commit()
     finally:
         db.close()
-    log.info(f"Kalshi {label} done: {stats}")
+    log.info(f"Kalshi {label} done: {stats} ({realigned} curve points realigned)")
     return stats
 
 
+#: How far back the live run re-reads markets that have closed. They have to be read once more
+#: after the result: that is the only time the real close (the bout's end) and the settled status
+#: are visible. Without it a card's markets stay "open" forever, still quoting the post-result
+#: price, and no bout on the card ever gets a cutoff better than the fallback.
+RECENT_CLOSED_DAYS = 4
+
+
 def run_kalshi_live() -> dict:
-    """Refresh open markets: discover new fights, update quotes, extend curves.
+    """Refresh open markets plus those that closed in the last few days.
 
     `status=open` is what keeps this affordable on a two-hourly schedule -- 18 events rather than
-    the 689 in the series. Settled fights have nothing left to learn: their curve is complete and
-    their quote is fixed, so re-walking them each pass would cost ~35 minutes to rewrite data that
-    cannot change. Backfilling them is the separate `--backfill` path.
+    the 689 in the series. Older settled fights have nothing left to learn; backfilling them is
+    the separate `--backfill` path.
     """
-    events = [e for e in list_fight_events(status="open")
-              if not e.get("event_ticker", "").startswith("_")]
-    log.info(f"Kalshi live: {len(events)} open events")
+    since = date.today() - timedelta(days=RECENT_CLOSED_DAYS)
+    events = list_fight_events(status="open") + [
+        e for status in ("closed", "settled") for e in list_fight_events(status=status)
+        if _ticker_date(e.get("event_ticker", "")) >= since
+    ]
+    events = [e for e in events if not e.get("event_ticker", "").startswith("_")]
+    log.info(f"Kalshi live: {len(events)} open or recently closed events")
     return _run(events, fine_grained=True, dry_run=False, label="live")
 
 
@@ -383,26 +393,19 @@ def _ticker_date(ticker: str) -> date:
         return date.min
 
 
-def recompute_days_to_fight() -> dict:
-    """Rewrite `days_to_fight` on stored Kalshi curve points against each bout's own start time.
+def backfill_closed_at() -> dict:
+    """One-off repair: record the real close on every stored Kalshi market, then realign.
 
-    Needed as a one-off repair, and useful whenever a bout's timing is corrected upstream. The
-    normal history write is ON CONFLICT DO NOTHING -- that is what makes re-requesting a window
-    free -- so a re-run of the backfill will never revise a column on rows that already exist.
-
-    Only the reference changes; prices are untouched.
+    Markets ingested before `venue_closed_at` existed have no close recorded, and the history
+    writer is ON CONFLICT DO NOTHING, so no re-run of the backfill would revise their curves.
     """
-    from sqlalchemy import func, literal, update
-
-    from app.models.ufc import UFCPredictionMarketHistory as History
-
     db = open_session()
-    stats = {"markets": 0, "updated": 0, "skipped": 0}
+    stats = {"events": 0, "closed": 0, "realigned": 0}
     try:
         rows = (
             db.query(UFCPredictionMarket)
-            .filter(UFCPredictionMarket.platform == "kalshi")
-            .order_by(UFCPredictionMarket.external_event_id)
+            .filter(UFCPredictionMarket.platform == "kalshi",
+                    UFCPredictionMarket.fight_id.isnot(None))
             .all()
         )
         by_event: dict[str, list] = {}
@@ -413,30 +416,26 @@ def recompute_days_to_fight() -> dict:
             live = {m["ticker"]: m for m in fetch_markets(event_ticker)}
             if not live:
                 live = {m["ticker"]: m for m in fetch_markets(event_ticker, historical=True)}
-
+            stats["events"] += 1
             for row in markets:
                 market = live.get(row.external_market_id)
-                ref = bout_reference(market) if market else None
-                if ref is None:
-                    stats["skipped"] += 1
+                close = closed_at(market) if market else None
+                if close is None:
                     continue
-                stats["markets"] += 1
-                # One statement per market, not per point. The arithmetic is pushed into SQL
-                # because a market can carry thousands of candles and issuing an UPDATE per row
-                # over a hosted database turns a two-minute repair into an hours-long one.
-                ref_naive = ref.replace(tzinfo=None) if isinstance(ref, datetime) else ref
-                result = db.execute(
-                    update(History)
-                    .where(History.market_id == row.id)
-                    .values(days_to_fight=(
-                        func.extract("epoch", literal(ref_naive) - History.captured_at) / 86400.0
-                    ))
-                )
-                stats["updated"] += result.rowcount or 0
-            db.commit()
+                row.venue_closed_at = close
+                if market.get("status") in ("finalized", "settled"):
+                    row.status = "settled"
+                    outcome = _RESULT_TO_OUTCOME.get((market.get("result") or "").lower())
+                    if outcome is not None:
+                        row.resolved_outcome = outcome
+                stats["closed"] += 1
             if i % 50 == 0:
-                log.info(f"  recompute {i}/{len(by_event)} events — {stats}")
+                db.commit()
+                log.info(f"  closed_at {i}/{len(by_event)} events — {stats}")
+        db.commit()
+        stats["realigned"] = realign_cards(db, {r.fight_id for r in rows})
+        db.commit()
     finally:
         db.close()
-    log.info(f"Recompute done: {stats}")
+    log.info(f"Kalshi close backfill done: {stats}")
     return stats

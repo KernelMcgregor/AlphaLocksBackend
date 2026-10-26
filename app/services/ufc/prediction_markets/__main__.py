@@ -4,12 +4,13 @@
     python -m app.services.ufc.prediction_markets --backfill --dry-run
     python -m app.services.ufc.prediction_markets --backfill --venue kalshi --since 2025-05-01
     python -m app.services.ufc.prediction_markets --backfill --curves moneyline
+    python -m app.services.ufc.prediction_markets --repair
 """
 
 import argparse
 import logging
 
-from app.services.ufc.prediction_markets import run_backfill, run_live
+from app.services.ufc.prediction_markets import run_backfill, run_live, run_repair
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -22,6 +23,8 @@ def main() -> None:
                      help="Refresh open markets: quotes + curve extension. Idempotent.")
     mode.add_argument("--backfill", action="store_true",
                      help="Walk all events including settled, building history from venue candles.")
+    mode.add_argument("--repair", action="store_true",
+                     help="Record venue close/card-start times on stored markets and realign curves.")
     p.add_argument("--since", help="Only events on/after this date (YYYY-MM-DD)")
     p.add_argument("--curves", choices=["moneyline", "all"], default="all",
                    help="Which Polymarket markets to pull price curves for. Kalshi is moneyline-only.")
@@ -29,6 +32,9 @@ def main() -> None:
                    help="Match fights and report, write nothing. Use this first.")
     args = p.parse_args()
 
+    if args.repair:
+        print(run_repair())
+        return
     if args.live:
         stats = run_live(venue=args.venue, curves=args.curves)
     else:

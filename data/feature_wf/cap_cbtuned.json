@@ -1,0 +1,25 @@
+{
+ "label": "cap_cbtuned: members ['noodds:catboost_tuned:0', 'noodds_noraw:catboost_tuned:0', 'noodds:hgb:0', 'noodds_nosn:logit:0']",
+ "n_eval": 2533,
+ "n_priced": 2085,
+ "rows": [
+  {
+   "member": "ensemble",
+   "kind": "cal",
+   "base": 0.6308838992996583,
+   "cand": 0.631937478775833,
+   "delta": 0.001053579476174673,
+   "lo": -0.0009212471397116887,
+   "hi": 0.0030916010858357025
+  },
+  {
+   "member": "ensemble",
+   "kind": "anc",
+   "base": 0.5922473228668937,
+   "cand": 0.5930127094987829,
+   "delta": 0.000765386631889244,
+   "lo": -0.0002932530465276422,
+   "hi": 0.0018643673365752863
+  }
+ ]
+}
