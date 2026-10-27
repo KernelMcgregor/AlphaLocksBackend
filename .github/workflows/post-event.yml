@@ -190,6 +190,20 @@ jobs:
         if: steps.check.outputs.event_happened == 'true'
         run: python -m scripts.build_grade_table
 
+      # Every backtested bet, per fight, for the Past Model Results page
+      # (app/services/ufc/model_results.py). Fights past the walk-forward OOF files come from
+      # forward_predictions.csv (append-only: live frozen pre-fight predictions, or a model
+      # trained before the card) priced off the line watcher's snapshots.
+      - name: Record out-of-sample predictions for finished fights
+        if: steps.check.outputs.event_happened == 'true'
+        continue-on-error: true   # never blocks the grade-table commit below
+        run: python -m app.services.ufc.forward_predictions --append
+
+      - name: Rebuild backtest ledger
+        if: steps.check.outputs.event_happened == 'true'
+        continue-on-error: true   # never blocks the grade-table commit below
+        run: python -m scripts.build_backtest_ledger
+
       - name: Commit grade table
         if: steps.check.outputs.event_happened == 'true'
         shell: bash
@@ -197,7 +211,7 @@ jobs:
           set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add models/ufc/grade_table.json
+          git add models/ufc/grade_table.json models/ufc/backtest_ledger.csv.gz models/ufc/forward_predictions.csv
           if git diff --cached --quiet; then echo "Grade table unchanged."; exit 0; fi
           git commit -m "Rebuild pick grade table ($(date -u +%Y-%m-%d))"
           for attempt in 1 2 3; do

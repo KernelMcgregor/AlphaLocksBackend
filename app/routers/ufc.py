@@ -1125,6 +1125,70 @@ def get_event_method_predictions(event_id: int, db: Session = Depends(get_db)):
     }
 
 
+# --- Past model results (walk-forward backtest ledger) ---
+
+RESULTS_TTL = 10 * 60  # the ledger only changes when the post-event job commits a new one
+
+
+def _results_filters(start: str | None, end: str | None, basis: str, price: str, min_ev: float,
+                     markets: str | None, props_at_open: bool, top_only: bool):
+    from app.services.ufc.model_results import GROUP_ORDER, Filters
+    if basis not in ("open", "close") or price not in ("typical", "best"):
+        raise HTTPException(status_code=400, detail="basis must be open|close, price typical|best")
+    groups = [g for g in (markets.split(",") if markets else GROUP_ORDER) if g in GROUP_ORDER]
+    return Filters(start=start, end=end, basis=basis, price=price, min_ev=max(0.0, min_ev),
+                   groups=groups, props_at_open=props_at_open, top_only=top_only)
+
+
+def _ledger_or_503():
+    """The ledger frame; it is re-read when the file changes, so id(df) in a cache key
+    retires every cached answer built from the previous ledger."""
+    from app.services.ufc.model_results import load_ledger
+    df = load_ledger()
+    if df is None:
+        raise HTTPException(status_code=503, detail="backtest ledger not built")
+    return df
+
+
+@router.get("/model/results/events")
+def get_model_results_events(start: str | None = None, end: str | None = None, basis: str = "close",
+                             price: str = "typical", min_ev: float = 0.0, markets: str | None = None,
+                             props_at_open: bool = True, top_only: bool = False):
+    """Profit of every backtested pick per event over a date range (Past Model Results page).
+    See app/services/ufc/model_results.py."""
+    from app.services.ufc.model_results import events_summary
+    f = _results_filters(start, end, basis, price, min_ev, markets, props_at_open, top_only)
+    df = _ledger_or_503()
+    return response_cache.cached(f"results-events:{id(df)}:{f.key()}", lambda: events_summary(df, f), RESULTS_TTL)
+
+
+@router.get("/model/results/events/{event_id}")
+def get_model_results_event(event_id: str, basis: str = "close", price: str = "typical", min_ev: float = 0.0,
+                            markets: str | None = None, props_at_open: bool = True, top_only: bool = False):
+    """Every market on every fight of one past event: the model's number, the price, the bet
+    (if any) and its profit."""
+    from app.services.ufc.model_results import event_detail
+    f = _results_filters(None, None, basis, price, min_ev, markets, props_at_open, top_only)
+    df = _ledger_or_503()
+    out = response_cache.cached(f"results-event:{id(df)}:{event_id}:{f.key()}", lambda: event_detail(df, event_id, f),
+                                RESULTS_TTL)
+    if out is None:
+        raise HTTPException(status_code=404, detail="event not in the backtest")
+    return out
+
+
+@router.get("/model/results/splits")
+def get_model_results_splits(start: str | None = None, end: str | None = None, basis: str = "close",
+                             price: str = "typical", min_ev: float = 0.0, markets: str | None = None,
+                             props_at_open: bool = True, top_only: bool = False):
+    """Backtest ROI by edge band, market, price, card section, division, year...; calibration
+    and Brier vs the market; closing line value of opening moneyline bets."""
+    from app.services.ufc.model_results import splits
+    f = _results_filters(start, end, basis, price, min_ev, markets, props_at_open, top_only)
+    df = _ledger_or_503()
+    return response_cache.cached(f"results-splits:{id(df)}:{f.key()}", lambda: splits(df, f), RESULTS_TTL)
+
+
 @router.get("/method/metrics")
 def get_method_model_metrics(db: Session = Depends(get_db)):
     """Get method prediction model performance metrics."""
