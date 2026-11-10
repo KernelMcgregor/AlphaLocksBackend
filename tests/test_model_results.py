@@ -136,3 +136,24 @@ def test_source_split_and_event_flags(ledger):
     assert keys == ["Walk-forward backtest", "Live: served before the fight"]
     ev = {e["event_id"]: e for e in M.events_summary(df, M.Filters())["events"]}
     assert ev["2"]["sources"] == ["live"] and ev["2"]["watch_prices"] and not ev["1"]["watch_prices"]
+
+
+def test_pick_rule_one_side_per_market(ledger):
+    f = M.Filters(basis="close", rule="pick")
+    b = M.bets_of(M.priced(ledger, f), f)
+    inst = b["market"].map(M.market_instance)
+    assert not b.assign(i=inst).duplicated(["fight_id", "i"]).any()
+    # f1's moneyline: both sides p=0.5 -> one of them, even though ml_blue is -EV and unbet
+    assert (inst[b["fight_id"] == "f1"] == "ml").sum() == 1
+    # f2's six-way: one cell, not the two +EV ones
+    assert len(b[b["fight_id"] == "f2"]) == 1
+    assert M.market_instance("ou_1.5_over") == "ou_1.5" and M.market_instance("sr_2_no") == "sr_2"
+    assert M.market_instance("itd_red_yes") == "itd_red" and M.market_instance("blue_dec") == "six"
+
+
+def test_three_way_method_labels():
+    assert L.group_of("method3_ko") == "method3"
+    assert M.family_label("method3_sub") == "Submission (either fighter)"
+    assert M.market_name("method_ko", "A", "B") == "Method (either fighter)"
+    assert M.side_label("method_ko", "A", "B") == "Either by KO/TKO"
+    assert M.market_instance("method_sub") == "method3"

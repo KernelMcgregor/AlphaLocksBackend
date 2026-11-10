@@ -10,6 +10,10 @@ and the book's LATEST price, which for a finished event is its closing line. Cov
 Markets kept (keys use BFO's fighter order a/b; ``to_corners`` maps them to red/blue):
   wm_{a|b}_{ko|sub|dec}   "<fighter> wins by TKO/KO | submission | decision"  (6-way)
   dec_yes / dec_no        "Fight goes to decision" / "Fight doesn't go to decision"
+  m3_ko / m3_sub          "Either fighter wins by TKO/KO | submission": with "Fight goes to
+                          decision" the 3-way method market (books post only these Yes sides;
+                          KO + Sub + Decision partition every decided outcome, so the three are
+                          de-vigged together). Listed by BFO from mid-2021.
   ou_{1.5|2.5|...}_{over|under}   total rounds
   sr_{N}_{yes|no}         "Fight starts round N" (lasts past the end of round N-1)
   er_{N}_{yes|no}         "Fight ends in round N"
@@ -69,6 +73,10 @@ def _label_key(label: str, fighter: int | None) -> str | None:
         return f"itd_{'ab'[fighter - 1]}_no"
     if label.startswith("Not ") and label.endswith(" by decision") and fighter in (1, 2):
         return f"wm_{'ab'[fighter - 1]}_dec_no"
+    if label == "Either fighter wins by TKO/KO":
+        return "m3_ko"
+    if label == "Either fighter wins by submission":
+        return "m3_sub"
     if label == "Fight goes to decision":
         return "dec_yes"
     if label == "Fight doesn't go to decision":
@@ -174,6 +182,11 @@ def consensus(rows: list[dict], book_names: dict[int, str] | None = None) -> dic
                 line = k[3:-5]
                 res.update({f"{kk}_nv": v for kk, v in
                             _devig_group(med, [f"ou_{line}_over", f"ou_{line}_under"]).items()})
+        # 3-way method: KO (either) + Sub (either) + goes to decision, de-vigged together
+        m3 = ["m3_ko", "m3_sub", "dec_yes"]
+        if all(k in med for k in m3):
+            res.update({f"{k}_3w": v for k, v in _devig_group(med, m3).items()})
+            res["overround_3w"] = sum(med[k] for k in m3)
         # "Ends in round N": books price only the Yes side, but rounds 1..K plus "goes to
         # decision" partition every outcome, so de-vig them together (er_N_part).
         rounds = sorted(int(k[3]) for k in med if k.startswith("er_") and k.endswith("_yes"))
@@ -214,6 +227,11 @@ def corner_markets(c: dict, swapped: bool) -> dict[str, dict]:
         if yes is not None:
             put(f"itd_{corner[side]}_yes", yes, f"itd_{side}_yes")
             put(f"itd_{corner[side]}_no", 1 - yes, f"itd_{side}_no")
+    # 3-way method (either fighter): method_ko / method_sub / method_dec. method_dec is the same
+    # "goes to decision" price as dec_yes, with its probability from the 3-way group.
+    put("method_ko", c.get("m3_ko_3w"), "m3_ko", c.get("overround_3w"))
+    put("method_sub", c.get("m3_sub_3w"), "m3_sub", c.get("overround_3w"))
+    put("method_dec", c.get("dec_yes_3w"), "dec_yes", c.get("overround_3w"))
     put("dec_yes", c.get("dec_yes_nv"), "dec_yes")
     put("dec_no", c.get("dec_no_nv"), "dec_no")
     for k, v in c.items():
@@ -266,10 +284,13 @@ def parse_cache(cache_dir: Path = DEFAULT_CACHE_DIR) -> dict[int, dict]:
     return cons
 
 
-def backfill_closes(odds_csv: Path = Path("data/bfo/odds.csv"), replace: bool = False) -> int:
+def backfill_closes(odds_csv: Path = Path("data/bfo/odds.csv"), replace: bool = False,
+                    only_markets: set[str] | None = None) -> int:
     """Load closing props (de-vigged prob + best/median price and book) from the cached event
     pages into ufc_prop_odds_history (source 'bfo_close', captured_at = event date).
-    Fights that already have bfo_close rows are skipped unless replace=True."""
+    Fights that already have bfo_close rows are skipped unless replace=True.
+    only_markets: add just these markets, to every fight that lacks them (existing rows are
+    never touched): how a newly parsed market is backfilled."""
     import pandas as pd
     import datetime as _dt
 
@@ -288,14 +309,21 @@ def backfill_closes(odds_csv: Path = Path("data/bfo/odds.csv"), replace: bool = 
             db.commit()
         have = {f for (f,) in db.query(UFCPropOddsHistory.fight_id)
                 .filter(UFCPropOddsHistory.source == "bfo_close").distinct()}
+        have_mk = set()
+        if only_markets:
+            have_mk = set(db.query(UFCPropOddsHistory.fight_id, UFCPropOddsHistory.market)
+                          .filter(UFCPropOddsHistory.source == "bfo_close",
+                                  UFCPropOddsHistory.market.in_(list(only_markets))))
         rows = []
         for mu, fid, swapped in zip(links["bfo_matchup_id"], links["db_fight_id"], links["db_swapped"]):
             fid = int(str(fid).split(".")[0])
             c = cons.get(int(mu))
-            if not c or fid in have or dates.get(fid) is None:
+            if not c or dates.get(fid) is None or (fid in have and not only_markets):
                 continue
             ts = _dt.datetime.combine(dates[fid], _dt.time())
             for market, q in corner_markets(c, str(swapped) == "True").items():
+                if only_markets and (market not in only_markets or (fid, market) in have_mk):
+                    continue
                 rows.append(UFCPropOddsHistory(
                     fight_id=fid, market=market, prob=round(float(q["prob"]), 4),
                     n_books=c["n_books"], source="bfo_close", captured_at=ts,
@@ -324,13 +352,17 @@ def main() -> None:
                     help="also backfill the closes into ufc_prop_odds_history")
     ap.add_argument("--replace", action="store_true",
                     help="with --load-db: replace existing bfo_close rows (e.g. to add prices)")
+    ap.add_argument("--only-markets", default=None,
+                    help="with --load-db: comma list of markets to add where missing, e.g. "
+                         "method_ko,method_sub,method_dec (existing rows untouched)")
     a = ap.parse_args()
     df = build()
     df.to_csv(a.out, index=False)
     print(f"{len(df)} fights with prop closes -> {a.out}")
     print(df.notna().mean().round(2).to_string())
     if a.load_db:
-        print(f"{backfill_closes(replace=a.replace)} rows loaded into ufc_prop_odds_history")
+        only = set(a.only_markets.split(",")) if a.only_markets else None
+        print(f"{backfill_closes(replace=a.replace, only_markets=only)} rows loaded into ufc_prop_odds_history")
 
 
 if __name__ == "__main__":

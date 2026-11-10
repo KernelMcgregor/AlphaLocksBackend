@@ -23,11 +23,11 @@ import pandas as pd
 from app.services.ufc.backtest_ledger import LEDGER_PATH
 from app.services.ufc.grading import SMALL_SAMPLE_N
 
-GROUP_ORDER = ["winner", "method", "distance", "itd", "rounds"]
+GROUP_ORDER = ["winner", "method", "distance", "itd", "rounds", "method3"]
 GROUP_LABELS = {"winner": "Moneyline", "method": "Method", "distance": "Goes the distance",
-                "itd": "Inside the distance", "rounds": "Rounds"}
-EV_BANDS = [0.0, 0.03, 0.05, 0.08, 0.12, 0.20, math.inf]
-DISAGREE_BANDS = [0.0, 0.03, 0.06, 0.10, math.inf]   # |model-only p - market q|
+                "itd": "Inside the distance", "rounds": "Rounds", "method3": "Method (either fighter)"}
+EV_BANDS = [-math.inf, 0.0, 0.03, 0.05, 0.08, 0.12, 0.20, math.inf]   # < 0 only under the pick rule
+DISAGREE_BANDS = [0.0, 0.03, 0.06, 0.10, math.inf]   # |model p - market q|
 PRICE_BANDS = [(1.0, 1.5, "-200 or shorter"), (1.5, 2.0, "-199 to -101"), (2.0, 3.0, "+100 to +199"),
                (3.0, 5.0, "+200 to +399"), (5.0, math.inf, "+400 or longer")]
 N_BOOT = 1000
@@ -88,10 +88,13 @@ class Filters:
     groups: list[str] = field(default_factory=lambda: list(GROUP_ORDER))
     props_at_open: bool = True        # basis 'open': include close-only prop bets
     top_only: bool = False            # one bet per fight and market (the grade table's rule)
+    #: 'ev'   = every side with EV >= min_ev at the typical price (the default)
+    #: 'pick' = the model's pick: in every market, the side it thinks most likely, at any price
+    rule: str = "ev"
 
     def key(self) -> str:
         return (f"{self.start}:{self.end}:{self.basis}:{self.price}:{self.min_ev:.4f}:"
-                f"{','.join(sorted(self.groups))}:{int(self.props_at_open)}:{int(self.top_only)}")
+                f"{','.join(sorted(self.groups))}:{int(self.props_at_open)}:{int(self.top_only)}:{self.rule}")
 
 
 def priced(df: pd.DataFrame, f: Filters) -> pd.DataFrame:
@@ -113,7 +116,32 @@ def priced(df: pd.DataFrame, f: Filters) -> pd.DataFrame:
     return out
 
 
+def market_instance(market: str) -> str:
+    """The market a side belongs to on its fight: 'ml', 'six' (winner x method), 'dec',
+    'itd_red', 'ou_1.5', 'sr_2', ... -- the sides of one instance are mutually exclusive."""
+    p = market.split("_")
+    if p[0] == "ml":
+        return "ml"
+    if p[0] in ("red", "blue"):
+        return "six"
+    if p[0] == "method":
+        return "method3"
+    if p[0] in ("itd", "ou"):
+        return f"{p[0]}_{p[1]}"
+    if p[0] == "sr":
+        return f"sr_{p[1]}"
+    return p[0]
+
+
 def bets_of(rows: pd.DataFrame, f: Filters) -> pd.DataFrame:
+    if f.rule == "pick":
+        # one bet per fight and market: the side with the highest model probability (the
+        # published one the page shows), whatever its price or edge
+        if rows.empty:
+            return rows
+        inst = rows["market"].map(market_instance)
+        idx = rows.assign(_inst=inst).groupby(["fight_id", "basis", "_inst"])["p"].idxmax()
+        return rows.loc[idx.dropna().astype(rows.index.dtype)]
     b = rows[rows["bet"] & (rows["ev"] >= f.min_ev)]
     return b[b["is_top"]] if f.top_only else b
 
@@ -156,6 +184,8 @@ def family_label(fam: str) -> str:
     if p[0] == "sixway":
         how = {"ko": "KO/TKO", "sub": "submission", "dec": "decision"}[p[1]]
         return f"{'Favourite' if p[2] == 'fav' else 'Underdog'} by {how}"
+    if p[0] == "method3":
+        return {"ko": "KO/TKO (either fighter)", "sub": "Submission (either fighter)"}.get(p[1], fam)
     if p[0] == "decision":
         return "Goes to decision" if p[1] == "yes" else "Doesn't go to decision"
     if p[0] == "itd":
@@ -170,6 +200,8 @@ def family_label(fam: str) -> str:
 def market_name(market: str, red: str, blue: str) -> str:
     if market.startswith("ml_"):
         return "Moneyline"
+    if market.startswith("method_"):
+        return "Method (either fighter)"
     if market.split("_")[0] in ("red", "blue"):
         return "Method of victory"
     if market.startswith("dec_"):
@@ -190,6 +222,10 @@ def side_label(market: str, red: str, blue: str) -> str:
         return who(parts[1])
     if parts[0] in ("red", "blue"):
         return f"{who(parts[0])} by " + {"ko": "KO/TKO", "sub": "submission", "dec": "decision"}[parts[1]]
+    if market == "method_ko":
+        return "Either by KO/TKO"
+    if market == "method_sub":
+        return "Either by submission"
     if market == "dec_yes":
         return "Goes to decision"
     if market == "dec_no":
@@ -263,7 +299,7 @@ def event_detail(df: pd.DataFrame, event_id: str, f: Filters) -> dict | None:
             mk = markets.setdefault(name, {"market": name, "group": r["group"], "sides": []})
             mk["sides"].append({
                 "label": side_label(r["market"], red, blue), "market_key": r["market"], "family": r["family"],
-                "price": american(r["dec"]), "p": _f(r["p"]), "p_model": _f(r["p_raw"]), "q": _f(r["q"]),
+                "price": american(r["dec"]), "p": _f(r["p"]), "q": _f(r["q"]),
                 "ev": _f(r["ev"]), "bet": idx in bet_idx, "won": bool(r["won"]),
                 "profit": _f(r["profit"]) if idx in bet_idx else None, "close_only": bool(r["close_only"]),
                 "clv": _f(r.get("clv")) if r["group"] == "winner" else None})
@@ -290,6 +326,8 @@ def _band(x: pd.Series, edges: list[float], fmt) -> pd.Series:
 
 
 def _pct(lo, hi):
+    if lo == -math.inf:
+        return "Negative"
     return f"{lo:.0%}+" if hi == math.inf else f"{lo:.0%}–{hi:.0%}"
 
 
@@ -308,7 +346,7 @@ def split_columns(b: pd.DataFrame) -> dict[str, pd.Series]:
         "market": b["group"].map(GROUP_LABELS),
         "family": b["family"].map(family_label),
         "price": price,
-        "disagreement": _band((b["p_raw"] - b["q"]).abs().fillna(-1), [-1.0] + DISAGREE_BANDS, _pts),
+        "disagreement": _band((b["p"] - b["q"]).abs().fillna(-1), [-1.0] + DISAGREE_BANDS, _pts),
         "section": b["section"],
         "division": b["division"],
         "gender": b["gender"],
@@ -359,15 +397,14 @@ def splits(df: pd.DataFrame, f: Filters) -> dict:
 
 def calibration(rows: pd.DataFrame, bins: int = 10) -> list[dict]:
     """Predicted probability vs how often it happened, over every priced side in scope
-    (bets or not): the model alone (before any market blend), the served probability (the
-    blend the bets use) and the de-vigged market."""
+    (bets or not): the model's published probability and the de-vigged market's."""
     r = rows[rows["q"].notna()]
     out = []
     edges = np.linspace(0, 1, bins + 1)
     for lo, hi in zip(edges[:-1], edges[1:]):
         last = hi >= 1
         row = {"lo": round(lo, 2), "hi": round(hi, 2)}
-        for name, col in (("model", "p_raw"), ("served", "p"), ("market", "q")):
+        for name, col in (("model", "p"), ("market", "q")):
             m = r[(r[col] >= lo) & ((r[col] <= hi) if last else (r[col] < hi))]
             row[name] = {"n": len(m), "pred": _f(m[col].mean()), "actual": _f(m["won"].mean())}
         out.append(row)
@@ -375,9 +412,9 @@ def calibration(rows: pd.DataFrame, bins: int = 10) -> list[dict]:
 
 
 def accuracy(rows: pd.DataFrame) -> list[dict]:
-    """Brier score of the model alone, the served blend and the de-vigged market, per market
-    group, on the same priced sides (lower is better; negative diff = the served probability
-    was more accurate than the market)."""
+    """Brier score of the model's published probability and the de-vigged market's, per
+    market group, on the same priced sides (lower is better; negative diff = the model was
+    more accurate)."""
     out = []
     r = rows[rows["q"].notna()]
     for g in GROUP_ORDER:
@@ -385,9 +422,8 @@ def accuracy(rows: pd.DataFrame) -> list[dict]:
         if not len(x):
             continue
         y = x["won"].astype(float)
-        br = float(((x["p_raw"] - y) ** 2).mean())
         bm, bq = float(((x["p"] - y) ** 2).mean()), float(((x["q"] - y) ** 2).mean())
-        out.append({"group": g, "label": GROUP_LABELS[g], "n": len(x), "brier_model_only": _f(br),
+        out.append({"group": g, "label": GROUP_LABELS[g], "n": len(x),
                     "brier_model": _f(bm), "brier_market": _f(bq), "diff": _f(bm - bq)})
     return out
 

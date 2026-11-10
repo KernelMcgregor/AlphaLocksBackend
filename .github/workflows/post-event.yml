@@ -256,6 +256,30 @@ jobs:
       - name: Sync judges' scorecards (UFCStats totals + mmadecisions rounds)
         run: python -m app.services.ufc.mmad_scraper --sync --days 30 --max-requests 150 --no-cache
 
+  # Deserve-to-win meter (scripts/deserve_to_win.py): scores fights that have round stats
+  # but no meter yet with the saved scorer (models/ufc/deserve_to_win/scorer.pkl) -- seconds,
+  # and a no-op when nothing is new. Daily, so a missed night catches up the next morning.
+  # After scorecards: a decision whose judges' cards have just arrived is re-scored for its
+  # actual-panel meter.
+  deserve-to-win:
+    runs-on: ubuntu-latest
+    needs: [check-and-update, scorecards]
+    if: always() && (github.event_name == 'workflow_dispatch' || github.event.schedule == '0 6 * * *')
+    continue-on-error: true
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Score fights missing a deserve-to-win meter
+        run: python -m scripts.deserve_to_win --score-new
+
   # Also refresh odds twice a week regardless of events
   refresh-odds:
     runs-on: ubuntu-latest

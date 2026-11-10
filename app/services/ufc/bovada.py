@@ -49,6 +49,13 @@ def canonical_key(market: str, selection: str, line: float | None, side: str | N
             if re.search(pat, sel):
                 return f"{side}_{method}"
         return None
+    if m == "how will fight end" and not side:
+        # the 3-way method market, either fighter (bfo_props: method_ko / method_sub / method_dec)
+        for pat, key in ((r"\b(?:ko|tko)\b", "method_ko"), (r"\bsubmission\b", "method_sub"),
+                         (r"\b(?:decision|points)\b", "method_dec")):
+            if re.search(pat, sel):
+                return key
+        return None
     if m == "will the fight go the distance":
         return {"yes": "dec_yes", "no": "dec_no"}.get(sel)
     if m in ("total rounds over/under", "main total rounds over/under") and line is not None and sel in ("over", "under"):

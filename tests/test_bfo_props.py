@@ -32,3 +32,19 @@ def test_more_markets_devig_to_corners():
     assert out["more_td_blue"]["prob"] == pytest.approx(cons["mtd_a_nv"])
     assert out["more_td_red"]["prob"] == pytest.approx(cons["mtd_b_nv"])
     assert out["more_td_blue"]["best_american"] == 110
+
+
+def test_three_way_method_group():
+    """Either-fighter KO / Sub + goes to decision: de-vigged as one 3-way group."""
+    from app.services.ufc import bfo_props as BP
+    assert BP._label_key("Either fighter wins by TKO/KO", None) == "m3_ko"
+    assert BP._label_key("Either fighter wins by submission", None) == "m3_sub"
+    rows = [{"matchup": 1, "book": b, "key": k, "american": a}
+            for b in (1, 2) for k, a in (("m3_ko", 150), ("m3_sub", 400), ("dec_yes", -110), ("dec_no", -110))]
+    c = BP.consensus(rows)[1]
+    assert abs(c["m3_ko_3w"] + c["m3_sub_3w"] + c["dec_yes_3w"] - 1) < 1e-9
+    assert c["overround_3w"] > 1
+    m = BP.corner_markets(c, swapped=False)
+    assert {"method_ko", "method_sub", "method_dec", "dec_yes"} <= set(m)
+    assert m["method_dec"]["best_american"] == m["dec_yes"]["best_american"] == -110
+    assert m["method_ko"]["prob"] > m["method_sub"]["prob"]

@@ -532,7 +532,7 @@ def _build_rows(db: Session, rows, pre: dict | None = None) -> dict:
         def add(family, market_key, label, sides, q_of, captured):
             """sides: [{side, label, p, best, med, book}]; q_of(side) -> market no-vig prob.
             Props: p becomes the model blended with the market (grading.blend_prob), the
-            probability the grade table was built on; the raw model is kept as p_model_raw.
+            probability the grade table was built on (the only one the API sends).
             The moneyline's p is already the ensemble's market stack."""
             for sd in sides:
                 sd["p_raw"] = sd.get("p")
@@ -561,8 +561,8 @@ def _build_rows(db: Session, rows, pre: dict | None = None) -> dict:
             markets.append({
                 "family": fam, "market_key": market_key, "label": label,
                 "pick": pick["side"] if pick else None, "pick_label": pick["label"] if pick else None,
-                "p_model": ref.get("p"), "p_model_raw": ref.get("p_raw"), "q_market": q,
-                "prob_basis": "model + market" if market_key != "moneyline" else "model (market-stacked)",
+                # only the published probability goes out: the site never describes how it is built
+                "p_model": ref.get("p"), "q_market": q,
                 "best_american": ref.get("best"), "best_book": ref.get("book"),
                 "median_american": ref.get("med"),
                 # every venue's price for this side: each sportsbook on the moneyline; for props

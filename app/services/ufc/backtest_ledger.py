@@ -36,8 +36,8 @@ LEDGER_PATH = ROOT / "models" / "ufc" / "backtest_ledger.csv.gz"
 CELLS = ("red_ko", "red_sub", "red_dec", "blue_ko", "blue_sub", "blue_dec")
 EXCHANGES = ("polymarket", "kalshi", "consensus", "mean")
 #: Market group of each family prefix (the page's market filter).
-GROUPS = {"winner": "winner", "sixway": "method", "decision": "distance", "itd": "itd",
-          "ou": "rounds", "starts": "rounds"}
+GROUPS = {"winner": "winner", "sixway": "method", "method3": "method3", "decision": "distance",
+          "itd": "itd", "ou": "rounds", "starts": "rounds"}
 
 
 def group_of(family: str) -> str:
@@ -324,6 +324,17 @@ def prop_bets(res: pd.DataFrame, px: pd.DataFrame, wpred: pd.DataFrame, mpred: p
                       "won_dec_yes": (d["cls"] == "dec").to_numpy(), "won_dec_no": (d["cls"] != "dec").to_numpy()})
     out.append(bets(x, [("dec_yes", "dec_yes"), ("dec_no", "dec_no")],
                     lambda s: "decision_yes" if s == "dec_yes" else "decision_no", blend=True, keep_all=keep_all))
+    # 3-way method, either fighter: KO/TKO and submission legs (BFO "Either fighter wins by ...";
+    # bfo_props.method_ko / method_sub, de-vigged with "goes to decision"). The decision leg is
+    # the same bet as decision_yes, so it is not repeated here.
+    if "q_method_ko" in d:
+        x = pd.DataFrame({"fight_id": fid, "p_ko": six[:, 0] + six[:, 3], "p_sub": six[:, 1] + six[:, 4],
+                          "best_ko": d.get("best_method_ko"), "best_sub": d.get("best_method_sub"),
+                          "med_ko": d.get("med_method_ko"), "med_sub": d.get("med_method_sub"),
+                          "q_ko": d.get("q_method_ko"), "q_sub": d.get("q_method_sub"),
+                          "won_ko": (d["cls"] == "ko").to_numpy(), "won_sub": (d["cls"] == "sub").to_numpy()})
+        out.append(bets(x, [("ko", "method_ko"), ("sub", "method_sub")],
+                        lambda s: f"method3_{s}", blend=True, keep_all=keep_all))
     # inside the distance, per fighter
     for corner, cols in (("red", [0, 1]), ("blue", [3, 4])):
         itd = six[:, cols].sum(axis=1)

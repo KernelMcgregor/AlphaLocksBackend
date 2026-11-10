@@ -19,12 +19,23 @@ Steps
 Uses the database in app.config settings (alocks-backend/.env = production).
 
     PYTHONPATH=. venv/bin/python -m scripts.deserve_to_win --validate --write
+
+A full run (--write or --save) also saves everything it fitted -- the B bootstrap round
+models, the judge correlation, the form spread, the 10-8 fallback and the judge effects -- to
+models/ufc/deserve_to_win/scorer.pkl. After each card post-event.yml runs
+
+    python -m scripts.deserve_to_win --score-new
+
+which loads that file and scores only fights with round stats but no score yet (seconds, and
+older fights' numbers never move). Refit with a full run when the model should learn from
+newer judges' cards.
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
 import json
+import pickle
 import time
 from pathlib import Path
 
@@ -45,6 +56,7 @@ from scripts.round_effects import JUDGE_AXES, RAW, rich_features
 MODEL_VERSION = "v1"
 ERA = dt.date(2017, 1, 1)
 OUT = Path("data/mmad")
+SCORER_PATH = Path(__file__).resolve().parents[1] / "models" / "ufc" / "deserve_to_win" / "scorer.pkl"
 
 
 def log(msg: str) -> None:
@@ -171,8 +183,9 @@ class TenEightModel:
 
 
 def fit_bootstrap(train: pd.DataFrame, Xtr, era_tr, Xall, era_all, all_fights, B, seed=0):
-    """B bootstrap fits by fight. Returns P(red) and 10-8 arrays (B, n_all) and an
-    out-of-bag mask (B, n_all): True where the row's fight was not in that fit."""
+    """B bootstrap fits by fight. Returns P(red) and 10-8 arrays (B, n_all), an out-of-bag
+    mask (B, n_all): True where the row's fight was not in that fit, and the fitted
+    (winner model, 10-8 model) pairs, which score_new reuses."""
     rng = np.random.default_rng(seed)
     fights = train.fight_id.unique()
     rows_by_fight = train.groupby("fight_id").indices
@@ -182,6 +195,7 @@ def fit_bootstrap(train: pd.DataFrame, Xtr, era_tr, Xall, era_all, all_fights, B
     P = np.empty((B, len(Xall)))
     Q_red, Q_blue = np.empty_like(P), np.empty_like(P)
     oob = np.empty_like(P, dtype=bool)
+    models = []
     for b in range(B):
         t0 = time.time()
         pick = rng.choice(fights, size=len(fights), replace=True)
@@ -192,8 +206,9 @@ def fit_bootstrap(train: pd.DataFrame, Xtr, era_tr, Xall, era_all, all_fights, B
         Q_red[b] = t8.predict(Xall, era_all)
         Q_blue[b] = t8.predict(-Xall, era_all)
         oob[b] = ~np.isin(all_fights, pick)
+        models.append((m, t8))
         log(f"  fit {b + 1}/{B}  ({time.time() - t0:.0f}s)")
-    return P, Q_red, Q_blue, oob
+    return P, Q_red, Q_blue, oob, models
 
 
 def mean_oob(A, oob):
@@ -289,9 +304,16 @@ def main(argv=None) -> int:
     ap.add_argument("--n", type=int, default=10_000, help="simulations per fight")
     ap.add_argument("--validate", action="store_true")
     ap.add_argument("--write", action="store_true", help="write ufc_deserve_to_win")
+    ap.add_argument("--save", action="store_true",
+                    help="fit and save the scorer (models/ufc/deserve_to_win/scorer.pkl) without writing")
+    ap.add_argument("--score-new", action="store_true",
+                    help="with the saved scorer, score only fights that have round stats but no score")
+    ap.add_argument("--dry-run", action="store_true", help="with --score-new: print, don't write")
     args = ap.parse_args(argv)
 
     from app.database import engine as eng
+    if args.score_new:
+        return score_new(eng, args.n, dry_run=args.dry_run)
     t0 = time.time()
     rounds = load_rounds(eng)
     cards = load_cards(eng)
@@ -308,7 +330,7 @@ def main(argv=None) -> int:
     axes_sd = rich_features(tr)[JUDGE_AXES].to_numpy(float).std(0) + 1e-9
     log(f"training judge-rounds: {len(tr):,}  10-8 rate {tr.y8.mean():.3%}  B={args.b}")
 
-    P, Qr, Qb, oob = fit_bootstrap(tr, Xtr, era_tr, Xall, era_all,
+    P, Qr, Qb, oob, models = fit_bootstrap(tr, Xtr, era_tr, Xall, era_all,
                                    rounds.fight_id.to_numpy(), args.b)
     trained = rounds.fight_id.isin(tr.fight_id).to_numpy()
     p_hat = np.where(trained, mean_oob(P, oob), P.mean(0))
@@ -369,33 +391,57 @@ def main(argv=None) -> int:
     _, sigma_v, sigma_u = best
     log(f"fight latent: sigma_v = {sigma_v:.2f}, round latent sigma_u = {sigma_u:.2f}")
 
-    def form_for(fi, meta):
-        z = np.atleast_2d(fi.round_logits).mean(0)
-        # A partial finishing round is weighted by the share of it fought.
-        if meta["partial_s"] is not None:
-            w = np.ones(len(z))
-            w[-1] = fi.partial_weight
-            prec = 1 / tau ** 2 + w.sum() / sigma ** 2
-            mean = (w * z).sum() / sigma ** 2 / prec
-            return Form(float(mean), float(np.sqrt(1 / prec)), sigma)
-        return form_posterior(z, 0.0, tau, sigma)
+    if args.write or args.save:
+        save_scorer(models, axes_sd, judge_fx, sigma_u=sigma_u, sigma_v=sigma_v, tau=tau,
+                    sigma=sigma, t8=t8, last_fight=str(max(tr["date"])))   # last judged fight trained on
+    if args.save and not (args.write or args.validate):
+        log(f"\ndone in {time.time() - t0:.0f}s")
+        return 0
 
-    # --- simulate everything
+    res = simulate_all(inputs, args.n, sigma_u, sigma_v, tau, sigma, t8)
+
+    OUT.mkdir(parents=True, exist_ok=True)
+    res.drop(columns=["round_p_red", "top_cards"]).to_csv(OUT / "dtw_results.csv", index=False)
+    if args.validate:
+        validate(trp, agg, sigma_u, sigma_v, res, inputs, tau, sigma, t8, eng)
+
+    if args.write:
+        write(eng, res, args.n)
+    log(f"\ndone in {time.time() - t0:.0f}s")
+    return 0
+
+
+def form_for(fi, meta, tau, sigma):
+    z = np.atleast_2d(fi.round_logits).mean(0)
+    # A partial finishing round is weighted by the share of it fought.
+    if meta["partial_s"] is not None:
+        w = np.ones(len(z))
+        w[-1] = fi.partial_weight
+        prec = 1 / tau ** 2 + w.sum() / sigma ** 2
+        mean = (w * z).sum() / sigma ** 2 / prec
+        return Form(float(mean), float(np.sqrt(1 / prec)), sigma)
+    return form_posterior(z, 0.0, tau, sigma)
+
+
+def simulate_all(inputs, n, sigma_u, sigma_v, tau, sigma, t8, seed=42) -> pd.DataFrame:
+    """Replay every fight n times (and again with its actual panel's leans when known)."""
     rows = []
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(seed)
     t1 = time.time()
     for i, (fid, meta, fi, shift) in enumerate(inputs):
         if fi.partial_weight is not None or meta["n_obs"] < meta["R"]:
-            fi.form = form_for(fi, meta)
-        r = simulate_fight(fi, n=args.n, sigma_u=sigma_u, sigma_v=sigma_v, ten8_fallback=t8, rng=rng)
+            fi.form = form_for(fi, meta, tau, sigma)
+        r = simulate_fight(fi, n=n, sigma_u=sigma_u, sigma_v=sigma_v, ten8_fallback=t8, rng=rng)
         rp = None
         if shift is not None:
             fi.judge_shift = shift
-            rp = simulate_fight(fi, n=args.n, sigma_u=sigma_u, sigma_v=sigma_v, ten8_fallback=t8, rng=rng)
+            rp = simulate_fight(fi, n=n, sigma_u=sigma_u, sigma_v=sigma_v, ten8_fallback=t8, rng=rng)
             fi.judge_shift = None
         rows.append(dict(fight_id=int(fid), meta=meta, r=r, panel=rp))
         if (i + 1) % 2000 == 0:
             log(f"  simulated {i + 1:,}/{len(inputs):,} ({time.time() - t1:.0f}s)")
+    if not rows:
+        return pd.DataFrame()
     res = pd.DataFrame([dict(
         fight_id=x["fight_id"], date=x["meta"]["date"], R=x["meta"]["R"],
         n_obs=x["meta"]["n_obs"], is_dec=x["meta"]["is_dec"],
@@ -412,15 +458,89 @@ def main(argv=None) -> int:
     res["robbery_score"] = np.where(
         res.is_dec & (res.side == "red"), res.p_blue,
         np.where(res.is_dec & (res.side == "blue"), res.p_red, np.nan))
+    return res
 
-    OUT.mkdir(parents=True, exist_ok=True)
-    res.drop(columns=["round_p_red", "top_cards"]).to_csv(OUT / "dtw_results.csv", index=False)
-    if args.validate:
-        validate(trp, agg, sigma_u, sigma_v, res, inputs, tau, sigma, t8, eng)
 
-    if args.write:
-        write(eng, res, args.n)
-    log(f"\ndone in {time.time() - t0:.0f}s")
+# ------------------------------------------------------------- saved scorer
+
+
+def save_scorer(models, axes_sd, judge_fx, **params) -> None:
+    SCORER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(SCORER_PATH, "wb") as f:
+        pickle.dump({"model_version": MODEL_VERSION, "models": models, "axes_sd": axes_sd,
+                     "judge_fx": judge_fx, "trained_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                     **params}, f, protocol=pickle.HIGHEST_PROTOCOL)
+    log(f"saved scorer ({len(models)} fits) to {SCORER_PATH} "
+        f"({SCORER_PATH.stat().st_size / 1e6:.1f} MB)")
+
+
+class _ScorerUnpickler(pickle.Unpickler):
+    """A full run is launched as `python -m scripts.deserve_to_win`, so the 10-8 models it
+    saves are pickled as __main__.TenEightModel; resolve those against this module."""
+
+    def find_class(self, module, name):
+        if module == "__main__":
+            return globals()[name]
+        return super().find_class(module, name)
+
+
+def unscored_fight_ids(eng) -> set[int]:
+    """Finished fights with round stats and no score for this model version, plus scored
+    fights whose verified judges' cards arrived after scoring (their actual-panel meter,
+    panel_p_*, needs the cards; mmadecisions often posts them days after the card)."""
+    with eng.connect() as c:
+        return {r[0] for r in c.execute(text("""
+            SELECT f.id FROM ufc.ufc_fights f
+            WHERE f.method IS NOT NULL AND f.method <> ''
+              AND EXISTS (SELECT 1 FROM ufc.ufc_fight_stats s WHERE s.fight_id = f.id AND s.round_number >= 1)
+              AND NOT EXISTS (SELECT 1 FROM ufc.ufc_deserve_to_win d
+                              WHERE d.fight_id = f.id AND d.model_version = :v)
+            UNION
+            SELECT d.fight_id FROM ufc.ufc_deserve_to_win d
+            JOIN ufc.ufc_fights f ON f.id = d.fight_id JOIN ufc.ufc_events e ON e.id = f.event_id
+            WHERE d.model_version = :v AND d.panel_p_red IS NULL
+              AND split_part(d.official_outcome, ':', 2) IN ('ud', 'sd', 'md')
+              AND EXISTS (SELECT 1 FROM ufc.mmad_decisions m
+                          WHERE m.fight_id = d.fight_id AND m.match_status = 'verified')
+              -- by fight date, not created_at: a full run rewrites every row. Older
+              -- decisions without a panel meter have judges it can't place; leave them.
+              AND e.date >= CURRENT_DATE - 30"""), {"v": MODEL_VERSION})}
+
+
+def score_new(eng, n_sims: int, dry_run: bool = False) -> int:
+    """Score fights with no meter yet using the saved scorer. Every fit is out-of-sample for
+    them (the scorer was fitted before their judges' cards existed), so all B fits are used."""
+    if not SCORER_PATH.exists():
+        log(f"no saved scorer at {SCORER_PATH}; run a full fit with --save or --write first")
+        return 1
+    with open(SCORER_PATH, "rb") as f:
+        sc = _ScorerUnpickler(f).load()
+    if sc["model_version"] != MODEL_VERSION:
+        log(f"saved scorer is {sc['model_version']}, this script is {MODEL_VERSION}; refit first")
+        return 1
+    todo = unscored_fight_ids(eng)
+    if not todo:
+        log("every fight with round stats has a score; nothing to do")
+        return 0
+    rounds = load_rounds(eng)
+    rounds = rounds[rounds.fight_id.isin(todo)].reset_index(drop=True)
+    cards = load_cards(eng)
+    cards = cards[cards.fight_id.isin(todo)]
+    X, era = design(rounds)
+    P = np.stack([predict_winner(m, X, era) for m, _ in sc["models"]])
+    Qr = np.stack([t8m.predict(X, era) for _, t8m in sc["models"]])
+    Qb = np.stack([t8m.predict(-X, era) for _, t8m in sc["models"]])
+    oob = np.ones_like(P, dtype=bool)
+    inputs = list(fight_inputs(rounds, P, Qr, Qb, oob, cards, sc["judge_fx"], sc["axes_sd"]))
+    log(f"{len(todo):,} fights without a score; {len(inputs):,} scoreable "
+        f"(scorer trained {sc['trained_at'][:10]} through {sc['last_fight']})")
+    if not inputs:
+        return 0
+    res = simulate_all(inputs, n_sims, sc["sigma_u"], sc["sigma_v"], sc["tau"], sc["sigma"], sc["t8"])
+    if dry_run:
+        log(res[["fight_id", "date", "outcome", "side", "p_red", "p_blue", "robbery_score"]].to_string())
+        return 0
+    write(eng, res, n_sims, replace_all=False)
     return 0
 
 
@@ -573,7 +693,9 @@ def validate(trp, agg, sigma_u, sigma_v, res, inputs, tau, sigma, t8, eng):
 # -------------------------------------------------------------------- write
 
 
-def write(eng, res: pd.DataFrame, n_sims: int) -> None:
+def write(eng, res: pd.DataFrame, n_sims: int, replace_all: bool = True) -> None:
+    """replace_all: delete this model version's rows first (a full run); else replace only
+    the rows of the fights in `res` (score_new)."""
     from app.models.ufc import UFCDeserveToWin
     UFCDeserveToWin.__table__.create(bind=eng, checkfirst=True)
     now = dt.datetime.now(dt.timezone.utc)
@@ -593,14 +715,17 @@ def write(eng, res: pd.DataFrame, n_sims: int) -> None:
     })
     out = out.astype(object).where(out.notna(), None)
     with eng.begin() as c:
-        c.execute(text("DELETE FROM ufc.ufc_deserve_to_win WHERE model_version = :v"),
-                  {"v": MODEL_VERSION})
+        if replace_all:
+            c.execute(text("DELETE FROM ufc.ufc_deserve_to_win WHERE model_version = :v"),
+                      {"v": MODEL_VERSION})
+        else:
+            c.execute(text("DELETE FROM ufc.ufc_deserve_to_win WHERE model_version = :v "
+                           "AND fight_id = ANY(:ids)"), {"v": MODEL_VERSION, "ids": [int(x) for x in res.fight_id]})
+        # a Core insert() lets SQLAlchemy batch rows into multi-VALUES statements; a text()
+        # executemany sent one round trip per row (10k rows took ~15 minutes to Railway)
         recs = out.to_dict("records")
-        cols = list(out.columns)
-        sql = text(f"INSERT INTO ufc.ufc_deserve_to_win ({', '.join(cols)}) "
-                   f"VALUES ({', '.join(':' + k for k in cols)})")
         for i in range(0, len(recs), 1000):
-            c.execute(sql, recs[i:i + 1000])
+            c.execute(UFCDeserveToWin.__table__.insert(), recs[i:i + 1000])
     log(f"\nwrote {len(out):,} rows to ufc.ufc_deserve_to_win (model_version={MODEL_VERSION})")
 
 

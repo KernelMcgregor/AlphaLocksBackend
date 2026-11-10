@@ -1131,13 +1131,13 @@ RESULTS_TTL = 10 * 60  # the ledger only changes when the post-event job commits
 
 
 def _results_filters(start: str | None, end: str | None, basis: str, price: str, min_ev: float,
-                     markets: str | None, props_at_open: bool, top_only: bool):
+                     markets: str | None, props_at_open: bool, top_only: bool, rule: str = "ev"):
     from app.services.ufc.model_results import GROUP_ORDER, Filters
-    if basis not in ("open", "close") or price not in ("typical", "best"):
-        raise HTTPException(status_code=400, detail="basis must be open|close, price typical|best")
+    if basis not in ("open", "close") or price not in ("typical", "best") or rule not in ("ev", "pick"):
+        raise HTTPException(status_code=400, detail="basis must be open|close, price typical|best, rule ev|pick")
     groups = [g for g in (markets.split(",") if markets else GROUP_ORDER) if g in GROUP_ORDER]
     return Filters(start=start, end=end, basis=basis, price=price, min_ev=max(0.0, min_ev),
-                   groups=groups, props_at_open=props_at_open, top_only=top_only)
+                   groups=groups, props_at_open=props_at_open, top_only=top_only, rule=rule)
 
 
 def _ledger_or_503():
@@ -1153,22 +1153,22 @@ def _ledger_or_503():
 @router.get("/model/results/events")
 def get_model_results_events(start: str | None = None, end: str | None = None, basis: str = "close",
                              price: str = "typical", min_ev: float = 0.0, markets: str | None = None,
-                             props_at_open: bool = True, top_only: bool = False):
+                             props_at_open: bool = True, top_only: bool = False, rule: str = "ev"):
     """Profit of every backtested pick per event over a date range (Past Model Results page).
     See app/services/ufc/model_results.py."""
     from app.services.ufc.model_results import events_summary
-    f = _results_filters(start, end, basis, price, min_ev, markets, props_at_open, top_only)
+    f = _results_filters(start, end, basis, price, min_ev, markets, props_at_open, top_only, rule)
     df = _ledger_or_503()
     return response_cache.cached(f"results-events:{id(df)}:{f.key()}", lambda: events_summary(df, f), RESULTS_TTL)
 
 
 @router.get("/model/results/events/{event_id}")
 def get_model_results_event(event_id: str, basis: str = "close", price: str = "typical", min_ev: float = 0.0,
-                            markets: str | None = None, props_at_open: bool = True, top_only: bool = False):
+                            markets: str | None = None, props_at_open: bool = True, top_only: bool = False, rule: str = "ev"):
     """Every market on every fight of one past event: the model's number, the price, the bet
     (if any) and its profit."""
     from app.services.ufc.model_results import event_detail
-    f = _results_filters(None, None, basis, price, min_ev, markets, props_at_open, top_only)
+    f = _results_filters(None, None, basis, price, min_ev, markets, props_at_open, top_only, rule)
     df = _ledger_or_503()
     out = response_cache.cached(f"results-event:{id(df)}:{event_id}:{f.key()}", lambda: event_detail(df, event_id, f),
                                 RESULTS_TTL)
@@ -1180,11 +1180,11 @@ def get_model_results_event(event_id: str, basis: str = "close", price: str = "t
 @router.get("/model/results/splits")
 def get_model_results_splits(start: str | None = None, end: str | None = None, basis: str = "close",
                              price: str = "typical", min_ev: float = 0.0, markets: str | None = None,
-                             props_at_open: bool = True, top_only: bool = False):
+                             props_at_open: bool = True, top_only: bool = False, rule: str = "ev"):
     """Backtest ROI by edge band, market, price, card section, division, year...; calibration
     and Brier vs the market; closing line value of opening moneyline bets."""
     from app.services.ufc.model_results import splits
-    f = _results_filters(start, end, basis, price, min_ev, markets, props_at_open, top_only)
+    f = _results_filters(start, end, basis, price, min_ev, markets, props_at_open, top_only, rule)
     df = _ledger_or_503()
     return response_cache.cached(f"results-splits:{id(df)}:{f.key()}", lambda: splits(df, f), RESULTS_TTL)
 

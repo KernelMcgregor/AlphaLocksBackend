@@ -176,6 +176,15 @@ def run_migrations():
                     with engine.begin() as conn:
                         conn.execute(text(f"ALTER TABLE ufc.ufc_prop_odds_history ADD COLUMN {col} {ddl}"))
 
+        # 017: a book's max stake on ufc_book_market_history. The model gained the column but no
+        # migration did, so every book_markets run failed on its first query (2026-10, until
+        # this). Nullable, no default -> metadata-only.
+        if insp.has_table("ufc_book_market_history", schema="ufc"):
+            bm_existing = {c["name"] for c in insp.get_columns("ufc_book_market_history", schema="ufc")}
+            if "max_stake" not in bm_existing:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE ufc.ufc_book_market_history ADD COLUMN max_stake FLOAT"))
+
         # Add derived columns to ufc_fight_stats
         stats_existing = {c["name"] for c in insp.get_columns("ufc_fight_stats", schema="ufc")}
         derived_cols = [

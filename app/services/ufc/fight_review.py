@@ -99,10 +99,8 @@ def grade_payload(fight: UFCFight, pred, method_pred, line: UFCFightOpenClose | 
         "picked_side": pred.predicted_winner,
         "correct": pred.predicted_winner == ("red" if red_won else "blue"),
         "red_prob": pred.red_prob,
-        "model_prob": pred.model_prob,
         "market_red_prob": market,
         "log_loss": _log_loss(pred.red_prob, red_won),
-        "model_log_loss": _log_loss(pred.model_prob, red_won),
         "market_log_loss": _log_loss(market, red_won),
         "method": None,
     }

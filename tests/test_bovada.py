@@ -47,3 +47,12 @@ def test_canonical_key_round_completion_is_next_round_start():
 def test_method_ignores_ko_inside_a_fighter_name():
     assert canonical_key("Method of Victory", "Roman Kopylov Wins by Decision or Technical Decision", None, "red") == "red_dec"
     assert canonical_key("Method of Victory", "Roman Kopylov Wins by KO, TKO or DQ", None, "red") == "red_ko"
+
+
+def test_three_way_method_keys():
+    from app.services.ufc.bovada import canonical_key
+    assert canonical_key("How Will Fight End", "Fight Ends by KO/TKO/DQ", None, None) == "method_ko"
+    assert canonical_key("How Will Fight End", "Fight Ends by Submission", None, None) == "method_sub"
+    assert canonical_key("How Will Fight End", "Fight Goes to Decision", None, None) == "method_dec"
+    # a fighter-specific method stays six-way
+    assert canonical_key("Method of Victory", "Jon Jones by KO/TKO", None, "red") == "red_ko"
