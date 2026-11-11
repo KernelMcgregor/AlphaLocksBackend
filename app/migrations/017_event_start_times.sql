@@ -1,0 +1,12 @@
+-- Segment start times on ufc_events: early_prelims_at, prelims_at, main_card_at (naive UTC)
+-- and start_times_fetched_at.
+--
+-- WHY
+-- ---
+-- ufcstats publishes an event's date and city only, so the Upcoming page could count down
+-- in days and nothing finer. ufc.com's events listing carries each segment's start as a
+-- Unix timestamp; app/services/ufc/event_times.py copies them here weekly.
+--
+-- All nullable with no default -> metadata-only in Postgres, no rewrite of ufc_events.
+-- Added by run_migrations() in main.py (SQLite has no ADD COLUMN IF NOT EXISTS); this
+-- file is documentation.

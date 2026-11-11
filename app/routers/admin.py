@@ -161,10 +161,14 @@ _JOB_INFO = {
                    "Scrapes results for any card newer than the last one with results, then (only if a "
                    "card landed) rebuilds derived stats, career stats, rankings, rank history and "
                    "similarity. Always regenerates winner predictions (four-model ensemble blended "
-                   "with the market), method predictions and fight previews."),
+                   "with the market), method predictions and fight previews, then picks artwork for "
+                   "new articles (Google Images via SerpAPI)."),
     "bovada_scrape": ("Bovada Odds", "Bovada method odds", "Method-of-victory odds for upcoming fights."),
     "prediction_markets": ("Prediction Markets", "Prediction markets",
                            "Kalshi and Polymarket quotes and price history for open fights."),
+    "event_start_times": ("Event Start Times", "Event start times",
+                          "Copies upcoming cards' early prelims, prelims and main card start times "
+                          "from ufc.com (weekly, Monday). Drives the Upcoming page countdown."),
     "reconcile_fights": ("Reconcile Fights", "Reconcile fights",
                          "Records bouts that have been pulled from their card (ufc_cancelled_bouts), "
                          "then removes them and what depended on them."),
@@ -403,6 +407,163 @@ def trigger_bovada_scrape(background_tasks: BackgroundTasks):
     from app.services.ufc.bovada_scraper import scrape_bovada_method_odds
 
     return _start_task(background_tasks, "Bovada Odds", scrape_bovada_method_odds)
+
+
+@router.post("/scrape-event-times", dependencies=[Depends(require_admin_key)])
+def trigger_event_times(background_tasks: BackgroundTasks):
+    from app.services.ufc.event_times import update_event_start_times
+
+    return _start_task(background_tasks, "Event Start Times", update_event_start_times)
+
+
+# ---------------------------------------------------------------------------
+# Article editor (services/ufc/article_admin.py)
+# ---------------------------------------------------------------------------
+from pydantic import BaseModel as _BaseModel  # noqa: E402
+
+
+class _ImageIn(_BaseModel):
+    data: str                      # base64, or a data: URL
+    label: str | None = None
+
+
+class _FocalIn(_BaseModel):
+    focal_x: float
+    focal_y: float
+
+
+class _CandidateIn(_BaseModel):
+    url: str
+
+
+class _ArticleIn(_BaseModel):
+    content: str
+    editor_notes: str | None = None
+
+
+class _RewriteIn(_BaseModel):
+    notes: str
+    current: str | None = None
+
+
+def _article_call(fn, *args):
+    """Run an article_admin call on its own session, mapping its errors to HTTP."""
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        return fn(db, *args)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        db.close()
+
+
+def _published(result=None):
+    """A change readers see: drop the cached pages so it shows on the next load."""
+    from app.services import response_cache
+    response_cache.invalidate()
+    return result if result is not None else {"ok": True}
+
+
+@router.get("/articles", dependencies=[Depends(require_admin_key)])
+def admin_list_articles():
+    from app.services.ufc import article_admin
+    return _article_call(article_admin.list_articles)
+
+
+@router.get("/articles/{fight_id}", dependencies=[Depends(require_admin_key)])
+def admin_get_article(fight_id: int):
+    from app.services.ufc import article_admin
+    return _article_call(article_admin.get_article, fight_id)
+
+
+@router.put("/articles/{fight_id}", dependencies=[Depends(require_admin_key)])
+def admin_save_article(fight_id: int, body: _ArticleIn):
+    from app.services.ufc import article_admin
+    from app.services import audit
+    actor = (_request_ctx.get() or {}).get("actor")
+    with audit.track(f"Edit Article ({fight_id})", source="dashboard", actor=actor, target=str(fight_id)):
+        _article_call(article_admin.save_article, fight_id, body.content, body.editor_notes)
+    return _published()
+
+
+@router.post("/articles/{fight_id}/rewrite", dependencies=[Depends(require_admin_key)])
+def admin_rewrite_article(fight_id: int, body: _RewriteIn):
+    """A draft with the editor's context folded in. Not saved: the editor reviews it."""
+    from app.services.ufc import article_admin
+    if not body.notes.strip():
+        raise HTTPException(400, "Add some context to rewrite with")
+    try:
+        return {"draft": _article_call(article_admin.rewrite_draft, fight_id, body.notes, body.current)}
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+
+
+@router.post("/articles/{fight_id}/cover", dependencies=[Depends(require_admin_key)])
+def admin_upload_cover(fight_id: int, body: _ImageIn):
+    from app.services.ufc import article_admin
+    _article_call(article_admin.upload_cover, fight_id, body.data)
+    return _published()
+
+
+@router.post("/articles/{fight_id}/cover/candidate", dependencies=[Depends(require_admin_key)])
+def admin_use_candidate(fight_id: int, body: _CandidateIn):
+    from app.services.ufc import article_admin
+    try:
+        _article_call(article_admin.use_candidate, fight_id, body.url)
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
+        raise HTTPException(502, f"Could not fetch that image: {e}")
+    return _published()
+
+
+@router.put("/articles/{fight_id}/cover/focal", dependencies=[Depends(require_admin_key)])
+def admin_frame_cover(fight_id: int, body: _FocalIn):
+    from app.services.ufc import article_admin
+    _article_call(article_admin.frame_cover, fight_id, body.focal_x, body.focal_y)
+    return _published()
+
+
+@router.delete("/articles/{fight_id}/cover", dependencies=[Depends(require_admin_key)])
+def admin_remove_cover(fight_id: int):
+    from app.services.ufc import article_admin
+    _article_call(article_admin.remove_cover, fight_id)
+    return _published()
+
+
+@router.post("/articles/{fight_id}/media", dependencies=[Depends(require_admin_key)])
+def admin_add_media(fight_id: int, body: _ImageIn):
+    from app.services.ufc import article_admin
+    return {"id": _article_call(article_admin.add_media, fight_id, body.data, body.label)}
+
+
+@router.put("/media/{media_id}/focal", dependencies=[Depends(require_admin_key)])
+def admin_frame_media(media_id: int, body: _FocalIn):
+    from app.services.ufc import article_admin
+    _article_call(article_admin.frame_media, media_id, body.focal_x, body.focal_y)
+    return _published()
+
+
+@router.delete("/media/{media_id}", dependencies=[Depends(require_admin_key)])
+def admin_delete_media(media_id: int):
+    from app.services.ufc import article_admin
+    _article_call(article_admin.delete_media, media_id)
+    return _published()
+
+
+@router.post("/article-images", dependencies=[Depends(require_admin_key)])
+def trigger_article_images(background_tasks: BackgroundTasks, fight_id: int | None = None):
+    """Pick article artwork now: every article missing one, or re-pick a single fight."""
+    from app.services.ufc.article_images import update_article_images
+
+    if fight_id is not None:
+        return _start_task(background_tasks, f"Article Image ({fight_id})", update_article_images,
+                           fight_ids=[fight_id], refresh=True)
+    return _start_task(background_tasks, "Article Images", update_article_images)
 
 
 @router.post("/scrape-prediction-markets", dependencies=[Depends(require_admin_key)])

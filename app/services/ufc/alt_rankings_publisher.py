@@ -140,10 +140,34 @@ def _print_preview(results: dict, ctx: dict, n: int = 25) -> None:
 # Read side
 # ---------------------------------------------------------------------------
 
+#: Alt-ranking ranks going into the last event, by baseline date:
+#: {date: {(kind, pool, fighter_id): rank}}. The published table is replaced on every
+#: publish and keeps no history, so the prior board is recomputed as of the division
+#: history's previous snapshot (~4s). Keyed by date, it is computed once per event, not
+#: once per cache refresh.
+_PRIOR_RANKS: dict[date, dict[tuple[str, str, int], int]] = {}
+
+
+def _prior_ranks(db, since: date) -> dict[tuple[str, str, int], int]:
+    if since not in _PRIOR_RANKS:
+        try:
+            results, _ = compute_all(db, as_of=since)
+        except Exception:  # an old board failing today's invariants must not take the page down
+            log.exception("alt rankings: baseline as of %s failed; serving without movement", since)
+            return {}
+        _PRIOR_RANKS.clear()
+        _PRIOR_RANKS[since] = {
+            (kind, r["pool"], int(r["fighter_id"])): r["default_rank"]
+            for kind, rows in results.items() for r in rows
+        }
+    return _PRIOR_RANKS[since]
+
+
 def get_alt_rankings(kind: str) -> dict:
     """The /ufc/alt-rankings/{kind} payload. Opens its own session (cache thunk)."""
     from app.models.ufc import UFCAltRanking, UFCFighter
     from app.services.ufc.ranking_publisher import WEIGHT_CLASS_LABELS
+    from app.services.ufc.tapology_rankings import previous_snapshot_date
 
     spec = KINDS[kind]
     mod = spec["module"]
@@ -156,6 +180,11 @@ def get_alt_rankings(kind: str) -> dict:
             .order_by(UFCAltRanking.pool, UFCAltRanking.default_rank)
             .all()
         )
+        # Movement, as on the division boards: rank now vs going into the last event.
+        since = previous_snapshot_date(db)
+        prior = _prior_ranks(db, since) if since else {}
+        since_iso = since.isoformat() if since and prior else None
+
         pools: dict[str, list] = {p: [] for p in POOLS}
         as_of = None
         for r, f in rows:
@@ -180,6 +209,9 @@ def get_alt_rankings(kind: str) -> dict:
                 "n_bouts": r.n_bouts,
                 "last_fight_date": r.last_fight_date.isoformat() if r.last_fight_date else None,
                 "ledger": json.loads(r.ledger or "[]"),
+                # `delta` is POSITIVE when the fighter climbed; prior_rank None = not on
+                # the board then (NEW).
+                "movement": _movement(prior.get((kind, r.pool, f.id)), r.default_rank, since_iso),
             })
         return {
             "kind": kind, "label": spec["label"],
@@ -187,9 +219,18 @@ def get_alt_rankings(kind: str) -> dict:
             "defaults": mod.DEFAULT_WEIGHTS,
             "components": mod.COMPONENTS,
             "pools": pools,
+            "movement_since": since_iso,
         }
     finally:
         db.close()
+
+
+def _movement(prior_rank: int | None, rank: int, since_iso: str | None) -> dict:
+    return {
+        "prior_rank": prior_rank,
+        "delta": (prior_rank - rank) if prior_rank is not None else None,
+        "as_of": since_iso,
+    }
 
 
 if __name__ == "__main__":

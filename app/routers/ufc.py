@@ -82,6 +82,42 @@ def get_fighter(fighter_id: int, db: Session = Depends(get_db)):
     return fighter
 
 
+@router.get("/article-media/{media_id}")
+def get_article_media(media_id: int, db: Session = Depends(get_db)):
+    """A picture embedded in an article body (```chin-image``` block)."""
+    from app.models.ufc import UFCArticleMedia
+
+    row = db.query(UFCArticleMedia.image, UFCArticleMedia.content_type).filter(UFCArticleMedia.id == media_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="No such picture")
+    return Response(content=row[0], media_type=row[1] or "image/jpeg",
+                    headers={"Cache-Control": "public, max-age=604800"})
+
+
+@router.get("/fights/{fight_id}/article-media")
+def get_fight_article_media(fight_id: int, db: Session = Depends(get_db)):
+    """Framing for every picture an article embeds, keyed by id."""
+    from app.models.ufc import UFCArticleMedia
+
+    return {str(m.id): {"focal_x": m.focal_x, "focal_y": m.focal_y, "width": m.width, "height": m.height}
+            for m in db.query(UFCArticleMedia).filter(UFCArticleMedia.fight_id == fight_id)}
+
+
+@router.get("/fights/{fight_id}/article-image")
+def get_article_image(fight_id: int, db: Session = Depends(get_db)):
+    """A fight article's artwork (ufc_article_images, services/ufc/article_images.py).
+    The URL carries ?v=<fetched_at> from the payloads that link it, so a re-pick is a
+    new URL and the long cache is safe."""
+    from app.models.ufc import UFCArticleImage
+
+    row = (db.query(UFCArticleImage.image, UFCArticleImage.content_type)
+           .filter(UFCArticleImage.fight_id == fight_id).first())
+    if not row:
+        raise HTTPException(status_code=404, detail="No article image")
+    return Response(content=row[0], media_type=row[1] or "image/jpeg",
+                    headers={"Cache-Control": "public, max-age=604800"})
+
+
 @router.get("/fighters/{fighter_id}/image")
 def get_fighter_image(fighter_id: int, db: Session = Depends(get_db)):
     """Serve a fighter's headshot.
@@ -431,7 +467,9 @@ def list_career_stats(
 
 @router.get("/events", response_model=list[UFCEventResponse])
 def list_events(
-    limit: int = Query(default=50, le=500),
+    # 2000 covers the whole UFC history (~1,300 cards) in one request, which is what the
+    # Events page lists and searches client-side.
+    limit: int = Query(default=50, le=2000),
     offset: int = 0,
     ufc_only: bool = Query(default=True),
     db: Session = Depends(get_db),
@@ -459,6 +497,43 @@ def get_event_fights(event_id: int, db: Session = Depends(get_db)):
     return db.query(UFCFight).filter(UFCFight.event_id == event_id).all()
 
 
+#: Whether ufc_deserve_to_win exists, checked once per process: the catalog lookup is a
+#: remote round trip (~1s added to every card load when it ran per request).
+_DTW_TABLE: bool | None = None
+
+
+def _deserve_to_win_by_fight(db: Session, fight_ids: list[int]) -> dict[int, dict]:
+    """Card-level deserve-to-win: the headline split per fight, newest model version
+    first. One query for the card, where the fight page's full payload is one per fight.
+    Absent table (a scratch DB the scorer never ran on) means no meter, not an error."""
+    global _DTW_TABLE
+    from sqlalchemy import inspect as sa_inspect
+
+    from app.models.ufc import UFCDeserveToWin
+
+    t = UFCDeserveToWin.__table__
+    if _DTW_TABLE is None:
+        _DTW_TABLE = sa_inspect(db.get_bind()).has_table(t.name, schema=t.schema)
+    if not fight_ids or not _DTW_TABLE:
+        return {}
+    out: dict[int, dict] = {}
+    for r in (
+        db.query(UFCDeserveToWin)
+        .filter(UFCDeserveToWin.fight_id.in_(fight_ids))
+        .order_by(UFCDeserveToWin.created_at.desc())
+        .all()
+    ):
+        if r.fight_id in out:
+            continue
+        out[r.fight_id] = {
+            "p_red": r.p_red, "p_draw": r.p_draw, "p_blue": r.p_blue,
+            "n_sims": r.n_sims, "extrapolated": r.extrapolated,
+            "rounds_observed": r.rounds_observed, "rounds_scheduled": r.rounds_scheduled,
+            "official_outcome": r.official_outcome, "robbery_score": r.robbery_score,
+        }
+    return out
+
+
 @router.get("/events/{event_id}/detail", response_model=UFCEventDetailResponse)
 def get_event_detail(event_id: int, db: Session = Depends(get_db)):
     event = (
@@ -474,14 +549,25 @@ def get_event_detail(event_id: int, db: Session = Depends(get_db)):
             joinedload(UFCFight.red_fighter),
             joinedload(UFCFight.blue_fighter),
             joinedload(UFCFight.winner),
-            joinedload(UFCFight.stats),
         )
         .filter(UFCFight.event_id == event_id)
         .order_by(UFCFight.card_position.is_(None), UFCFight.card_position, UFCFight.id)
         .all()
     )
-    # Attach consensus odds (first bookmaker found) to each fight
     fight_ids = [f.id for f in fights]
+    # Whole-fight totals only (round_number 0). Joining every round's row onto the
+    # fights query multiplied a ~200-column result to ~570 rows a card (~10s against
+    # the remote DB, ~1MB of JSON), and no caller reads the per-round rows.
+    totals: dict[int, list] = {}
+    if fight_ids:
+        for s in (
+            db.query(UFCFightStats)
+            .filter(UFCFightStats.fight_id.in_(fight_ids), UFCFightStats.round_number == 0)
+            .all()
+        ):
+            totals.setdefault(s.fight_id, []).append(s)
+    deserve = _deserve_to_win_by_fight(db, fight_ids)
+    # Attach consensus odds (first bookmaker found) to each fight
     odds_rows = db.query(UFCFightOdds).filter(UFCFightOdds.fight_id.in_(fight_ids)).all() if fight_ids else []
     odds_map = {}
     for o in odds_rows:
@@ -500,7 +586,8 @@ def get_event_detail(event_id: int, db: Session = Depends(get_db)):
             "details": f.details, "referee": f.referee,
             "created_at": f.created_at, "updated_at": f.updated_at,
             "red_fighter": f.red_fighter, "blue_fighter": f.blue_fighter,
-            "winner": f.winner, "stats": f.stats,
+            "winner": f.winner, "stats": totals.get(f.id, []),
+            "deserve_to_win": deserve.get(f.id),
         }
         o = odds_map.get(f.id)
         if o:
@@ -522,6 +609,77 @@ def list_fights(
     db: Session = Depends(get_db),
 ):
     return db.query(UFCFight).order_by(UFCFight.id.desc()).offset(offset).limit(limit).all()
+
+
+@router.get("/fights/search")
+def search_fights(
+    q: str = Query(min_length=2, max_length=80),
+    limit: int = Query(default=25, le=50),
+    db: Session = Depends(get_db),
+):
+    """Completed fights whose two fighters match every word of `q`, newest first.
+
+    Word-wise and order-free, so "holloway mcgregor" finds McGregor vs. Holloway. Every
+    meeting is its own row: `meeting`/`meetings` number the pair's bouts by date, so a
+    rematch reads as "2nd of 2" next to its event and date instead of a duplicate.
+    Declared before /fights/{fight_id}, which would otherwise claim the path.
+    """
+    import re
+    from datetime import date as _date
+
+    tokens = [t for t in re.split(r"\s+", q.lower().replace(".", " ")) if t and t not in ("vs", "v")][:6]
+    if not tokens:
+        return []
+    Red, Blue = aliased(UFCFighter), aliased(UFCFighter)
+    query = (
+        db.query(UFCFight, UFCEvent, Red, Blue)
+        .join(UFCEvent, UFCFight.event_id == UFCEvent.id)
+        .join(Red, UFCFight.red_fighter_id == Red.id)
+        .join(Blue, UFCFight.blue_fighter_id == Blue.id)
+        .filter(UFCEvent.date <= _date.today())
+    )
+    for t in tokens:
+        like = f"%{t}%"
+        query = query.filter(or_(
+            Red.first_name.ilike(like), Red.last_name.ilike(like),
+            Blue.first_name.ilike(like), Blue.last_name.ilike(like),
+        ))
+    rows = query.order_by(UFCEvent.date.desc(), UFCFight.id.desc()).limit(limit).all()
+    if not rows:
+        return []
+
+    # Number each pair's meetings across ALL their bouts, not just the rows returned.
+    pairs = {frozenset((f.red_fighter_id, f.blue_fighter_id)) for f, *_ in rows}
+    ids = {i for p in pairs for i in p}
+    history: dict[frozenset, list] = {}
+    for fid, r, b, d in (
+        db.query(UFCFight.id, UFCFight.red_fighter_id, UFCFight.blue_fighter_id, UFCFight.date)
+        .filter(UFCFight.red_fighter_id.in_(ids), UFCFight.blue_fighter_id.in_(ids))
+        .all()
+    ):
+        key = frozenset((r, b))
+        if key in pairs:
+            history.setdefault(key, []).append((d, fid))
+    for v in history.values():
+        v.sort()
+
+    def side(f):
+        return {"id": str(f.id), "first_name": f.first_name, "last_name": f.last_name,
+                "country_code": f.country_code}
+
+    out = []
+    for f, e, red, blue in rows:
+        bouts = history.get(frozenset((f.red_fighter_id, f.blue_fighter_id)), [(f.date, f.id)])
+        order = [fid for _, fid in bouts]
+        out.append({
+            "id": str(f.id), "date": e.date.isoformat() if e.date else None,
+            "event_id": str(e.id), "event_name": e.name,
+            "weight_class": f.weight_class, "method": f.method, "finish_round": f.finish_round,
+            "winner": "red" if f.winner_id == f.red_fighter_id else "blue" if f.winner_id == f.blue_fighter_id else None,
+            "red": side(red), "blue": side(blue),
+            "meeting": order.index(f.id) + 1 if f.id in order else 1, "meetings": len(order),
+        })
+    return out
 
 
 @router.get("/fights/{fight_id}")
@@ -615,6 +773,16 @@ def _build_fight(db: Session, fight_id: int):
 
     # Add preview
     preview = db.query(UFCFightPreview).filter(UFCFightPreview.fight_id == fight_id).first()
+    # Card order (0 = main event): the article page picks its layout from it.
+    result["card_position"] = fight.card_position
+    try:
+        from app.models.ufc import UFCArticleImage
+        img = (db.query(UFCArticleImage.focal_x, UFCArticleImage.focal_y, UFCArticleImage.fetched_at)
+               .filter(UFCArticleImage.fight_id == fight.id).first())
+        result["article_image"] = None if img is None else {
+            "focal_x": img[0], "focal_y": img[1], "v": int(img[2].timestamp()) if img[2] else 0}
+    except Exception:
+        result["article_image"] = None
     result["preview"] = {
         "content": preview.content,
         "model_used": preview.model_used,
@@ -706,10 +874,28 @@ def _build_previews(db: Session, limit: int, offset: int):
                 break
         return headline, lede
 
+    from app.models.ufc import UFCArticleImage
+
+    images = {fid: (fx, fy, at) for fid, fx, fy, at in db.query(
+        UFCArticleImage.fight_id, UFCArticleImage.focal_x, UFCArticleImage.focal_y, UFCArticleImage.fetched_at)
+        .filter(UFCArticleImage.fight_id.in_([f.id for _, f, *_ in rows]))} if rows else {}
+
+    def _side(f):
+        return None if f is None else {"id": str(f.id), "first_name": f.first_name, "last_name": f.last_name,
+                                        "image_url": f.image_url, "country_code": f.country_code}
+
     out = []
     for preview, fight, event, red, blue in rows:
         headline, lede = _headline_and_lede(preview.content)
+        img = images.get(fight.id)
         out.append({
+            # For the news-style index: card order (0 = main event), artwork with its
+            # crop point, both fighters for a portrait fallback, and a read time.
+            "card_position": fight.card_position,
+            "image": None if img is None else {"focal_x": img[0], "focal_y": img[1],
+                                               "v": int(img[2].timestamp()) if img[2] else 0},
+            "red": _side(red), "blue": _side(blue),
+            "read_minutes": max(1, round(len((preview.content or "").split()) / 230)),
             "fight_id": str(fight.id),
             "headline": headline,
             "lede": lede,
@@ -1353,6 +1539,10 @@ def get_upcoming_events():
     return response_cache.cached("upcoming", _upcoming_build, UPCOMING_TTL)
 
 
+def _utc_iso(t):
+    return f"{t.isoformat(timespec='seconds')}Z" if t else None
+
+
 def _build_upcoming(db: Session):
     from datetime import date as _date, timedelta
 
@@ -1455,6 +1645,11 @@ def _build_upcoming(db: Session):
             "name": event.name,
             "date": str(event.date),
             "location": event.location,
+            # Segment starts (ufc.com, event_times.py), ISO with a Z: stored naive UTC,
+            # and without the suffix a browser would read them as its own local time.
+            "main_card_at": _utc_iso(event.main_card_at),
+            "prelims_at": _utc_iso(event.prelims_at),
+            "early_prelims_at": _utc_iso(event.early_prelims_at),
             "fights": fight_list,
         })
 
@@ -1508,6 +1703,23 @@ def _alt_rankings_build(kind: str):
 _alt_rankings_builders = {k: (lambda k=k: _alt_rankings_build(k)) for k in ALT_RANKING_KINDS}
 for _k, _build in _alt_rankings_builders.items():
     response_cache.register_warmer(f"alt-rankings:{_k}", _build, RANKINGS_TTL)
+
+
+HOME_TTL = 5 * 60
+
+
+@router.get("/home")
+def get_home():
+    """The home dashboard in one payload (app/services/ufc/home.py)."""
+    return response_cache.cached("home", _home_build, HOME_TTL)
+
+
+def _home_build():
+    from app.services.ufc.home import build_home
+    return with_session(build_home)()
+
+
+response_cache.register_warmer("home", _home_build, HOME_TTL)
 
 
 @router.get("/arbitrage")

@@ -260,7 +260,30 @@ Rules:
 - Use bold sparingly, only for section headers. Do not bold phrases or words within paragraphs, except for the final prediction sentence in the last section.
 - Never use em dashes (the long dash). Use commas, periods, or semicolons instead.
 - When referring to time since last fight, convert days into natural units: use "X months" for 30+ days, "X weeks" for 7-29 days, "X days" only for less than a week.
-- You may include markdown tables anywhere they help illustrate a point (striking comparisons, recent results, tale of the tape, etc.). This is optional and up to your judgment. Pull numbers directly from the data provided.
+- You may include markdown tables anywhere they help illustrate a point (striking comparisons, recent results, etc.). This is optional and up to your judgment. Pull numbers directly from the data provided.
+- The page renders three special blocks as graphics. Use them where a number tells the story better than a sentence; most articles want two or three in total, never more than one of each kind in a row. Every number must come from the data provided. Write them exactly in this fenced form:
+
+```chin-takeaways
+- Model: Gane 66%, market 64.8%; no real edge on the moneyline.
+- Hokit's path: takedowns (86th percentile) and a 94th-percentile chin.
+```
+(2-4 short bullets. Use at most once, right after the Overview.)
+
+```chin-stats
+66% | Model: Gane wins | red
+64.8% | Market (no vig)
++1.2 | Model edge, pts | green
+```
+(2-4 lines of "value | label", optionally "| red", "| blue" or "| green" to colour the value.)
+
+```chin-bars
+Takedowns | 30 | 86
+Top control | 35 | 82
+Chin | 80 | 94
+```
+(Percentiles within the division: "skill | red fighter | blue fighter", 3-6 rows.)
+
+- No captions, footnotes, sources or disclaimers around tables or blocks. The graphic speaks for itself.
 
 Structure every preview with exactly these sections:
 
@@ -269,9 +292,6 @@ The one-liner MUST be original and specific to this fight. Reference a concrete 
 
 ## Overview
 2-3 sentences setting up the matchup.
-
-## Tale of the Tape
-A markdown table comparing key attributes: record, age, height, reach, stance.
 
 ## [Red Fighter Name]
 Analysis of recent form using their last few fights. Reference their skill profile from the rating data, backed by concrete stats from recent fights. You can include a table of recent results if it supports your point.
@@ -380,6 +400,9 @@ def generate_preview(
     existing = db.query(UFCFightPreview).filter(UFCFightPreview.fight_id == fight_id).first()
     if existing and not force:
         return existing
+    # Hand-edited in the admin dashboard: a forced regeneration must not wipe it.
+    if existing and existing.edited_at is not None:
+        return existing
 
     context = gather_fight_context(fight_id, db)
     if not context:
@@ -387,6 +410,8 @@ def generate_preview(
         return None
 
     system_prompt, user_message = build_preview_prompt(context)
+    if existing and existing.editor_notes:
+        user_message += f"\n\n**EDITOR'S CONTEXT (background to weave in; treat as true):**\n{existing.editor_notes}"
 
     try:
         client = client or _preview_client()

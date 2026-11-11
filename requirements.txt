@@ -15,6 +15,7 @@ beautifulsoup4>=4.12.0
 # Downscales cached fighter headshots in scripts/cache_fighter_images.py. Storing the
 # source PNGs verbatim would put ~0.76 GB of portraits in the database.
 Pillow>=10.0.0
+opencv-python-headless>=4.10,<5  # article image picker: face focal point + text detection
 apscheduler>=3.10.0
 numpy>=1.26.0
 pandas>=2.1.0

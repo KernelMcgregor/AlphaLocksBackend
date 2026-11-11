@@ -78,6 +78,12 @@ class UFCEvent(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(300))
     date: Mapped[str] = mapped_column(Date)
     location: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    #: Segment start times from ufc.com (app/services/ufc/event_times.py), naive UTC.
+    #: ufcstats publishes a date only; these drive the Upcoming page's countdown.
+    early_prelims_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    prelims_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    main_card_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    start_times_fetched_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
     fights: Mapped[list["UFCFight"]] = relationship(back_populates="event")
 
@@ -1115,8 +1121,32 @@ class UFCFightPreview(TimestampMixin, Base):
     model_used: Mapped[str] = mapped_column(String(50))
     prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: The editor's background for this bout (narrative, drama, storylines), from the
+    #: admin dashboard. Fed to every rewrite and regeneration of the article.
+    editor_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Set when the article is saved from the admin dashboard; a forced regeneration
+    #: never overwrites an edited article.
+    edited_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
     fight: Mapped["UFCFight"] = relationship()
+
+
+class UFCArticleMedia(TimestampMixin, Base):
+    """A picture uploaded for use inside an article's body, embedded with a
+    ```chin-image``` block (id | left/right/center | width %). `focal_x`/`focal_y`
+    (0-1) frame it the way the cover's do."""
+
+    __tablename__ = "ufc_article_media"
+    __table_args__ = {"schema": UFC_SCHEMA}
+
+    fight_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_fights.id")), index=True)
+    image: Mapped[bytes] = mapped_column(LargeBinary)
+    content_type: Mapped[str] = mapped_column(String(40), default="image/jpeg")
+    width: Mapped[int] = mapped_column(Integer)
+    height: Mapped[int] = mapped_column(Integer)
+    focal_x: Mapped[float] = mapped_column(Float, default=0.5)
+    focal_y: Mapped[float] = mapped_column(Float, default=0.4)
+    label: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1395,6 +1425,34 @@ class MMADFanScore(TimestampMixin, Base):
     score: Mapped[str] = mapped_column(String(10))
     pick: Mapped[str] = mapped_column(String(5))
     pct: Mapped[float] = mapped_column(Float)
+
+
+class UFCArticleImage(TimestampMixin, Base):
+    """Artwork for a fight's article, picked from Google Images by
+    app/services/ufc/article_images.py and stored here so pages never hotlink.
+
+    `phase` is "pre" (picked before the bout) or "post" (re-picked after it, top bouts
+    only). `focal_x`/`focal_y` (0-1) are where the fighters' faces are, which the page
+    crops around. `candidates` keeps the next few picks (JSON) for a manual swap."""
+
+    __tablename__ = "ufc_article_images"
+    __table_args__ = {"schema": UFC_SCHEMA}
+
+    fight_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_fights.id")), unique=True, index=True)
+    image: Mapped[bytes] = mapped_column(LargeBinary)
+    content_type: Mapped[str] = mapped_column(String(40), default="image/jpeg")
+    width: Mapped[int] = mapped_column(Integer)
+    height: Mapped[int] = mapped_column(Integer)
+    focal_x: Mapped[float] = mapped_column(Float, default=0.5)
+    focal_y: Mapped[float] = mapped_column(Float, default=0.4)
+    source_url: Mapped[str] = mapped_column(Text)
+    page_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    domain: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    query: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    phase: Mapped[str] = mapped_column(String(8), default="pre")
+    candidates: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fetched_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class UFCDeserveToWin(TimestampMixin, Base):

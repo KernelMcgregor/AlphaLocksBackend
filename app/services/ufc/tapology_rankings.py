@@ -636,37 +636,36 @@ DIMENSIONS = [
 ]
 
 
-#: How far back "movement" looks. A single event only churns the handful of divisions
-#: that fought on it, so a since-last-publish delta is blank for most of the board and
-#: noisy where it isn't. A quarter is long enough that the arrow reflects a trajectory.
-MOVEMENT_DAYS = 90
+def previous_snapshot_date(db):
+    """The `ufc_ranking_history` date just before the latest one, or None.
 
-
-def _movement_baseline(db, fighter_ids: set[int]) -> dict[tuple[int, str], dict]:
-    """Standings as of ~`MOVEMENT_DAYS` ago, keyed by (fighter_id, weight_class).
-
-    Snapshots are written per event date, so there is rarely a row exactly 90 days back.
-    This picks the one distinct `as_of` nearest the target and reads the whole board at
-    that date — one query, and every fighter is compared against the *same* past
-    standings. Comparing each fighter to their own nearest snapshot would mix dates and
-    make two fighters' arrows incomparable.
+    `record_rank_history` stamps a snapshot after every card, so the latest snapshot is
+    the current standings and the one before it is the board as it stood going into the
+    last event. "Movement" is the difference: what the most recent card changed.
     """
     from sqlalchemy import func, select
 
     from app.models.ufc import UFCRankingHistory
 
+    latest = db.execute(select(func.max(UFCRankingHistory.as_of))).scalar()
+    if latest is None:
+        return None
+    return db.execute(
+        select(func.max(UFCRankingHistory.as_of)).where(UFCRankingHistory.as_of < latest)
+    ).scalar()
+
+
+def _movement_baseline(db, fighter_ids: set[int]) -> dict[tuple[int, str], dict]:
+    """Standings going into the last event, keyed by (fighter_id, weight_class).
+
+    Every fighter is compared against the same snapshot (`previous_snapshot_date`), so
+    two fighters' arrows always describe the same card.
+    """
+    from app.models.ufc import UFCRankingHistory
+
     if not fighter_ids:
         return {}
-
-    target = date.today() - timedelta(days=MOVEMENT_DAYS)
-    as_of = db.execute(
-        select(func.max(UFCRankingHistory.as_of)).where(UFCRankingHistory.as_of <= target)
-    ).scalar()
-    if as_of is None:
-        # History does not reach back 90 days yet — fall back to the oldest snapshot
-        # there is, so the column degrades to "since we started tracking" rather than
-        # reporting every fighter as NEW.
-        as_of = db.execute(select(func.min(UFCRankingHistory.as_of))).scalar()
+    as_of = previous_snapshot_date(db)
     if as_of is None:
         return {}
 
@@ -831,6 +830,9 @@ def get_rankings() -> dict:
 
         fighter_ids = {r.fighter_id for r, _ in rankings}
         baseline = _movement_baseline(db, fighter_ids)
+        # Stamped on every row, ranked-then or not, so the UI can tell NEW from no data.
+        since = previous_snapshot_date(db) if baseline else None
+        since_iso = since.isoformat() if since else None
         next_fights = _next_fights(db, fighter_ids)
 
         # Collect every fighter's most recent bout id first so the detail join is one
@@ -919,14 +921,15 @@ def get_rankings() -> dict:
                 "last_fight": last_fight,
                 "streak": streak,
                 "streak_type": streak_type,
-                # Rank ~90 days ago and the delta from it. `delta` is POSITIVE when the
-                # fighter climbed: ranks count down, so it is prior - current, not the
-                # other way round. None means they were unranked in this division then.
+                # Rank going into the last event and the delta from it. `delta` is
+                # POSITIVE when the fighter climbed: ranks count down, so it is
+                # prior - current, not the other way round. None means they were
+                # unranked in this division then.
                 "movement": {
                     "prior_rank": prior["rank"] if prior else None,
                     "delta": (prior["rank"] - ranking.rank) if prior else None,
                     "prior_sos": prior["sos"] if prior else None,
-                    "as_of": prior["as_of"] if prior else None,
+                    "as_of": since_iso,
                 },
                 "next_fight": next_fights.get(ranking.fighter_id),
             })
@@ -948,7 +951,7 @@ def get_rankings() -> dict:
             "method": "tapology",
             "dimensions": DIMENSIONS,
             "window": WINDOW,
-            "movement_days": MOVEMENT_DAYS,
+            "movement_since": since_iso,
         }
     finally:
         db.close()

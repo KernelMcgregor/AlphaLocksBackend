@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     # completion holds a worker slot for minutes.
     PREVIEW_TIMEOUT_SECONDS: float = 180.0
     ADMIN_API_KEY: str = ""
+    # Google Images via SerpAPI, for article artwork (services/ufc/article_images.py).
+    SERPAPI_KEY: str = ""
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

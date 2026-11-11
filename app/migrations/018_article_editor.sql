@@ -1,0 +1,6 @@
+-- Admin article editor.
+--   ufc_fight_previews.editor_notes  TEXT       editor's background for the bout, fed to rewrites
+--   ufc_fight_previews.edited_at     TIMESTAMP  set on a manual save; forced regeneration skips it
+--   ufc_article_media                (table)    pictures uploaded for use inside an article body
+-- Columns are nullable with no default -> metadata-only in Postgres. Added by
+-- run_migrations() in main.py; the table by Base.metadata.create_all. Documentation only.

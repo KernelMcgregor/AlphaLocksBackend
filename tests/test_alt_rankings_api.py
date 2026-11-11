@@ -23,11 +23,12 @@ def client():
     from fastapi.testclient import TestClient
 
     from app.database import Base, SessionLocal, engine
-    from app.models.ufc import UFCAltRanking, UFCFighter
+    from app.models.ufc import UFCAltRanking, UFCFighter, UFCRankingHistory
     from app.routers import ufc as ufc_router
     from app.services import response_cache
 
-    tables = [UFCFighter.__table__, UFCAltRanking.__table__]
+    # Ranking history stays empty: no previous snapshot, so no movement baseline.
+    tables = [UFCFighter.__table__, UFCAltRanking.__table__, UFCRankingHistory.__table__]
     Base.metadata.drop_all(engine, tables=tables)
     Base.metadata.create_all(engine, tables=tables + [
         t for t in Base.metadata.sorted_tables if t.name in ("ufc_events", "ufc_fights")])
@@ -70,6 +71,9 @@ def test_bmf_payload_shape(client):
     assert men[0]["id"] == "9007199254740993"            # id is a string, not a float
     assert "raw" not in men[0]["components"] and men[0]["raw"] == {"finishing": 1.0}
     assert len(body["pools"]["women"]) == 1
+    # No ranking history -> no baseline, and every row says so rather than claiming NEW.
+    assert body["movement_since"] is None
+    assert men[0]["movement"] == {"prior_rank": None, "delta": None, "as_of": None}
 
 
 def test_p4p_empty_and_unknown_kind(client):

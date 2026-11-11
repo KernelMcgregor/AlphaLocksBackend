@@ -47,6 +47,16 @@ def run_migrations():
         pred_existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_fight_predictions)").fetchall()}
         if pred_existing and "model_prob" not in pred_existing:
             conn.execute("ALTER TABLE ufc_fight_predictions ADD COLUMN model_prob REAL")
+        # 018: editor notes / edited marker on ufc_fight_previews (admin article editor)
+        fp_existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_fight_previews)").fetchall()}
+        for col, ddl in (("editor_notes", "TEXT"), ("edited_at", "TIMESTAMP")):
+            if fp_existing and col not in fp_existing:
+                conn.execute(f"ALTER TABLE ufc_fight_previews ADD COLUMN {col} {ddl}")
+        # 017: segment start times on ufc_events (ufc.com)
+        ev_existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_events)").fetchall()}
+        for col in ("early_prelims_at", "prelims_at", "main_card_at", "start_times_fetched_at"):
+            if ev_existing and col not in ev_existing:
+                conn.execute(f"ALTER TABLE ufc_events ADD COLUMN {col} TIMESTAMP")
         # 016: venue close / card start on ufc_prediction_markets
         pm_existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_prediction_markets)").fetchall()}
         for col in ("venue_closed_at", "card_start_at"):
@@ -152,6 +162,22 @@ def run_migrations():
         if "model_prob" not in pred_existing:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE ufc.ufc_fight_predictions ADD COLUMN model_prob FLOAT"))
+
+        # 018: editor notes / edited marker on ufc_fight_previews. Nullable, no default ->
+        # metadata-only.
+        fp_existing = {c["name"] for c in insp.get_columns("ufc_fight_previews", schema="ufc")}
+        for col, ddl in (("editor_notes", "TEXT"), ("edited_at", "TIMESTAMP")):
+            if fp_existing and col not in fp_existing:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE ufc.ufc_fight_previews ADD COLUMN {col} {ddl}"))
+
+        # 017: segment start times on ufc_events (ufc.com). Nullable, no default ->
+        # metadata-only.
+        ev_existing = {c["name"] for c in insp.get_columns("ufc_events", schema="ufc")}
+        for col in ("early_prelims_at", "prelims_at", "main_card_at", "start_times_fetched_at"):
+            if ev_existing and col not in ev_existing:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE ufc.ufc_events ADD COLUMN {col} TIMESTAMP"))
 
         # 016: venue close / card start on ufc_prediction_markets (bout cutoffs). Nullable,
         # no default -> metadata-only.
@@ -544,6 +570,18 @@ def scheduled_scrape():
         log.error(f"Fight preview generation failed: {e}")
         record_run("Generate All Previews", "error", str(e))
 
+    # Artwork for any article that has none yet, and a fight photo for last week's top
+    # bouts. Each fight is searched once per phase, so a night with no new articles
+    # costs no searches.
+    try:
+        from app.services.ufc.article_images import update_article_images
+        result = update_article_images()
+        log.info(f"Article images: {result['updated']} updated")
+        record_run("Article Images", "done")
+    except Exception as e:
+        log.error(f"Article images failed: {e}")
+        record_run("Article Images", "error", str(e))
+
     record_run("Full Pipeline", "done")
 
 
@@ -560,6 +598,23 @@ def scheduled_bovada_scrape():
     except Exception as e:
         log.error(f"Bovada method odds scrape failed: {e}")
         record_run("Bovada Odds", "error", str(e))
+
+
+@_scheduled_job("Event Start Times")
+def scheduled_event_times():
+    """Weekly: copy upcoming cards' segment start times from ufc.com. Picks up newly
+    announced cards and moved start times alike, since every upcoming card is re-read."""
+    import logging
+    log = logging.getLogger("scheduled_event_times")
+    from app.routers.admin import record_run
+    try:
+        from app.services.ufc.event_times import update_event_start_times
+        result = update_event_start_times()
+        log.info(f"Event start times: {result}")
+        record_run("Event Start Times", "done")
+    except Exception as e:
+        log.error(f"Event start times failed: {e}")
+        record_run("Event Start Times", "error", str(e))
 
 
 @_scheduled_job("Prediction Markets")
@@ -642,6 +697,11 @@ async def lifespan(_app: FastAPI):
         scheduled_reconcile, "cron", hour="1,7,13,19", id="reconcile_fights",
         replace_existing=True, coalesce=True, misfire_grace_time=3600,
     )
+    # Weekly, Monday: after the weekend's card, when the next ones' times are announced.
+    scheduler.add_job(
+        scheduled_event_times, "cron", day_of_week="mon", hour=10, id="event_start_times",
+        replace_existing=True, coalesce=True, misfire_grace_time=3600,
+    )
     scheduler.start()
     # Build /ufc/upcoming and /ufc/rankings in the background so the first visitor
     # after a deploy does not wait ~6s on them. A thread, not a task: the builds are
@@ -653,7 +713,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(
-    title="ALocks Analytics API",
+    title="Chinlytics API",
     description="Sports betting analytics — predictions, models, and stats",
     version="0.1.0",
     lifespan=lifespan,

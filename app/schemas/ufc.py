@@ -159,6 +159,8 @@ class UFCFightDetailResponse(UFCFightResponse):
     stats: list["UFCFightStatsResponse"] = []
     red_odds: Optional[int] = None
     blue_odds: Optional[int] = None
+    #: Deserve-to-win summary (ufc_deserve_to_win) on the event detail; None elsewhere.
+    deserve_to_win: Optional[dict] = None
 
 
 class UFCEventDetailResponse(UFCEventResponse):
