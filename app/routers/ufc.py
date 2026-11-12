@@ -788,6 +788,12 @@ def _build_fight(db: Session, fight_id: int):
         "model_used": preview.model_used,
         "generated_at": preview.created_at.isoformat() if preview.created_at else None,
     } if preview else None
+    if preview:
+        # The newsroom's layout for the article page, and earlier meetings for its
+        # "last time" block (services/ufc/newsroom).
+        from app.services.ufc.newsroom import serving as newsroom
+        result["preview"]["layout"] = newsroom.layouts(db, [fight.id]).get(fight.id)
+        result["preview"]["meetings"] = newsroom.meetings(db, fight)
 
     # Prediction-market quotes (Kalshi, Polymarket). Served from the same call as the odds board
     # because the page already renders both side by side; a second request would only add a
@@ -880,6 +886,9 @@ def _build_previews(db: Session, limit: int, offset: int):
         UFCArticleImage.fight_id, UFCArticleImage.focal_x, UFCArticleImage.focal_y, UFCArticleImage.fetched_at)
         .filter(UFCArticleImage.fight_id.in_([f.id for _, f, *_ in rows]))} if rows else {}
 
+    from app.services.ufc.newsroom.serving import layouts as _layouts
+    layouts = _layouts(db, [f.id for _, f, *_ in rows])
+
     def _side(f):
         return None if f is None else {"id": str(f.id), "first_name": f.first_name, "last_name": f.last_name,
                                         "image_url": f.image_url, "country_code": f.country_code}
@@ -892,6 +901,7 @@ def _build_previews(db: Session, limit: int, offset: int):
             # For the news-style index: card order (0 = main event), artwork with its
             # crop point, both fighters for a portrait fallback, and a read time.
             "card_position": fight.card_position,
+            "layout": layouts.get(fight.id),
             "image": None if img is None else {"focal_x": img[0], "focal_y": img[1],
                                                "v": int(img[2].timestamp()) if img[2] else 0},
             "red": _side(red), "blue": _side(blue),

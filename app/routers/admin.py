@@ -502,6 +502,47 @@ def admin_rewrite_article(fight_id: int, body: _RewriteIn):
         raise HTTPException(502, str(e))
 
 
+class _StrikeIn(_BaseModel):
+    struck: bool
+
+
+class _LayoutIn(_BaseModel):
+    layout: str | None = None
+
+
+@router.get("/articles/{fight_id}/newsroom", dependencies=[Depends(require_admin_key)])
+def admin_article_newsroom(fight_id: int):
+    """The reporting behind an article: claims, the checker's report, layout, spend."""
+    from app.services.ufc import article_admin
+    return _article_call(article_admin.newsroom_info, fight_id)
+
+
+@router.put("/claims/{claim_id}", dependencies=[Depends(require_admin_key)])
+def admin_strike_claim(claim_id: int, body: _StrikeIn):
+    from app.services.ufc import article_admin
+    _article_call(article_admin.strike_claim, claim_id, body.struck)
+    return {"ok": True}
+
+
+@router.put("/articles/{fight_id}/layout", dependencies=[Depends(require_admin_key)])
+def admin_article_layout(fight_id: int, body: _LayoutIn):
+    from app.services.ufc import article_admin
+    _article_call(article_admin.set_layout, fight_id, body.layout)
+    return _published()
+
+
+@router.post("/articles/{fight_id}/newsroom-run", dependencies=[Depends(require_admin_key)])
+def admin_newsroom_run(fight_id: int, background_tasks: BackgroundTasks):
+    """Research and rewrite this article now (newsroom), even if nothing changed."""
+    from app.services.ufc.newsroom.pipeline import run
+
+    def job():
+        result = run([fight_id], persist=True, force=True)
+        _published()
+        return result
+    return _start_task(background_tasks, f"Newsroom ({fight_id})", job)
+
+
 @router.post("/articles/{fight_id}/cover", dependencies=[Depends(require_admin_key)])
 def admin_upload_cover(fight_id: int, body: _ImageIn):
     from app.services.ufc import article_admin

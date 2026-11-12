@@ -1494,3 +1494,98 @@ class UFCDeserveToWin(TimestampMixin, Base):
     #: Decisions: deserve-to-win share of the fighter the judges did NOT give it to.
     robbery_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     n_sims: Mapped[int] = mapped_column(Integer)
+
+
+# ---------------------------------------------------------------------------
+# Newsroom (app/services/ufc/newsroom): sourced context for the articles on the top of
+# each card. New tables only; nothing here alters an existing one.
+# ---------------------------------------------------------------------------
+
+class UFCNewsArticle(TimestampMixin, Base):
+    """A news story fetched for a fighter. The text is kept for checking quotes against
+    and is never republished."""
+
+    __tablename__ = "ufc_news_articles"
+    __table_args__ = {"schema": UFC_SCHEMA}
+
+    url: Mapped[str] = mapped_column(String(1000), unique=True, index=True)
+    outlet: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    author: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    published_at: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: JSON {"tweets": [...], "videos": [...]}: embeds found in the page.
+    embeds: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: False when the page could not be read (paywall, script-built, blocked).
+    fetch_ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    #: Claims have been extracted for these fighter ids (JSON list), so a second fight
+    #: that finds the same story does not pay for it twice.
+    extracted_for: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class UFCResearchClaim(TimestampMixin, Base):
+    """One sourced piece of context about a fighter: a storyline, an injury, a quote.
+
+    `fight_id` is the bout it was gathered for. Claims outlive that bout: the ones about a
+    fighter form their storyline ledger, which every later article about them reads.
+    """
+
+    __tablename__ = "ufc_research_claims"
+    __table_args__ = {"schema": UFC_SCHEMA}
+
+    fighter_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_fighters.id")), index=True)
+    opponent_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    fight_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    article_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey(_fk("ufc_news_articles.id")), nullable=True)
+    #: matchup (both fighters / this bout), recent (since their last fight), background.
+    tier: Mapped[str] = mapped_column(String(20))
+    #: storyline, history, injury, camp, quote, beef, report
+    kind: Mapped[str] = mapped_column(String(20))
+    text: Mapped[str] = mapped_column(Text)
+    quote: Mapped[str | None] = mapped_column(Text, nullable=True)
+    speaker: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    outlet: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    show: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    reporter: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    venue: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    source_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    published_at: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    embed_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    newsworthiness: Mapped[int] = mapped_column(Integer, default=3)
+    #: Struck in the admin dashboard: never used again.
+    struck: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class UFCArticleRun(TimestampMixin, Base):
+    """The newsroom's last run for a fight: layout, checker report and what it cost."""
+
+    __tablename__ = "ufc_article_runs"
+    __table_args__ = (UniqueConstraint("fight_id"), {"schema": UFC_SCHEMA})
+
+    fight_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_fights.id")), index=True)
+    #: published, needs_review, failed
+    status: Mapped[str] = mapped_column(String(20))
+    layout: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    #: Set in the admin dashboard; wins over the automatic choice.
+    layout_override: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    #: JSON: checker issues, claim ids used, the editor's plan.
+    report: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: The pick the article argued for ("red:Decision"); a change triggers a rewrite.
+    pick: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    #: Newest claim id the article saw; newer claims trigger a rewrite.
+    max_claim_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    usd: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class UFCNewsroomSpend(TimestampMixin, Base):
+    """One LLM call's tokens and cost, for the monthly budget cap."""
+
+    __tablename__ = "ufc_newsroom_spend"
+    __table_args__ = {"schema": UFC_SCHEMA}
+
+    stage: Mapped[str] = mapped_column(String(30))
+    fight_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    model: Mapped[str] = mapped_column(String(60))
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    usd: Mapped[float] = mapped_column(Float, default=0.0)

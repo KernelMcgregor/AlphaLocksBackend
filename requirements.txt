@@ -28,6 +28,10 @@ venn-abers>=1.5.0
 # that wrote it.
 catboost==1.2.10
 openai>=1.30.0
+# Newsroom (app/services/ufc/newsroom): article text from news pages, and Google News
+# links resolved to the publisher's URL.
+trafilatura>=2.0
+googlenewsdecoder>=0.2
 
 # Required by app/services/ufc/decorrelated.py, which backs the served MLP
 # (models/ufc/h2h/mlp_v1.pkl). Without it generate_predictions() falls back to the GBT.

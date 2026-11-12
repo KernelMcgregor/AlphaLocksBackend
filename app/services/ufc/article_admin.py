@@ -71,6 +71,11 @@ def list_articles(db: Session) -> list[dict]:
             .all())
     covers = {fid for (fid,) in db.query(UFCArticleImage.fight_id)
               .filter(UFCArticleImage.fight_id.in_([f.id for _, f, _ in rows]))} if rows else set()
+    runs = {}
+    if rows and _newsroom_ready(db):
+        from app.models.ufc import UFCArticleRun
+        runs = {r.fight_id: r for r in db.query(UFCArticleRun)
+                .filter(UFCArticleRun.fight_id.in_([f.id for _, f, _ in rows]))}
     out = []
     for p, f, e in rows:
         m = re.search(r"^#\s+(.+)$", p.content or "", re.M)
@@ -83,6 +88,8 @@ def list_articles(db: Session) -> list[dict]:
             "has_cover": f.id in covers,
             "edited_at": p.edited_at.isoformat() if p.edited_at else None,
             "has_notes": bool(p.editor_notes),
+            "newsroom": None if f.id not in runs else runs[f.id].status,
+            "layout": None if f.id not in runs else (runs[f.id].layout_override or runs[f.id].layout),
         })
     return out
 
@@ -272,3 +279,91 @@ roughly the same place. Return the full article in markdown, nothing else."""
     if not out:
         raise RuntimeError("The rewrite came back empty")
     return out
+
+
+# ---------------------------------------------------------------------------
+# Newsroom: the reporting behind an article, its checker report and layout
+# ---------------------------------------------------------------------------
+
+def _newsroom_ready(db: Session) -> bool:
+    from sqlalchemy import inspect
+    from app.models.ufc import UFC_SCHEMA
+    return inspect(db.get_bind()).has_table("ufc_article_runs", schema=UFC_SCHEMA)
+
+
+def newsroom_info(db: Session, fight_id: int) -> dict:
+    """Run status, checker report, layout and every stored claim about the two fighters."""
+    from app.models.ufc import UFCArticleRun, UFCFight, UFCResearchClaim
+    from app.services.ufc.newsroom.llm import month_spent
+
+    f = db.get(UFCFight, fight_id)
+    if f is None:
+        raise LookupError("No such fight")
+    if not _newsroom_ready(db):
+        return {"ready": False, "run": None, "claims": [], "month_usd": 0.0}
+    run = db.query(UFCArticleRun).filter(UFCArticleRun.fight_id == fight_id).first()
+    report = json.loads(run.report or "{}") if run else {}
+    used = set(report.get("claims_used") or [])
+    rows = (db.query(UFCResearchClaim)
+            .filter(UFCResearchClaim.fighter_id.in_([f.red_fighter_id, f.blue_fighter_id]))
+            .order_by(UFCResearchClaim.newsworthiness.desc(), UFCResearchClaim.published_at.desc())
+            .limit(300).all())
+    names = {f.red_fighter_id: f.red_fighter.last_name, f.blue_fighter_id: f.blue_fighter.last_name}
+    seen, claims = set(), []
+    for c in rows:
+        key = (c.quote or c.text)[:60].lower()
+        if key in seen:  # matchup claims are stored once per fighter
+            continue
+        seen.add(key)
+        claims.append({
+            "id": c.id, "fighter": names.get(c.fighter_id), "tier": c.tier, "kind": c.kind,
+            "text": c.text, "quote": c.quote, "speaker": c.speaker, "outlet": c.outlet,
+            "show": c.show, "reporter": c.reporter, "url": c.source_url,
+            "published_at": c.published_at.isoformat() if c.published_at else None,
+            "embed_url": c.embed_url, "newsworthiness": c.newsworthiness,
+            "struck": c.struck, "used": c.id in used,
+        })
+    return {
+        "ready": True,
+        "run": None if run is None else {
+            "status": run.status, "layout": run.layout, "layout_override": run.layout_override,
+            "thesis": report.get("thesis"), "angle": (report.get("plan") or {}).get("angle"),
+            "issues": report.get("issues") or [], "first_draft_issues": report.get("first_draft_issues") or [],
+            "usd": round(run.usd or 0.0, 4),
+            "updated_at": run.updated_at.isoformat() if run.updated_at else None,
+        },
+        "claims": claims,
+        "month_usd": round(month_spent(db), 4),
+    }
+
+
+def strike_claim(db: Session, claim_id: int, struck: bool) -> None:
+    """Struck claims are never used again. The next newsroom run rewrites the article
+    without it (a strike also clears the run's pick so the run is not skipped)."""
+    from app.models.ufc import UFCArticleRun, UFCResearchClaim
+
+    c = db.get(UFCResearchClaim, claim_id)
+    if c is None:
+        raise LookupError("No such claim")
+    c.struck = bool(struck)
+    if c.fight_id:
+        run = db.query(UFCArticleRun).filter(UFCArticleRun.fight_id == c.fight_id).first()
+        if run:
+            run.pick = None
+    db.commit()
+
+
+LAYOUTS = ("feature", "rivalry", "magazine", "data", "standard", "brief")
+
+
+def set_layout(db: Session, fight_id: int, layout: str | None) -> None:
+    from app.models.ufc import UFCArticleRun
+
+    if layout and layout not in LAYOUTS:
+        raise ValueError(f"Layout must be one of {', '.join(LAYOUTS)}")
+    run = db.query(UFCArticleRun).filter(UFCArticleRun.fight_id == fight_id).first()
+    if run is None:
+        run = UFCArticleRun(fight_id=fight_id, status="manual", usd=0.0)
+        db.add(run)
+    run.layout_override = layout or None
+    db.commit()

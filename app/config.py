@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     ADMIN_API_KEY: str = ""
     # Google Images via SerpAPI, for article artwork (services/ufc/article_images.py).
     SERPAPI_KEY: str = ""
+    # Newsroom (services/ufc/newsroom): researched articles for the top of each card.
+    NEWSROOM_TOP_N: int = 5
+    NEWSROOM_DAYS_AHEAD: int = 10
+    NEWSROOM_MONTHLY_BUDGET_USD: float = 10.0
+    # DeepSeek list prices per million tokens (cache miss), for the budget meter. Kept
+    # on the high side so the cap errs early.
+    NEWSROOM_PRICE_IN_PER_M: float = 0.30
+    NEWSROOM_PRICE_OUT_PER_M: float = 0.50
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
