@@ -1554,6 +1554,11 @@ class UFCResearchClaim(TimestampMixin, Base):
     newsworthiness: Mapped[int] = mapped_column(Integer, default=3)
     #: Struck in the admin dashboard: never used again.
     struck: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: The news-desk story it was gathered for, if any.
+    topic_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    #: Every fighter of ours the claim names, JSON list of ids (the claim's own included),
+    #: so it reaches each of their ledgers.
+    mentions: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class UFCArticleRun(TimestampMixin, Base):
@@ -1589,3 +1594,73 @@ class UFCNewsroomSpend(TimestampMixin, Base):
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
     usd: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class UFCNewsTopic(TimestampMixin, Base):
+    """A news-desk story: a cluster of coverage about one development, and the article
+    written from it."""
+
+    __tablename__ = "ufc_news_topics"
+    __table_args__ = {"schema": UFC_SCHEMA}
+
+    slug: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(300))
+    #: incident, trash_talk, press_conference, rumored_fight, booking, callout, injury,
+    #: contract, controversy, other
+    kind: Mapped[str] = mapped_column(String(30))
+    #: published, needs_review, rejected, draft
+    status: Mapped[str] = mapped_column(String(20), default="draft")
+    fighter_ids: Mapped[str] = mapped_column(Text, default="[]")  # JSON: every fighter of ours involved
+    #: JSON: the fighters the story is about (the rest are only mentioned); sets the format.
+    focus_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: profile (one fighter), pair, matchup (two), group (three or more).
+    layout: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    first_seen: Mapped[dt.datetime] = mapped_column(DateTime)
+    last_seen: Mapped[dt.datetime] = mapped_column(DateTime)
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    outlet_count: Mapped[int] = mapped_column(Integer, default=0)
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: JSON: checker issues, label, research counts.
+    report: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    #: Cover: the lead photo of one of the source articles, re-encoded (no hotlinking).
+    image: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    image_focal_x: Mapped[float] = mapped_column(Float, default=0.5)
+    image_focal_y: Mapped[float] = mapped_column(Float, default=0.4)
+    image_source: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    image_page: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+
+class UFCNewsTopicItem(TimestampMixin, Base):
+    """One headline that belongs to a news-desk story."""
+
+    __tablename__ = "ufc_news_topic_items"
+    __table_args__ = (UniqueConstraint("topic_id", "url"), {"schema": UFC_SCHEMA})
+
+    topic_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_news_topics.id")), index=True)
+    url: Mapped[str] = mapped_column(String(1000))
+    outlet: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    title: Mapped[str] = mapped_column(String(500))
+    published_at: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+
+
+class UFCNewsMention(Base):
+    """How many of a day's headlines named a fighter: the news desk's spike signal."""
+
+    __tablename__ = "ufc_news_mentions"
+    __table_args__ = (UniqueConstraint("fighter_id", "day"), {"schema": UFC_SCHEMA})
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    fighter_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    day: Mapped[dt.date] = mapped_column(Date, index=True)
+    count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class UFCFighterDossier(TimestampMixin, Base):
+    """A short running summary of a fighter's storylines, refreshed from their ledger."""
+
+    __tablename__ = "ufc_fighter_dossiers"
+    __table_args__ = (UniqueConstraint("fighter_id"), {"schema": UFC_SCHEMA})
+
+    fighter_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(_fk("ufc_fighters.id")), index=True)
+    summary: Mapped[str] = mapped_column(Text)

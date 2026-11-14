@@ -184,11 +184,14 @@ def fetch(url: str, item: NewsItem | None = None, timeout: float = 20.0) -> Arti
         except ValueError:
             pass
     tweets, videos = embeds(html)
+    og = re.search(r'<meta[^>]+(?:property|name)=["\'](?:og:image|twitter:image)["\'][^>]+content=["\']([^"\']+)', html) \
+        or re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:og:image|twitter:image)', html)
     return Article(
         url=str(r.url), outlet=(item.outlet if item else None) or (meta.sitename if meta else None) or host,
         title=(item.title if item else None) or (meta.title if meta else None),
         author=meta.author if meta else None, published_at=published,
         text=text[:20000], tweets=tweets, videos=videos,
+        image=og.group(1).replace("&amp;", "&") if og else None,
     )
 
 

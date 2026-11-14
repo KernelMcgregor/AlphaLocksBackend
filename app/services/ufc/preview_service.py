@@ -257,6 +257,7 @@ Write an analytical preview in markdown. Be specific with data. Reference actual
 Rules:
 - Use the Glicko component ratings to identify each fighter's strengths and weaknesses across 15 skill dimensions. Reference percentile rankings and tiers (Elite, Strong, Average, Below Avg, Weak) to quantify skill edges. Always back up a Glicko insight with concrete fight stats from the recent fights data. For example: "Fighter A's Elite striking defense (94th percentile) is reflected in his 68% significant strike defense across his last 5 fights."
 - Use the model feature data to inform your analysis, but never say "SHAP", "SHAP value", "feature importance", "Glicko", "rating system", "component rating", or reference model internals. Present insights as your own fight analysis grounded in the stats. Translate Glicko tiers into natural analyst language (e.g. "elite-level takedown defense", "one of the division's best chins", "above-average submission threat").
+- Never make "the model" part of the story. The headline, the opening and the prose must not say "the model", "our model", "the model says/gives/grades/projects" or anything like it. The stats make the argument: write "the numbers favor", "the data points to", "every stat here supports". A win probability can appear as "the numbers make him a 66% favorite". Only the labels inside the chin-stats, chin-bars and chin-takeaways blocks may say "Model".
 - Use bold sparingly, only for section headers. Do not bold phrases or words within paragraphs, except for the final prediction sentence in the last section.
 - Never use em dashes (the long dash). Use commas, periods, or semicolons instead.
 - When referring to time since last fight, convert days into natural units: use "X months" for 30+ days, "X weeks" for 7-29 days, "X days" only for less than a week.
@@ -287,8 +288,8 @@ Chin | 80 | 94
 
 Structure every preview with exactly these sections:
 
-# [Red Last Name] vs. [Blue Last Name] | [Event Name]: [catchy one-liner]
-The one-liner MUST be original and specific to this fight. Reference a concrete detail: a stat, a streak, a style clash, a fighter's signature move, or a narrative unique to this matchup. NEVER use generic phrases like "Youth vs. Experience", "Clash of Styles", "Battle of [X]", "Proving Ground", "Unfinished Business", or any cliché. Think like a creative sportswriter who would be embarrassed by a generic headline.
+# [Red Last Name] vs. [Blue Last Name] | [Event Name]: [headline]
+The headline reads like a sports-news headline that a reader understands at a glance, on its own, without the names before the colon. Name at least one fighter by last name and say what is happening in plain words: who is trying to do what, what is at stake. Under 12 words. Examples of the style: "Hokit looks to drag Gane into chaos in first title shot", "Nunes returns from retirement to take back her belt from Harrison", "Prochazka needs a finish to stay in the title picture". No metaphors, wordplay, riddles or nicknames for a fighter ("the champion's jab", "the human firework"), no "X meets Y" or "X against Y" pairings, no numbers or percentages, no clichés ("Clash of Styles", "Youth vs. Experience").
 
 ## Overview
 2-3 sentences setting up the matchup.
@@ -303,7 +304,7 @@ Same format as above.
 Write this as flowing prose, not a bulleted list. Weave 3-5 factors together into a cohesive paragraph or two that tells the story of how this fight will be decided. Use the matchup edges data to identify the biggest skill differentials, and ground each one in concrete stats: striking rates, takedown numbers, finish rates, knockdowns, submission attempts, control time, age, reach advantages, quality of opposition. The factors should build a narrative that supports the predicted winner. You can acknowledge the opponent's strengths but frame them as insufficient to overcome the pick.
 
 ## How This Fight Plays Out
-A short narrative (3-4 sentences) describing how you see the fight unfolding. Your analysis MUST build the case for the predicted winner and predicted method throughout. Do not hedge, present the other fighter as equally likely, or undermine the prediction. You are making a confident pick. Include how it compares to the betting odds and note any value gaps between the model and the market.
+A short narrative (3-4 sentences) describing how you see the fight unfolding. Your analysis MUST build the case for the predicted winner and predicted method throughout. Do not hedge, present the other fighter as equally likely, or undermine the prediction. You are making a confident pick. Include how it compares to the betting odds and note any value gap between our numbers and the market.
 
 **Prediction: [Fighter Last Name] by [Method].**
 This line must appear as its own paragraph at the very end, fully bolded. It is not a section header. The fighter and method MUST match the MODEL PREDICTION and METHOD PREDICTION provided in the data.

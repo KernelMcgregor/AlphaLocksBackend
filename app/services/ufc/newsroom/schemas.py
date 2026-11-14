@@ -31,6 +31,8 @@ class Article(BaseModel):
     text: str = ""
     tweets: list[str] = Field(default_factory=list)
     videos: list[str] = Field(default_factory=list)
+    #: The page's lead photo (og:image), a cover candidate for news stories.
+    image: str | None = None
     db_id: int | None = None
 
 
@@ -51,6 +53,10 @@ class Claim(BaseModel):
     published_at: dt.date | None = None
     embed_url: str | None = None
     newsworthiness: int = 3
+    #: Every fighter of ours the claim names (news desk); the claim's own fighter included.
+    mentions: list[int] = Field(default_factory=list)
+    #: The news story it was gathered for, if any.
+    topic_id: int | None = None
     #: The story's text, for the checker; not stored on the claim.
     source_text: str | None = Field(default=None, exclude=True)
 

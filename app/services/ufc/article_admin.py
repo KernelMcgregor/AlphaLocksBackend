@@ -367,3 +367,71 @@ def set_layout(db: Session, fight_id: int, layout: str | None) -> None:
         db.add(run)
     run.layout_override = layout or None
     db.commit()
+
+
+# ---------------------------------------------------------------------------
+# News desk stories
+# ---------------------------------------------------------------------------
+
+def list_news(db: Session) -> list[dict]:
+    """Stories from the last 30 days, the review queue first."""
+    from app.models.ufc import UFCNewsTopic
+    if not _newsroom_ready(db):
+        return []
+    since = dt.datetime.utcnow() - dt.timedelta(days=30)
+    rows = db.query(UFCNewsTopic).filter(UFCNewsTopic.last_seen >= since).all()
+    order = {"needs_review": 0, "published": 1, "draft": 2, "rejected": 3}
+    rows.sort(key=lambda t: (order.get(t.status, 9), -(t.last_seen or t.created_at).timestamp()))
+    return [{"id": t.id, "slug": t.slug, "title": t.title, "kind": t.kind, "status": t.status,
+             "outlets": t.outlet_count, "score": round(t.score or 0, 1), "has_image": t.image is not None,
+             "last_seen": t.last_seen.isoformat() if t.last_seen else None} for t in rows]
+
+
+def get_news(db: Session, topic_id: int) -> dict:
+    from app.models.ufc import UFCNewsTopic, UFCNewsTopicItem, UFCResearchClaim
+    t = db.get(UFCNewsTopic, topic_id)
+    if t is None:
+        raise LookupError("No such story")
+    report = json.loads(t.report or "{}")
+    claims = (db.query(UFCResearchClaim).filter(UFCResearchClaim.topic_id == t.id)
+              .order_by(UFCResearchClaim.newsworthiness.desc()).limit(80).all())
+    items = db.query(UFCNewsTopicItem).filter(UFCNewsTopicItem.topic_id == t.id).limit(60).all()
+    from app.models.ufc import UFCFighter
+    focus = json.loads(t.focus_ids or "null") or json.loads(t.fighter_ids or "[]")
+    names = {f.id: f"{f.first_name} {f.last_name}" for f in db.query(UFCFighter).filter(UFCFighter.id.in_(focus))} if focus else {}
+    return {"id": t.id, "slug": t.slug, "title": t.title, "kind": t.kind, "status": t.status,
+            "layout": t.layout, "focus": [names[i] for i in focus if i in names],
+            "content": t.content or "", "issues": report.get("issues") or [], "outlets": t.outlet_count,
+            "image": None if t.image is None else {"source": t.image_source, "page": t.image_page},
+            "headlines": [{"outlet": i.outlet, "title": i.title, "url": i.url} for i in items],
+            "claims": [{"id": c.id, "kind": c.kind, "text": c.text, "quote": c.quote, "speaker": c.speaker,
+                        "outlet": c.outlet, "url": c.source_url, "struck": c.struck,
+                        "published_at": c.published_at.isoformat() if c.published_at else None} for c in claims]}
+
+
+def set_news_status(db: Session, topic_id: int, status: str) -> None:
+    from app.models.ufc import UFCNewsTopic
+    if status not in ("published", "rejected", "needs_review"):
+        raise ValueError("Status must be published, rejected or needs_review")
+    t = db.get(UFCNewsTopic, topic_id)
+    if t is None:
+        raise LookupError("No such story")
+    t.status = status
+    if status == "published" and t.published_at is None:
+        t.published_at = _now()
+    db.commit()
+
+
+def save_news(db: Session, topic_id: int, content: str) -> None:
+    import re as _re
+    from app.models.ufc import UFCNewsTopic
+    t = db.get(UFCNewsTopic, topic_id)
+    if t is None:
+        raise LookupError("No such story")
+    if not (content or "").strip():
+        raise ValueError("Story is empty")
+    t.content = content
+    m = _re.search(r"^#\s+(.+)$", content, _re.M)
+    if m:
+        t.title = m.group(1).strip()[:300]
+    db.commit()

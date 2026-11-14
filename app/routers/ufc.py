@@ -723,6 +723,9 @@ def _build_fight(db: Session, fight_id: int):
         "name": event.name,
         "date": str(event.date),
         "location": event.location,
+        # Segment start times (ufc.com), for the article page's countdown.
+        "main_card_at": _utc_iso(event.main_card_at),
+        "prelims_at": _utc_iso(event.prelims_at),
     } if event else None
     result["prediction"] = {
         "predicted_winner": pred.predicted_winner,
@@ -786,8 +789,29 @@ def _build_fight(db: Session, fight_id: int):
     result["preview"] = {
         "content": preview.content,
         "model_used": preview.model_used,
-        "generated_at": preview.created_at.isoformat() if preview.created_at else None,
+        # When this version was written: a rewrite keeps the row, so not created_at.
+        "generated_at": (preview.updated_at or preview.created_at).isoformat()
+        if (preview.updated_at or preview.created_at) else None,
     } if preview else None
+    # Reigning undisputed champions among the two (services/ufc/champions), so the article
+    # header can mark them "C" rather than with a rank.
+    try:
+        from app.services.ufc.champions import current_champions
+        champs = set(current_champions(db).values())
+        result["champions"] = {"red": fight.red_fighter_id in champs, "blue": fight.blue_fighter_id in champs}
+    except Exception:
+        result["champions"] = {"red": False, "blue": False}
+    # Each fighter's style family (the Fighter Styles map), for the article's tale of the
+    # tape. Either may be missing: not every fighter has enough bouts to be placed.
+    try:
+        rows = (db.query(UFCFighterStyle.fighter_id, UFCStyleFamily.name)
+                .join(UFCStyleFamily, UFCStyleFamily.id == UFCFighterStyle.family)
+                .filter(UFCFighterStyle.fighter_id.in_([fight.red_fighter_id, fight.blue_fighter_id])).all())
+        fam = dict(rows)
+        result["styles"] = {"red": fam.get(fight.red_fighter_id), "blue": fam.get(fight.blue_fighter_id)}
+    except Exception:
+        db.rollback()
+        result["styles"] = {"red": None, "blue": None}
     if preview:
         # The newsroom's layout for the article page, and earlier meetings for its
         # "last time" block (services/ufc/newsroom).
@@ -825,6 +849,32 @@ def _build_fight(db: Session, fight_id: int):
         result["review"] = None
 
     return result
+
+
+@router.get("/news")
+def list_news(limit: int = Query(default=30, le=100)):
+    """Published news-desk stories, newest first (services/ufc/newsroom/desk)."""
+    from app.services.ufc.newsroom.desk.serving import news_list
+    return response_cache.cached(f"news:{limit}", with_session(news_list, limit), PREVIEWS_TTL)
+
+
+@router.get("/news/{slug}")
+def get_news_story(slug: str):
+    from app.services.ufc.newsroom.desk.serving import news_story
+    story = response_cache.cached(f"news-story:{slug}", with_session(news_story, slug), PREVIEWS_TTL)
+    if story is None:
+        raise HTTPException(status_code=404, detail="No such story")
+    return story
+
+
+@router.get("/news/{slug}/image")
+def get_news_image(slug: str, db: Session = Depends(get_db)):
+    from fastapi.responses import Response
+    from app.services.ufc.newsroom.desk.serving import news_image
+    data = news_image(db, slug)
+    if not data:
+        raise HTTPException(status_code=404, detail="No image")
+    return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
 
 
 @router.get("/previews")
@@ -918,7 +968,8 @@ def _build_previews(db: Session, limit: int, offset: int):
             "red_name": f"{red.first_name} {red.last_name}".strip() if red else None,
             "blue_name": f"{blue.first_name} {blue.last_name}".strip() if blue else None,
             "model_used": preview.model_used,
-            "generated_at": preview.created_at.isoformat() if preview.created_at else None,
+            "generated_at": (preview.updated_at or preview.created_at).isoformat()
+            if (preview.updated_at or preview.created_at) else None,
         })
     return out
 

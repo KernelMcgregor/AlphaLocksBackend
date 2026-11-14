@@ -127,3 +127,82 @@ def _tier(about: str, search_tier: str, published: dt.date | None, last_fight: d
     if published and last_fight and published <= last_fight:
         return "background"
     return "recent" if search_tier != "background" else "background"
+
+
+NEWS_SYSTEM = """You are a research assistant on an MMA news desk. You read one news story
+about a developing story and pull out what a reporter writing it up would need: what
+happened, when and where, who said what, consequences (suspensions, sentences, bookings,
+contract changes), and reactions.
+
+Return JSON: {"claims": [ ... ]}, at most 8 claims, most important first. Each claim:
+  "about": the full name of the person the claim is mainly about (one of the fighters
+           listed if it concerns them; otherwise whoever it is about)
+  "kind": one of storyline, history, injury, camp, quote, beef, report
+  "text": one or two plain sentences stating the fact, in past tense, self-contained (names,
+          when, where). No fight statistics or betting odds.
+  "quote": an exact quote from the story, copied character for character, or null. Only
+           quotes that say something specific; never generic lines.
+  "speaker": who said the quote, or null
+  "show": the show or programme named for the quote, or null
+  "reporter": the reporter or outlet credited with the information, or null
+  "venue": one of press_conference, interview, podcast, social, report
+  "newsworthiness": 1 (trivia) to 5 (the heart of the story)"""
+
+
+def same_person(name: str, fighters: list[dict]) -> int | None:
+    """The fighter `name` refers to: an exact full name, or a bare surname that only one
+    of them has. Never a surname match with a different first name."""
+    parts = name.lower().split()
+    if not parts:
+        return None
+    for f in fighters:
+        if f["name"].lower() == " ".join(parts):
+            return f["id"]
+    if len(parts) == 1:
+        hits = [f["id"] for f in fighters if f["name"].lower().split()[-1] == parts[0]]
+        return hits[0] if len(hits) == 1 else None
+    return None
+
+
+def extract_topic(meter: llm.Meter, article: Article, fighters: list[dict], topic: str,
+                  match=None) -> list[Claim]:
+    """Claims for a news story about several fighters. `fighters`: [{id, name}], the main
+    one first; `match(text) -> set[int]` finds every fighter a claim names."""
+    names = ", ".join(f["name"] for f in fighters) or "none"
+    user = f"""Story being reported: {topic}
+Fighters involved: {names}
+
+Article: {article.title or ''}
+Outlet: {article.outlet or ''}{f' | By {article.author}' if article.author else ''}{f' | {article.published_at}' if article.published_at else ''}
+
+{article.text[:12000]}"""
+    data = llm.chat_json(meter, "desk_claims", None, NEWS_SYSTEM, user, max_tokens=2400)
+    by_name = {f["name"].lower(): f["id"] for f in fighters}
+    out = []
+    for c in (data.get("claims") or [])[:8]:
+        if not isinstance(c, dict) or not (c.get("text") or "").strip():
+            continue
+        about = (c.get("about") or "").strip().lower()
+        # Full name, or a surname given alone. A different first name is a different person:
+        # "Usman Nurmagomedov" is not Umar Nurmagomedov.
+        fid = by_name.get(about) or same_person(about, fighters) or (fighters[0]["id"] if fighters else None)
+        if fid is None:
+            continue
+        quote = (c.get("quote") or "").strip().strip('"“”') or None
+        if quote:
+            quote = verbatim(quote, article.text)
+        kind = c.get("kind") if c.get("kind") in KINDS else "report"
+        if kind == "quote" and not quote:
+            continue
+        claim = Claim(
+            fighter_id=fid, tier="recent", kind=kind, text=c["text"].strip(), quote=quote,
+            speaker=(c.get("speaker") or None) if quote else None, outlet=article.outlet,
+            show=c.get("show") or None, reporter=c.get("reporter") or None,
+            venue=c.get("venue") if c.get("venue") in VENUES else "report",
+            source_url=article.url, published_at=article.published_at,
+            newsworthiness=max(1, min(5, int(c.get("newsworthiness") or 3))), source_text=article.text,
+        )
+        if match:
+            claim.mentions = sorted(match(f"{claim.text} {claim.speaker or ''}") | {fid})
+        out.append(claim)
+    return out

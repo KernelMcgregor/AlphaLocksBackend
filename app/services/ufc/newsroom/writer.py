@@ -42,7 +42,9 @@ changes the verdict.
 
 From the sourced claims, plan the article and return JSON:
   "angle": one sentence, the story of this fight that the article leads with
-  "headline_hook": a specific, original idea for the headline's one-liner
+  "headline_hook": a plain sports-news headline for this fight, naming a fighter and what is
+                   at stake (e.g. "Hokit looks to drag Gane into chaos in first title shot");
+                   no metaphors, wordplay or numbers
   "lead_claims": claim ids (numbers) the article is built around: matchup and recent tier first
   "background_claims": at most 2 background-tier ids, only if a reader needs them to understand
                         this fight (e.g. how the champion won the belt)
@@ -52,14 +54,17 @@ From the sourced claims, plan the article and return JSON:
                    an opponent's warning); the article answers each with a stat
   "embeds": up to 2 EMBED urls from the claims worth embedding (press conference clips, posts)
 
-Drop claims that are trivial, duplicated or only loosely about this fight."""
+Drop claims that are trivial, duplicated or only loosely about this fight.
+The angle and the headline idea come from the fight and the stats; never from "the model"
+(no "the model believes/says/likes"). The numbers support the story, they are not the story."""
 
 
-def plan(meter: llm.Meter, fs: FactSheet, claims: list[Claim]) -> Plan:
+def plan(meter: llm.Meter, fs: FactSheet, claims: list[Claim], background: str = "") -> Plan:
     meetings = "\n".join(f"- {m['event']} ({m['date']}): {m['winner']} by {m['method']}" for m in fs.meetings)
     user = f"""Fight: {fs.red['name']} vs {fs.blue['name']}, {fs.event_name}
 Our pick: {thesis(fs)}
 {f'Previous meetings:{chr(10)}{meetings}' if meetings else ''}
+{background}
 
 Claims:
 {claims_block(claims)}"""
@@ -105,6 +110,8 @@ NEWSROOM RULES (these add to everything above):
   "Pantoja said on The Ariel Helwani Show", "per ESPN's Marc Raimondi"). Quote only the
   exact words given in a claim's QUOTE, never paraphrase inside quotation marks, never invent
   a quote. Do not report claims that are not in the REPORTING.
+- In tables, write decisions as "U Dec", "S Dec" and "M Dec" (e.g. "U Dec W", "S Dec L"),
+  never "UD", "SD" or "MD".
 - New blocks you may use (in addition to the three above):
 
 ```chin-quote

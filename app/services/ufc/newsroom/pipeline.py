@@ -4,10 +4,12 @@
     python -m app.services.ufc.newsroom --upcoming --days 90   # every announced card
     python -m app.services.ufc.newsroom --fight 1184411916109512955 --dry-run --out /tmp/nr
     python -m app.services.ufc.newsroom --ensure-schema        # create the newsroom tables
+    python -m app.services.ufc.newsroom --retitle --days 90    # new headlines only, bodies kept
 
 Nightly runs are cheap when nothing happened: the wire search is free, stories already
-read are not re-read, and an article is only rewritten when the pick or method changed or
-new matchup/recent reporting arrived.
+read are not re-read, and a published article is written once: it is only rewritten
+when the pick flips to the other fighter (or with --force). Fights without a published
+article yet are retried when new matchup/recent reporting arrives.
 
 --dry-run reads the database and calls DeepSeek but writes nothing: claims, articles and
 the checker's report go to --out as JSON and markdown.
@@ -31,17 +33,30 @@ from app.services.ufc.newsroom.schemas import Article, Claim
 
 log = logging.getLogger(__name__)
 
-TABLES = ("ufc_news_articles", "ufc_research_claims", "ufc_article_runs", "ufc_newsroom_spend")
+TABLES = ("ufc_news_articles", "ufc_research_claims", "ufc_article_runs", "ufc_newsroom_spend",
+          "ufc_news_topics", "ufc_news_topic_items", "ufc_news_mentions", "ufc_fighter_dossiers")
+#: Columns added to newsroom tables after they first shipped: (table, column, DDL type).
+ADDED_COLUMNS = (("ufc_research_claims", "topic_id", "BIGINT"), ("ufc_research_claims", "mentions", "TEXT"),
+                 ("ufc_news_topics", "focus_ids", "TEXT"), ("ufc_news_topics", "layout", "VARCHAR(20)"))
 DATA_EDGE_PTS = 8.0  # model vs market gap at which the numbers are the story
 MAX_REVISIONS = 2
 
 
 def ensure_schema():
-    """Create the newsroom's own tables if missing. Touches no existing table."""
+    """Create the newsroom's own tables and columns if missing. Touches only newsroom
+    tables; every added column is nullable (metadata-only on Postgres)."""
+    from sqlalchemy import inspect, text
     from app.database import Base, engine
+    from app.models.ufc import UFC_SCHEMA
     import app.models.ufc  # noqa: F401  registers the models
     tables = [t for t in Base.metadata.sorted_tables if t.name in TABLES]
     Base.metadata.create_all(engine, tables=tables)
+    insp = inspect(engine)
+    prefix = f"{UFC_SCHEMA}." if UFC_SCHEMA else ""
+    for table, col, ddl in ADDED_COLUMNS:
+        if col not in {c["name"] for c in insp.get_columns(table, schema=UFC_SCHEMA)}:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE {prefix}{table} ADD COLUMN {col} {ddl}"))
     return [t.name for t in tables]
 
 
@@ -77,6 +92,7 @@ def _last_fight(db: Session, fighter_id: int) -> dt.date | None:
 
 def _to_claim(row, text: str | None) -> Claim:
     return Claim(id=row.id, fighter_id=row.fighter_id, opponent_id=row.opponent_id, tier=row.tier,
+                 mentions=json.loads(row.mentions or "[]"), topic_id=row.topic_id,
                  kind=row.kind, text=row.text, quote=row.quote, speaker=row.speaker, outlet=row.outlet,
                  show=row.show, reporter=row.reporter, venue=row.venue, source_url=row.source_url,
                  published_at=row.published_at, embed_url=row.embed_url,
@@ -85,9 +101,13 @@ def _to_claim(row, text: str | None) -> Claim:
 
 def stored_claims(db: Session, fighter_ids: list[int]) -> list[Claim]:
     from app.models.ufc import UFCNewsArticle, UFCResearchClaim
+    from sqlalchemy import or_ as _or
+    # A claim reaches a fighter's ledger when it is about them or merely names them (a
+    # news-desk claim about a brawl names both men).
+    named = [UFCResearchClaim.mentions.like(f"%{fid}%") for fid in fighter_ids]
     rows = (db.query(UFCResearchClaim, UFCNewsArticle.text)
             .outerjoin(UFCNewsArticle, UFCNewsArticle.id == UFCResearchClaim.article_id)
-            .filter(UFCResearchClaim.fighter_id.in_(fighter_ids), UFCResearchClaim.struck.is_(False))
+            .filter(_or(UFCResearchClaim.fighter_id.in_(fighter_ids), *named), UFCResearchClaim.struck.is_(False))
             .all())
     return [_to_claim(r, t) for r, t in rows]
 
@@ -170,8 +190,9 @@ def gather_claims(db: Session | None, meter: llm.Meter, fs: facts.FactSheet, per
                     UFCResearchClaim.text == c.text).first()
                 if dup:
                     continue
-                r = UFCResearchClaim(fight_id=fs.fight_id, article_id=row.id,
-                                     **c.model_dump(exclude={"id", "source_text"}))
+                mentions = sorted({c.fighter_id} | ({c.opponent_id} if c.opponent_id else set()))
+                r = UFCResearchClaim(fight_id=fs.fight_id, article_id=row.id, mentions=json.dumps(mentions),
+                                     **c.model_dump(exclude={"id", "source_text", "mentions", "topic_id"}))
                 db.add(r)
                 db.flush()
                 c.id = r.id
@@ -189,10 +210,14 @@ def gather_claims(db: Session | None, meter: llm.Meter, fs: facts.FactSheet, per
     # unless it is newer than the fighter's last fight.
     out = []
     for c in pool_claims:
+        if c.fighter_id not in (red["id"], blue["id"]):
+            # Named in someone else's story: file it under whichever of the two it names.
+            c = c.model_copy(update={"fighter_id": red["id"] if red["id"] in c.mentions else blue["id"]})
         f = red if c.fighter_id == red["id"] else blue
         other = blue if f is red else red
-        if c.opponent_id == other["id"] and (c.published_at is None or f["last_fight"] is None
-                                             or c.published_at > f["last_fight"]):
+        names_both = {red["id"], blue["id"]} <= set(c.mentions or [])
+        if (c.opponent_id == other["id"] or names_both) and (c.published_at is None or f["last_fight"] is None
+                                                             or c.published_at > f["last_fight"] or names_both):
             tier = "matchup"
         elif c.published_at and f["last_fight"] and c.published_at <= f["last_fight"]:
             tier = "background"
@@ -235,6 +260,30 @@ def select_for_editor(cs: list[Claim], fs: facts.FactSheet) -> list[Claim]:
     return front + back
 
 
+def background_for(db: Session, fs: facts.FactSheet) -> str:
+    """The news desk's memory for the editor: each fighter's dossier and the news stories
+    they appeared in over the last six months."""
+    from app.models.ufc import UFCFighterDossier, UFCNewsTopic
+    lines = []
+    try:
+        for f in (fs.red, fs.blue):
+            d = db.query(UFCFighterDossier).filter(UFCFighterDossier.fighter_id == f["id"]).first()
+            if d:
+                lines.append(f"{f['name']} so far: {d.summary}")
+        since = dt.datetime.utcnow() - dt.timedelta(days=180)
+        topics = (db.query(UFCNewsTopic).filter(UFCNewsTopic.status == "published", UFCNewsTopic.last_seen >= since,
+                                                or_(UFCNewsTopic.fighter_ids.like(f"%{fs.red['id']}%"),
+                                                    UFCNewsTopic.fighter_ids.like(f"%{fs.blue['id']}%")))
+                  .order_by(UFCNewsTopic.last_seen.desc()).limit(6).all())
+        if topics:
+            lines.append("Our recent news stories involving them: " + "; ".join(
+                f"{t.title} ({t.first_seen:%b %Y})" for t in topics))
+    except Exception as e:  # tables not there yet
+        db.rollback()
+        log.info(f"No desk background: {e}")
+    return "\n".join(lines)
+
+
 def choose_layout(fs: facts.FactSheet, cs: list[Claim], plan) -> str:
     if fs.edge_pts is not None and fs.edge_pts >= DATA_EDGE_PTS:
         return "data"
@@ -269,6 +318,11 @@ def run_fight(fight_id: int, meter: llm.Meter, persist: bool, force: bool = Fals
         name = f"{fs.red['last']} vs {fs.blue['last']}"
         preview = db.query(UFCFightPreview).filter(UFCFightPreview.fight_id == fight_id).first()
         run = db.query(UFCArticleRun).filter(UFCArticleRun.fight_id == fight_id).first() if persist else None
+        # One write per fight: a published article stays as it is unless the pick flips to
+        # the other fighter (its prediction line would be wrong) or an admin forces it.
+        if run and not force and run.status == "published" and run.pick \
+                and run.pick.split(":")[0] == fs.pick_key.split(":")[0]:
+            return {"fight_id": fight_id, "fight": name, "status": "unchanged"}
 
         cs = gather_claims(db, meter, fs, persist, log_lines)
         fresh = [c for c in cs if c.tier in ("matchup", "recent") and c.newsworthiness >= 3]
@@ -286,7 +340,7 @@ def run_fight(fight_id: int, meter: llm.Meter, persist: bool, force: bool = Fals
 
         before = meter.run_usd
         picked = select_for_editor(cs, fs)
-        plan = writer.plan(meter, fs, picked)
+        plan = writer.plan(meter, fs, picked, background_for(db, fs) if persist else "")
         draft = writer.write(meter, fs, picked, plan)
         report = checker.check(meter, draft, fs, picked)
         first_issues = list(report.issues)
@@ -389,3 +443,47 @@ def run_upcoming(days: int | None = None, top_n: int | None = None, persist: boo
         db.close()
     log.info(f"Newsroom: {len(ids)} fights")
     return run(ids, persist, force, out_dir)
+
+
+# ---------------------------------------------------------------------------
+# Headlines only
+# ---------------------------------------------------------------------------
+
+RETITLE = """You write headlines for a UFC news site. Given a fight preview, write its headline:
+a sports-news headline a reader understands at a glance. Name at least one fighter by last
+name and say what is happening in plain words: who is trying to do what, what is at stake.
+Under 12 words. Style: "Hokit looks to drag Gane into chaos in first title shot", "Nunes
+returns from retirement to take back her belt from Harrison". No metaphors, wordplay,
+riddles or nicknames for a fighter, no "X meets Y" or "X against Y" pairings, no numbers,
+no clichés, never "the model". Return only the headline."""
+
+
+def retitle(fight_ids: list[int], persist: bool) -> list[dict]:
+    """Replace the one-liner after "Red vs. Blue | Event:" in each written preview; the body
+    stays as it is. Admin-edited previews are left alone."""
+    from app.models.ufc import UFCFightPreview
+    db = SessionLocal()
+    try:
+        meter = llm.Meter(persist=persist, month_spent=llm.month_spent(db) if persist else 0.0)
+        out = []
+        for fid in fight_ids:
+            p = db.query(UFCFightPreview).filter(UFCFightPreview.fight_id == fid).first()
+            if p is None or not p.content or p.edited_at is not None:
+                continue
+            first, _, rest = p.content.partition("\n")
+            if not first.startswith("# ") or ":" not in first:
+                continue
+            prefix = first[: first.index(":", first.index("|") if "|" in first else 0) + 1]
+            new = llm.chat(meter, "retitle", fid, RETITLE, rest[:2500], max_tokens=60).strip().strip('"').rstrip(".")
+            if not new or len(new.split()) > 16:
+                continue
+            out.append({"fight_id": fid, "old": first[len(prefix):].strip(), "new": new})
+            if persist:
+                p.content = f"{prefix} {new}\n{rest}"
+                db.commit()
+        if persist and out:
+            from app.services import response_cache
+            response_cache.invalidate()
+        return out
+    finally:
+        db.close()

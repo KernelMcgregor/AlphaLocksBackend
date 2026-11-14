@@ -14,6 +14,7 @@ p.add_argument("--top-n", type=int, default=None)
 p.add_argument("--force", action="store_true", help="rewrite even when nothing changed")
 p.add_argument("--dry-run", action="store_true", help="write nothing to the database")
 p.add_argument("--out", type=Path, default=None, help="write claims, drafts and reports here")
+p.add_argument("--retitle", action="store_true", help="new headlines for written previews within --days")
 p.add_argument("--ensure-schema", action="store_true", help="create the newsroom tables")
 a = p.parse_args()
 
@@ -22,7 +23,13 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 if a.ensure_schema:
     print("Tables:", pipeline.ensure_schema())
-if a.fight:
+if a.retitle:
+    from app.database import SessionLocal
+    db = SessionLocal()
+    ids = a.fight or pipeline.newsroom_fight_ids(db, a.days, a.top_n)
+    db.close()
+    print(json.dumps(pipeline.retitle(ids, persist=not a.dry_run), indent=2))
+elif a.fight:
     print(json.dumps(pipeline.run(a.fight, persist=not a.dry_run, force=a.force, out_dir=a.out), indent=2, default=str))
 elif a.upcoming:
     print(json.dumps(pipeline.run_upcoming(a.days, a.top_n, persist=not a.dry_run, force=a.force, out_dir=a.out),

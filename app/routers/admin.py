@@ -543,6 +543,54 @@ def admin_newsroom_run(fight_id: int, background_tasks: BackgroundTasks):
     return _start_task(background_tasks, f"Newsroom ({fight_id})", job)
 
 
+class _NewsStatusIn(_BaseModel):
+    status: str
+
+
+class _NewsContentIn(_BaseModel):
+    content: str
+
+
+@router.get("/news", dependencies=[Depends(require_admin_key)])
+def admin_list_news():
+    """News-desk stories from the last 30 days, the review queue first."""
+    from app.services.ufc import article_admin
+    return _article_call(article_admin.list_news)
+
+
+@router.get("/news/{topic_id}", dependencies=[Depends(require_admin_key)])
+def admin_get_news(topic_id: int):
+    from app.services.ufc import article_admin
+    return _article_call(article_admin.get_news, topic_id)
+
+
+@router.put("/news/{topic_id}/status", dependencies=[Depends(require_admin_key)])
+def admin_news_status(topic_id: int, body: _NewsStatusIn):
+    """Approve (published), kill (rejected) or send back to the queue."""
+    from app.services.ufc import article_admin
+    _article_call(article_admin.set_news_status, topic_id, body.status)
+    return _published()
+
+
+@router.put("/news/{topic_id}", dependencies=[Depends(require_admin_key)])
+def admin_save_news(topic_id: int, body: _NewsContentIn):
+    from app.services.ufc import article_admin
+    _article_call(article_admin.save_news, topic_id, body.content)
+    return _published()
+
+
+@router.post("/news/{topic_id}/rewrite", dependencies=[Depends(require_admin_key)])
+def admin_rewrite_news(topic_id: int, background_tasks: BackgroundTasks):
+    """Research and rewrite the story from its own coverage."""
+    from app.services.ufc.newsroom.desk.desk import rewrite
+
+    def job():
+        result = rewrite(topic_id)
+        _published()
+        return result
+    return _start_task(background_tasks, f"News rewrite ({topic_id})", job)
+
+
 @router.post("/articles/{fight_id}/cover", dependencies=[Depends(require_admin_key)])
 def admin_upload_cover(fight_id: int, body: _ImageIn):
     from app.services.ufc import article_admin

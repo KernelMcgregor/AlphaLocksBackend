@@ -22,13 +22,21 @@ from app.services.ufc.newsroom.facts import FactSheet
 from app.services.ufc.newsroom.schemas import CheckReport, Claim
 
 FENCE = re.compile(r"```([\w-]*)\n([\s\S]*?)```")
-QUOTED = re.compile(r"[\"“]([^\"“”]{12,}?)[\"”]")
+#: A quotation: on one line, starting and ending on a word, so a closing mark in one
+#: paragraph is never paired with the opening mark of the next.
+QUOTED = re.compile(r"[\"“](?=\S)([^\"“”\n]{12,}?)(?<=\S)[\"”]")
 PRED = re.compile(r"\*\*Prediction:\s*(.+?)\s+by\s+(.+?)\.?\*\*", re.I)
 METHOD_WORDS = {
     "KO/TKO": ("ko", "tko", "knockout", "ko/tko", "stoppage"),
     "Submission": ("submission", "sub"),
     "Decision": ("decision",),
 }
+#: "the model", "our model", "model gives"... in the prose. Words like "role model" aside.
+MODEL_TALK = re.compile(r"\b(?:the|our|a|this)\s+(?:\w+\s+)?model\b|\bmodel(?:'s)?\s+(?:says|gives|grades|graded|likes|sees|believes|has|makes|projects|favou?rs|picks|rates)\b", re.I)
+#: The story citing its own data source ("per our database").
+DATA_TALK = re.compile(r"\b(?:our|the) (?:database|data|stats data|records)\b|\bper our\b", re.I)
+#: An outlet credit in a news story ("per Yahoo Sports", "according to MMA Fighting").
+CREDIT = re.compile(r"\b(?:per|according to)\s+(?:the\s+)?[A-Z]")
 #: Numbers that are not stats: event numbers, years, dates, small counts.
 NOT_STATS = [
     re.compile(r"\bUFC\s+\d+"),
@@ -62,14 +70,17 @@ def _allowed(v: float, allowed: set[float]) -> bool:
     return any(abs(v - a) <= 0.051 for a in allowed)
 
 
-def check_code(md: str, fs: FactSheet, claims: list[Claim]) -> tuple[list[str], list[str]]:
-    """(hard issues, unmatched numbers for the reviewer)."""
+def check_code(md: str, fs: FactSheet, claims: list[Claim], news: bool = False) -> tuple[list[str], list[str]]:
+    """(hard issues, unmatched numbers for the reviewer). `news`: a news-desk story, which
+    has no prediction line."""
     issues, unmatched = [], []
     prose, blocks = _strip_non_prose(md)
 
-    # 1. Prediction line
+    # 1. Prediction line (previews only)
     m = PRED.search(md)
-    if not m:
+    if news:
+        pass
+    elif not m:
         issues.append("The bold '**Prediction: Name by Method.**' line is missing.")
     else:
         who, how = m.group(1).lower(), m.group(2).lower()
@@ -78,7 +89,42 @@ def check_code(md: str, fs: FactSheet, claims: list[Claim]) -> tuple[list[str], 
         if fs.method and not any(w in how for w in METHOD_WORDS.get(fs.method, (fs.method.lower(),))):
             issues.append(f"The prediction line says '{m.group(2)}' but the model's method is {fs.method}.")
 
-    # 2. Numbers
+    # 2. The model is never part of the story: not in the headline or the prose (the data
+    # blocks may label their numbers "Model").
+    for line in prose.splitlines():
+        if MODEL_TALK.search(line) and not PRED.search(line):
+            where = "headline" if line.lstrip().startswith("#") else "text"
+            issues.append(f"The {where} talks about the model (\"{line.strip()[:90]}\"). Never mention the model; "
+                          f"say what the numbers or the stats show instead.")
+            break
+
+    if news:
+        for line in prose.splitlines():
+            if DATA_TALK.search(line):
+                issues.append(f"Don't cite our own data (\"{line.strip()[:80]}\"); state the fact plainly.")
+                break
+        credits = len(CREDIT.findall(QUOTED.sub(" ", prose)))
+        if credits > 2:
+            issues.append(f"The story credits outlets {credits} times (\"per ...\", \"according to ...\"). "
+                          f"Widely reported facts are stated plainly; keep at most two credits, for exclusives.")
+
+    # 3. News stories: records ("9-4", "13-4-0") and ranks ("#4", "No. 5") must appear in
+    # our data as written; they are small numbers, which the general rule below lets
+    # through. (Previews derive records like "5-0 in the UFC" from the fight list.)
+    facts_text = fs.stats_prompt or ""
+    if news:
+        fact_ranks = set(re.findall(r"(?:#|No\.\s?|rank(?:ed)?\s)(\d+)", facts_text, re.I))
+        bare = QUOTED.sub(" ", prose) + "\n" + "\n".join(b for lang, b in blocks if lang in ("chin-stats", "chin-takeaways"))
+        for rec in set(re.findall(r"(?<![\w.-])\d{1,2}-\d{1,2}(?:-\d{1,2})?(?![\w-])", bare)):
+            if rec not in facts_text and f"{rec}-0" not in facts_text:
+                issues.append(f"The record or score {rec} is not in our stats data; use the one from the stats data or drop it.")
+        for r in set(re.findall(r"(?:#|No\.\s?)(\d+)\b", bare)):
+            if r not in fact_ranks:
+                issues.append(f"The rank #{r} is not in our stats data; use the rank from the stats data or drop it.")
+    if sum(1 for lang, _ in blocks if lang == "chin-quote") > 2:
+        issues.append("Use at most two chin-quote pull quotes.")
+
+    # 3b. Numbers
     news_text = " ".join(_norm(c.source_text or "") + " " + _norm(c.text) for c in claims)
     data_blocks = "\n".join(b for lang, b in blocks if lang in ("chin-stats", "chin-bars", "chin-takeaways"))
     for raw in _numbers(prose) + _numbers(data_blocks):
@@ -91,7 +137,7 @@ def check_code(md: str, fs: FactSheet, claims: list[Claim]) -> tuple[list[str], 
         else:
             unmatched.append(raw)
 
-    # 3. Quotes in prose and pull quotes
+    # 4. Quotes in prose and pull quotes
     quotes = [q for q in QUOTED.findall(prose) if len(q.split()) >= 3]
     for lang, body in blocks:
         if lang == "chin-quote":
@@ -117,7 +163,7 @@ def check_code(md: str, fs: FactSheet, claims: list[Claim]) -> tuple[list[str], 
             if owner.speaker.split()[-1] not in para:
                 issues.append(f"The quote \"{q[:50]}\" must name its speaker, {owner.speaker}, in the same paragraph.")
 
-    # 4. Embeds
+    # 5. Embeds
     found = {c.embed_url for c in claims if c.embed_url}
     for lang, body in blocks:
         if lang in ("chin-video", "chin-tweet") and body.strip() and body.strip() not in found:
@@ -154,9 +200,11 @@ Return JSON:
                  from the stats data (empty list if all are fine)"""
 
 
-def review(meter: llm.Meter, md: str, fs: FactSheet, claims: list[Claim], unmatched: list[str]) -> dict:
+def review(meter: llm.Meter, md: str, fs: FactSheet, claims: list[Claim], unmatched: list[str],
+           news_title: str | None = None) -> dict:
     from app.services.ufc.newsroom.writer import claims_block, thesis
-    user = f"""MODEL PICK: {thesis(fs)}
+    head = f"NEWS STORY (no pick; treat argues_for_pick as true): {news_title}" if news_title else f"MODEL PICK: {thesis(fs)}"
+    user = f"""{head}
 
 STATS DATA:
 {fs.stats_prompt}
@@ -171,11 +219,11 @@ ARTICLE:
     return llm.chat_json(meter, "review", fs.fight_id, REVIEW, user, max_tokens=1200)
 
 
-def check(meter: llm.Meter, md: str, fs: FactSheet, claims: list[Claim]) -> CheckReport:
-    issues, unmatched = check_code(md, fs, claims)
-    rv = review(meter, md, fs, claims, unmatched) if not issues else {}
+def check(meter: llm.Meter, md: str, fs: FactSheet, claims: list[Claim], news_title: str | None = None) -> CheckReport:
+    issues, unmatched = check_code(md, fs, claims, news=news_title is not None)
+    rv = review(meter, md, fs, claims, unmatched, news_title) if not issues else {}
     if rv:
-        if rv.get("argues_for_pick") is False:
+        if rv.get("argues_for_pick") is False and news_title is None:
             issues.append(f"The article must argue for {fs.pick_name} by {fs.method}; it hedges or leans "
                           f"the other way. Make every section build that case.")
         ids = {f"C{c.id}" for c in claims}

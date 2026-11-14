@@ -1,0 +1,60 @@
+name: News desk
+
+# Trending UFC stories (app/services/ufc/newsroom/desk): sweeps the day's headlines from
+# free sources, groups them into stories, links our fighters, and researches and writes
+# the top three. A story publishes only when the fact-checker passes and two or more
+# outlets reported it; the rest wait in the admin News desk. Spend shares the newsroom's
+# monthly cap (ufc_newsroom_spend).
+on:
+  schedule:
+    - cron: '10 13 * * *'   # US morning
+    - cron: '10 23 * * *'   # US evening
+  workflow_dispatch:
+    inputs:
+      top:
+        description: 'Stories to write'
+        default: '3'
+
+concurrency:
+  group: articles
+  cancel-in-progress: false
+
+jobs:
+  desk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      # Light set: the scrapers' stack plus scikit-learn (clustering) and the picture
+      # checks (Pillow, OpenCV) for covers. No model stack.
+      - name: Install dependencies
+        run: >-
+          pip install "sqlalchemy>=2.0,<2.1" psycopg2-binary pydantic pydantic-settings
+          python-dotenv requests httpx beautifulsoup4 numpy pandas "openai>=1.30.0"
+          trafilatura googlenewsdecoder scikit-learn==1.8.0 Pillow "opencv-python-headless>=4.10,<5"
+
+      - name: Open audit-log entry
+        id: audit
+        run: >-
+          echo "id=$(python -m app.services.audit start --action 'News Desk' --source github
+          --actor '${{ github.actor }}'
+          --url '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          2>/dev/null)" >> "$GITHUB_OUTPUT"
+
+      - name: Find and write the day's stories
+        run: >-
+          python -c "from app.services.ufc.newsroom.pipeline import ensure_schema; ensure_schema()" &&
+          python -m app.services.ufc.newsroom.desk --top '${{ github.event.inputs.top || '3' }}'
+
+      - name: Close audit-log entry
+        if: always() && steps.audit.outputs.id != ''
+        run: python -m app.services.audit finish --id '${{ steps.audit.outputs.id }}' --status '${{ job.status }}'

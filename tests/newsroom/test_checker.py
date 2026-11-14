@@ -26,8 +26,8 @@ CLAIM = Claim(id=7, fighter_id=2, tier="matchup", kind="beef", text="Kape mocked
 GOOD = """# Van vs. Kape | UFC 336: Confidence Check
 
 ## Overview
-Kape told MMA Junkie that "He has delusional confidence, and I am going to expose it." The model
-has Van at 64.5% and a decision at 54%. Van landed 38% of his strikes against Taira.
+Kape told MMA Junkie that "He has delusional confidence, and I am going to expose it." The numbers
+make Van a 64.5% favorite and a decision 54% likely. Van landed 38% of his strikes against Taira.
 
 ```chin-quote
 He has delusional confidence, and I am going to expose it
@@ -118,3 +118,47 @@ def test_inch_marks_are_not_quotes():
     md = GOOD.replace("Van landed 38%", 'Kape stands 5\' 5" with a 68" reach, and Van landed 38%')
     issues, _ = checker.check_code(md, sheet(allowed=sheet().allowed | {68.0}), [CLAIM])
     assert not any("not found in any source" in i for i in issues)
+
+
+def test_the_model_is_not_the_story():
+    for md in (GOOD.replace("Confidence Check", "The Model Believes Van"),
+               GOOD.replace("The numbers\nmake Van", "The model\nmakes Van")):
+        issues, _ = checker.check_code(md, sheet(), [CLAIM])
+        assert any("model" in i.lower() and "never mention" in i.lower() for i in issues), md[:80]
+    # The data blocks may label their numbers.
+    md = GOOD.replace("**Prediction", "```chin-stats\n64.5% | Model: Van wins | red\n```\n\n**Prediction")
+    assert checker.check_code(md, sheet(), [CLAIM])[0] == []
+
+
+def test_quotes_never_span_paragraphs():
+    md = GOOD.replace("## Overview", 'He called it "a war tonight".\n\nThe next part says nothing.\n\n"Another line here" closes it.\n\n## Overview')
+    found = checker.QUOTED.findall(md)
+    assert "a war tonight" in found and "Another line here" in found
+    assert not any("\n" in q for q in found)
+
+
+def test_records_and_ranks_must_come_from_our_data():
+    fs = sheet(stats_prompt="- Norma Dumont: record 13-4-0; #5 in our women's bantamweight rankings")
+    ok = GOOD.replace("The numbers\nmake Van", "Dumont, 13-4, is No. 5. The numbers\nmake Van")
+    assert not [i for i in checker.check_code(ok, fs, [CLAIM], news=True)[0] if "record" in i or "rank" in i]
+    bad = GOOD.replace("The numbers\nmake Van", "Dumont went 9-4 and was ranked #4. The numbers\nmake Van")
+    issues = checker.check_code(bad, fs, [CLAIM], news=True)[0]
+    assert any("9-4" in i for i in issues) and any("#4" in i for i in issues)
+
+
+def test_at_most_two_pull_quotes():
+    block = "```chin-quote\nHe has delusional confidence, and I am going to expose it\nManel Kape | MMA Junkie | October 2026 | x\n```\n\n"
+    md = GOOD.replace("**Prediction", block * 2 + "**Prediction")
+    assert any("at most two" in i for i in checker.check_code(md, sheet(), [CLAIM])[0])
+
+
+def test_news_never_cites_our_own_data():
+    md = GOOD.replace("The numbers\nmake Van", "Per our database, Van")
+    assert any("our own data" in i for i in checker.check_code(md, sheet(), [CLAIM], news=True)[0])
+
+
+def test_news_keeps_outlet_credits_for_exclusives():
+    few = "Dumont left, per Sherdog.\n\nNunes reacted, according to Yahoo Sports."
+    many = few + "\n\nShe chose boxing, per MMA Fighting."
+    assert not [i for i in checker.check_code(few, sheet(), [CLAIM], news=True)[0] if "credits" in i]
+    assert any("credits outlets 3 times" in i for i in checker.check_code(many, sheet(), [CLAIM], news=True)[0])
