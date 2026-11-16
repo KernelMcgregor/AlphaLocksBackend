@@ -86,3 +86,24 @@ def test_a_different_first_name_is_a_different_person():
     assert same_person("Usman Nurmagomedov", fighters) is None
     assert same_person("Umar Nurmagomedov", fighters) == 3
     assert same_person("Dvalishvili", fighters) == 1
+
+
+def test_each_development_is_its_own_story(monkeypatch):
+    heads = ["Usman Nurmagomedov sentenced to six months", "Usman jailed in Abu Dhabi",
+             "Merab calls for Usman's release", "Merab Dvalishvili asks Abu Dhabi to free Usman",
+             "Usman sentencing: six months"]
+    cl = topics.Cluster(items=[item(h, f"o{i}") for i, h in enumerate(heads)], fighter_ids=[1, 2],
+                        outlets=[f"o{i}" for i in range(5)], newest=TODAY, score=10)
+    reply = {"stories": [
+        {"candidate": 0, "headlines": [0, 1], "title": "Usman jailed", "kind": "incident", "newsworthy": True,
+         "running": None, "merge_into": None},
+        {"candidate": 0, "headlines": [2, 3], "title": "Merab asks for release", "kind": "press_conference",
+         "newsworthy": True, "running": "R7", "merge_into": None},
+    ]}
+    monkeypatch.setattr(labeler.llm, "chat_json", lambda *a, **k: reply)
+    devs, labs = labeler.label(None, [cl], {1: "Usman Nurmagomedov", 2: "Merab Dvalishvili"}, [(7, "Merab asks")])
+    assert [lab["title"] for lab in labs] == ["Usman jailed", "Merab asks for release"]
+    assert len(devs[0].items) == 3                    # the unplaced headline went with the first
+    assert [i.title for i in devs[1].items] == heads[2:4]
+    assert labs[0]["running"] is None and labs[1]["running"] == 7
+    assert devs[1].score < devs[0].score

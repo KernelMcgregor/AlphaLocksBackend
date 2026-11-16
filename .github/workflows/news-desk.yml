@@ -2,18 +2,20 @@ name: News desk
 
 # Trending UFC stories (app/services/ufc/newsroom/desk): sweeps the day's headlines from
 # free sources, groups them into stories, links our fighters, and researches and writes
-# the top three. A story publishes only when the fact-checker passes and two or more
-# outlets reported it; the rest wait in the admin News desk. Spend shares the newsroom's
-# monthly cap (ufc_newsroom_spend).
+# the top five new developments (each development is its own story; more coverage of one
+# already running only attaches to it). A story publishes only when the fact-checker
+# passes and two or more outlets reported it; the rest wait in the admin News desk.
+# Spend shares the newsroom's monthly cap (ufc_newsroom_spend).
 on:
   schedule:
-    - cron: '10 13 * * *'   # US morning
-    - cron: '10 23 * * *'   # US evening
+    # GitHub runs scheduled jobs late, and sometimes not at all, under load (worst on
+    # the hour); off-peak slots, three a day, keep a dropped run from costing half a day.
+    - cron: '37 2,13,19 * * *'   # 9:37pm, 8:37am, 2:37pm US Eastern
   workflow_dispatch:
     inputs:
       top:
         description: 'Stories to write'
-        default: '3'
+        default: '5'
 
 concurrency:
   group: articles
@@ -53,7 +55,7 @@ jobs:
       - name: Find and write the day's stories
         run: >-
           python -c "from app.services.ufc.newsroom.pipeline import ensure_schema; ensure_schema()" &&
-          python -m app.services.ufc.newsroom.desk --top '${{ github.event.inputs.top || '3' }}'
+          python -m app.services.ufc.newsroom.desk --top '${{ github.event.inputs.top || '5' }}'
 
       - name: Close audit-log entry
         if: always() && steps.audit.outputs.id != ''

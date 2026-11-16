@@ -58,7 +58,7 @@ BIO_LABEL_TO_FIELD = {
 PROFILE_SENTINEL_FIELDS = ("image_url", "birthplace", "status")
 
 #: Substrings identifying UFC.com's "no portrait" stand-ins. See extract_profile.
-PLACEHOLDER_IMAGE_MARKERS = ("no-profile-image", "SHADOW_Fighter")
+PLACEHOLDER_IMAGE_MARKERS = ("no-profile-image", "SHADOW_Fighter", "Shadow-wom", "silhouette", "DWCS-Hero")
 
 #: Country name as UFC.com spells it -> ISO 3166-1 alpha-2. Hand-maintained rather than
 #: pulling in pycountry for one lookup; the roster spans a bounded set of countries and
@@ -122,6 +122,20 @@ def _fighter_slug(first_name: str, last_name: str) -> str:
     return re.sub(r"-+", "-", name).strip("-")
 
 
+def image_names_fighter(src: str, first_name: str | None, last_name: str | None) -> bool:
+    """Whether a portrait URL's path names this fighter ('LESNAR_BROCK.png', 'Matt_Hughes/').
+
+    UFC.com portraits are filed under the athlete's name. An image that names nobody in
+    the fighter's name is someone else's: on a page with no hero portrait, the first image
+    in the page body is an opponent's headshot from the fight-results list.
+    """
+    from urllib.parse import unquote
+    fold = lambda t: re.sub(r"[^a-z]", "", _normalize(t or ""))  # noqa: E731
+    path = fold(unquote(unquote(src)).split("?")[0])
+    words = [fold(w) for w in re.split(r"[\s\-']+", f"{first_name or ''} {last_name or ''}")]
+    return any(len(w) >= 3 and w in path for w in words)
+
+
 # ---------------------------------------------------------------------------
 # Parsing
 # ---------------------------------------------------------------------------
@@ -172,7 +186,7 @@ def parse_birth_country(birthplace: str) -> str | None:
     return birthplace.split(",")[-1].strip() or None
 
 
-def extract_profile(soup: BeautifulSoup) -> dict:
+def extract_profile(soup: BeautifulSoup, first_name: str | None = None, last_name: str | None = None) -> dict:
     """Build the set of UFCFighter field updates for one athlete page."""
     bio = parse_bio(soup)
     updates = {}
@@ -196,10 +210,14 @@ def extract_profile(soup: BeautifulSoup) -> dict:
                 updates["country_code"] = iso
 
     # Try multiple selectors — UFC.com layout varies
-    img = (
-        soup.find("img", class_="hero-profile__image")
-        or soup.select_one("#block-mainpagecontent img")
-    )
+    # The hero portrait is the athlete's own. The page-body fallback only counts when the
+    # image is filed under their name: otherwise it is an opponent's headshot from the
+    # results list (Heath Herring was showing Brock Lesnar).
+    img = soup.find("img", class_="hero-profile__image")
+    if img is None:
+        body = soup.select_one("#block-mainpagecontent img")
+        if body is not None and image_names_fighter(body.get("src") or "", first_name, last_name):
+            img = body
     if img and img.get("src"):
         src = img["src"]
         # UFC.com has two stand-ins for an athlete with no portrait, and both were being
@@ -295,7 +313,7 @@ def scrape_profiles(limit: int = 0, recent_years: int = 0, dry_run: bool = False
                 not_found.append(f"{name} ({slug}) -> {resp.status_code}")
                 continue
 
-            updates = extract_profile(BeautifulSoup(resp.text, "html.parser"))
+            updates = extract_profile(BeautifulSoup(resp.text, "html.parser"), fighter.first_name, fighter.last_name)
             # Fields corrected by hand in the admin dashboard outrank ufc.com.
             for field in fighter.locked():
                 updates.pop(field, None)

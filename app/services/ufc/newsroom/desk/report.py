@@ -108,7 +108,7 @@ def news_facts(db: Session, fighter_ids: list[int]) -> FactSheet:
             continue
         rank = db.query(UFCFighterRanking).filter(UFCFighterRanking.fighter_id == fid).order_by(UFCFighterRanking.rank).first()
         standing = (f"current UFC {champs[fid].replace('_', ' ')} champion" if fid in champs
-                    else f"#{rank.rank} in the {rank.weight_class.replace('_', ' ').replace('w ', 'women s ')} rankings" if rank else "unranked")
+                    else f"#{rank.rank} in the {rank.weight_class.replace('_', ' ').replace('w ', 'women s ')} rankings" if rank and rank.rank <= 15 else "unranked")
         fights = (db.query(UFCFight, UFCEvent).join(UFCEvent, UFCEvent.id == UFCFight.event_id)
                   .filter(or_(UFCFight.red_fighter_id == fid, UFCFight.blue_fighter_id == fid))
                   .order_by(UFCEvent.date.desc()).limit(6).all())

@@ -46,6 +46,14 @@ class UFCFighter(TimestampMixin, Base):
     image_mime: Mapped[str | None] = mapped_column(String(40), nullable=True)
     image_fetched_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
+    #: Right-facing portrait for the blue corner, filled by services/ufc/fighter_poses.py
+    #: from ufc.com event pages (`_R_` files; athlete profiles carry only the `_L_` pose).
+    #: The bytes are deferred so roster/list queries never pull them.
+    image_right_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    image_right_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    image_right_mime: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    image_right_fetched_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
     # -- Bio, scraped from ufc.com athlete pages (see services/ufc/ufc_profile_scraper.py) --
     #: Raw UFC.com text, e.g. "Rochester, United States" — sometimes just "Germany".
     birthplace: Mapped[str | None] = mapped_column(String(200), nullable=True)
@@ -61,6 +69,10 @@ class UFCFighter(TimestampMixin, Base):
     #: JSON list of field names edited by hand in the admin dashboard. The scrapers skip
     #: these, so a corrected nationality is not reverted by the next ufc.com pass.
     locked_fields: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    @property
+    def has_right_image(self) -> bool:
+        return bool(self.image_right_url)
 
     def locked(self) -> set[str]:
         import json
@@ -816,6 +828,17 @@ RANKING_HISTORY_COLS = [
 #: 3D map position on ufc_fighter_style, added after the table shipped. Nullable with no
 #: default, so on Postgres the ALTER is metadata-only.
 STYLE_3D_COLS = [("x3", "FLOAT"), ("y3", "FLOAT"), ("z3", "FLOAT")]
+
+
+#: Right-facing portrait columns on ufc_fighters (services/ufc/fighter_poses.py). All
+#: nullable with no default -> metadata-only ALTERs on Postgres. "BYTEA" is swapped for
+#: "BLOB" on SQLite.
+FIGHTER_POSE_COLS = [
+    ("image_right_url", "VARCHAR(500)"),
+    ("image_right_data", "BYTEA"),
+    ("image_right_mime", "VARCHAR(40)"),
+    ("image_right_fetched_at", "TIMESTAMP"),
+]
 
 
 FIGHTER_BIO_COLS = [

@@ -12,7 +12,7 @@ from app.config import settings
 from app.database import Base, engine
 from app.models import *  # noqa: F401, F403 — ensure all models are registered
 from app.models.ufc import (
-    FIGHTER_BIO_COLS, GLICKO_META_COLS, METHOD_JOINT_COLS, PROP_PRICE_COLS, RANKING_HISTORY_COLS,
+    FIGHTER_BIO_COLS, FIGHTER_POSE_COLS, GLICKO_META_COLS, METHOD_JOINT_COLS, PROP_PRICE_COLS, RANKING_HISTORY_COLS,
 )
 from app.routers import admin, predictions, ufc
 
@@ -36,6 +36,11 @@ def run_migrations():
         for col, ddl in FIGHTER_BIO_COLS:
             if col not in fighter_existing:
                 conn.execute(f"ALTER TABLE ufc_fighters ADD COLUMN {col} {ddl}")
+        # Right-facing portrait (services/ufc/fighter_poses.py), idempotent
+        if fighter_existing:
+            for col, ddl in FIGHTER_POSE_COLS:
+                if col not in fighter_existing:
+                    conn.execute(f"ALTER TABLE ufc_fighters ADD COLUMN {col} {ddl.replace('BYTEA', 'BLOB')}")
         # 011: card_position on ufc_fights (idempotent)
         fight_existing = {row[1] for row in conn.execute("PRAGMA table_info(ufc_fights)").fetchall()}
         if fight_existing and "card_position" not in fight_existing:
@@ -138,6 +143,10 @@ def run_migrations():
             for col, ddl in FIGHTER_BIO_COLS:
                 if col not in existing:
                     conn.execute(text(f"ALTER TABLE ufc.ufc_fighters ADD COLUMN {col} {ddl}"))
+            # Right-facing portrait (services/ufc/fighter_poses.py). Nullable, no default
+            # -> metadata-only, no rewrite of the roster.
+            for col, ddl in FIGHTER_POSE_COLS:
+                conn.execute(text(f"ALTER TABLE ufc.ufc_fighters ADD COLUMN IF NOT EXISTS {col} {ddl}"))
             # 009: widen country_code for ISO 3166-2 subdivisions ("GB-ENG"). Widening a
             # varchar is metadata-only in Postgres, so no rewrite of the roster. SQLite
             # does not enforce varchar length at all, hence no matching branch above.

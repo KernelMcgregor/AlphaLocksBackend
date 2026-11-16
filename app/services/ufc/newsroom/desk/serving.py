@@ -64,7 +64,8 @@ def _star_power(db: Session, ids: set[int]) -> dict[int, float]:
     out: dict[int, float] = {}
     for f, r in (db.query(UFCFighterRanking.fighter_id, func.min(UFCFighterRanking.rank))
                  .filter(UFCFighterRanking.fighter_id.in_(ids)).group_by(UFCFighterRanking.fighter_id)):
-        out[f] = 0.6 if r is not None and r <= 5 else 0.3
+        if r is not None and r <= 15:
+            out[f] = 0.6 if r <= 5 else 0.3
     for f in current_champions(db).values():
         if f in ids:
             out[f] = 1.0
@@ -141,7 +142,7 @@ def _card(db: Session, f, champs: dict, today: dt.date) -> dict:
                     "debut": str(f.octagon_debut) if f.octagon_debut else None},
             "record": f"{f.wins}-{f.losses}-{f.draws}", "champion": f.id in champs,
             "division": (champs.get(f.id) or (rank.weight_class if rank else None) or "").replace("_", " ") or None,
-            "rank": rank.rank if rank else None, "last": last, "next": nxt, "skills": skills, "stats": stats}
+            "rank": rank.rank if rank and rank.rank <= 15 else None, "last": last, "next": nxt, "skills": skills, "stats": stats}
 
 
 def news_story(db: Session, slug: str) -> dict | None:

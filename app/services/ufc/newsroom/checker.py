@@ -116,7 +116,7 @@ def check_code(md: str, fs: FactSheet, claims: list[Claim], news: bool = False) 
         fact_ranks = set(re.findall(r"(?:#|No\.\s?|rank(?:ed)?\s)(\d+)", facts_text, re.I))
         bare = QUOTED.sub(" ", prose) + "\n" + "\n".join(b for lang, b in blocks if lang in ("chin-stats", "chin-takeaways"))
         for rec in set(re.findall(r"(?<![\w.-])\d{1,2}-\d{1,2}(?:-\d{1,2})?(?![\w-])", bare)):
-            if rec not in facts_text and f"{rec}-0" not in facts_text:
+            if not re.search(rf"(?<![\d-]){re.escape(rec)}(?:-0)?(?![\d-])", facts_text):
                 issues.append(f"The record or score {rec} is not in our stats data; use the one from the stats data or drop it.")
         for r in set(re.findall(r"(?:#|No\.\s?)(\d+)\b", bare)):
             if r not in fact_ranks:

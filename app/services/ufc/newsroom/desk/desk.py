@@ -5,9 +5,10 @@
     python -m app.services.ufc.newsroom.desk --dry-run --discover-only     # just the story list
 
 A story publishes only when the checker passes and at least two different outlets
-reported it; otherwise it waits in the admin queue. A story already running is updated,
-not duplicated: new coverage attaches to it, and it is rewritten only when enough new
-outlets have joined.
+reported it; otherwise it waits in the admin queue. Every development is its own story
+(an attack, the sentencing, a statement about it): more coverage of a development the
+site already ran attaches to that story, which is never rewritten by the desk, and a
+new development about the same people gets a new story.
 """
 
 from __future__ import annotations
@@ -42,9 +43,9 @@ def discover(db, meter: llm.Meter, top: int = 3, persist: bool = False):
     important = set(current_champions(db).values()) | {
         f for (f,) in db.query(UFCFighterRanking.fighter_id).filter(UFCFighterRanking.rank <= 5)}
     clusters = topics.cluster(items, fighters, important)
-    labels = labeler.label(meter, clusters, matcher.names)
-    # A few spare picks: a story already running with little new coverage is skipped.
-    return matcher, clusters, labels, labeler.pick(clusters, labels, top + 3)
+    devs, labels = labeler.label(meter, clusters, matcher.names, store.running(db))
+    # Spare picks: developments the site is already running are skipped.
+    return matcher, devs, labels, labeler.pick(devs, labels, top + 6)
 
 
 def write_one(db, meter, matcher, cluster, lab, persist: bool, topic=None) -> dict:
@@ -75,6 +76,7 @@ def write_one(db, meter, matcher, cluster, lab, persist: bool, topic=None) -> di
 
 
 def run(persist: bool = False, top: int = 3, out_dir: Path | None = None, discover_only: bool = False) -> dict:
+    from app.models.ufc import UFCNewsTopic
     db = SessionLocal()
     try:
         meter = llm.Meter(persist=persist, month_spent=llm.month_spent(db) if persist else 0.0)
@@ -87,15 +89,18 @@ def run(persist: bool = False, top: int = 3, out_dir: Path | None = None, discov
             for cluster, lab in picks:
                 if written >= top:
                     break
-                topic = store.match_topic(db, cluster) if persist else None
+                # Already running: the labeler's call, or near-identical headlines as a guard.
+                topic = db.get(UFCNewsTopic, lab["running"]) if lab.get("running") else None
+                if topic is None and persist:
+                    topic = store.match_topic(db, cluster, same_only=True)
                 if topic is not None:
-                    if topic.status == "rejected" or store.new_outlets(db, topic, cluster) < store.REWRITE_NEW_OUTLETS:
+                    if persist:
                         store.attach_items(db, topic, cluster)
                         db.commit()
-                        summary["updated"].append({"slug": topic.slug, "title": topic.title})
-                        continue
+                    summary["updated"].append({"slug": topic.slug, "title": topic.title})
+                    continue
                 try:
-                    story = write_one(db, meter, matcher, cluster, lab, persist, topic)
+                    story = write_one(db, meter, matcher, cluster, lab, persist)
                 except llm.BudgetExceeded as e:
                     log.warning(str(e))
                     break

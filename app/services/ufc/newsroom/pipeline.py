@@ -450,10 +450,11 @@ def run_upcoming(days: int | None = None, top_n: int | None = None, persist: boo
 # ---------------------------------------------------------------------------
 
 RETITLE = """You write headlines for a UFC news site. Given a fight preview, write its headline:
-a sports-news headline a reader understands at a glance. Name at least one fighter by last
-name and say what is happening in plain words: who is trying to do what, what is at stake.
-Under 12 words. Style: "Hokit looks to drag Gane into chaos in first title shot", "Nunes
-returns from retirement to take back her belt from Harrison". No metaphors, wordplay,
+a sports-news headline a reader understands at a glance. Name one fighter by last name
+(the other only if it reads naturally; one is usually enough) and say what is happening in
+plain words: who is trying to do what, what is at stake. Under 12 words. Style: "Hokit looks
+to cause chaos in heavyweight title shot", "Nunes returns from retirement to reclaim her
+belt", "Prochazka needs a finish to stay in the title picture". No metaphors, wordplay,
 riddles or nicknames for a fighter, no "X meets Y" or "X against Y" pairings, no numbers,
 no clichés, never "the model". Return only the headline."""
 
@@ -461,7 +462,7 @@ no clichés, never "the model". Return only the headline."""
 def retitle(fight_ids: list[int], persist: bool) -> list[dict]:
     """Replace the one-liner after "Red vs. Blue | Event:" in each written preview; the body
     stays as it is. Admin-edited previews are left alone."""
-    from app.models.ufc import UFCFightPreview
+    from app.models.ufc import UFCEvent, UFCFight, UFCFightPreview
     db = SessionLocal()
     try:
         meter = llm.Meter(persist=persist, month_spent=llm.month_spent(db) if persist else 0.0)
@@ -471,13 +472,18 @@ def retitle(fight_ids: list[int], persist: bool) -> list[dict]:
             if p is None or not p.content or p.edited_at is not None:
                 continue
             first, _, rest = p.content.partition("\n")
-            if not first.startswith("# ") or ":" not in first:
+            if not first.startswith("# ") or "|" not in first:
                 continue
-            prefix = first[: first.index(":", first.index("|") if "|" in first else 0) + 1]
-            new = llm.chat(meter, "retitle", fid, RETITLE, rest[:2500], max_tokens=60).strip().strip('"').rstrip(".")
+            # "# Red vs. Blue | Event Name: headline", where the event name may hold a colon.
+            ev = (db.query(UFCEvent.name).join(UFCFight, UFCFight.event_id == UFCEvent.id)
+                  .filter(UFCFight.id == fid).scalar() or "")
+            prefix = f"{first[:first.index('|')].rstrip()} | {ev}:"
+            old = first[len(prefix):] if first.startswith(prefix) else first[first.rindex(":") + 1:]
+            new = llm.chat(meter, "retitle", fid, RETITLE, rest[:2500], max_tokens=60)
+            new = new.strip().strip('"').rstrip(".").replace(":", " -")
             if not new or len(new.split()) > 16:
                 continue
-            out.append({"fight_id": fid, "old": first[len(prefix):].strip(), "new": new})
+            out.append({"fight_id": fid, "old": old.strip(), "new": new})
             if persist:
                 p.content = f"{prefix} {new}\n{rest}"
                 db.commit()

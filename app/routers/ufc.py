@@ -4,7 +4,7 @@ import datetime as dt
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse, Response
-from sqlalchemy import or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session, aliased, joinedload
 
 from app.database import get_db
@@ -119,14 +119,32 @@ def get_article_image(fight_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/fighters/{fighter_id}/image")
-def get_fighter_image(fighter_id: int, db: Session = Depends(get_db)):
+def get_fighter_image(fighter_id: int, pose: str | None = None, db: Session = Depends(get_db)):
     """Serve a fighter's headshot.
 
     Cached bytes when scripts/cache_fighter_images.py has stored them, otherwise a
     redirect to the source URL. One URL works either way, so callers do not have to know
     whether the cache has been populated — and when a UFC.com `?itok=` signature
     eventually expires, the cached copy is what keeps the portrait alive.
+
+    `?pose=right` serves the right-facing portrait (services/ufc/fighter_poses.py) when
+    one is stored, and otherwise falls back to exactly the default portrait.
     """
+    if pose == "right":
+        right = (
+            db.query(UFCFighter.image_right_data, UFCFighter.image_right_mime)
+            .filter(UFCFighter.id == fighter_id)
+            .first()
+        )
+        if right and right[0]:
+            return Response(
+                content=right[0],
+                media_type=right[1] or "image/png",
+                headers={
+                    "Cache-Control": "public, max-age=604800",
+                    "ETag": f'W/"{fighter_id}-right-{len(right[0])}"',
+                },
+            )
     row = (
         db.query(UFCFighter.image_data, UFCFighter.image_mime, UFCFighter.image_url)
         .filter(UFCFighter.id == fighter_id)
@@ -165,6 +183,24 @@ def get_fighter_fights(fighter_id: int, db: Session = Depends(get_db)):
 @router.get("/fighters/{fighter_id}/stats", response_model=list[UFCFightStatsResponse])
 def get_fighter_stats(fighter_id: int, db: Session = Depends(get_db)):
     return db.query(UFCFightStats).filter(UFCFightStats.fighter_id == fighter_id).all()
+
+
+@router.get("/fighters/{fighter_id}/external-fights")
+def get_fighter_external_fights(fighter_id: int):
+    """Pro bouts outside the UFC (Sherdog), newest first; [] for an unlinked fighter."""
+    from app.services.ufc.pro_record import external_fights
+    return response_cache.cached(
+        f"external-fights:{fighter_id}", with_session(external_fights, fighter_id), RANKINGS_TTL,
+    )
+
+
+@router.get("/fighters/{fighter_id}/decision-luck")
+def get_fighter_decision_luck(fighter_id: int):
+    """Decisions deserved (deserve to win) against decisions won, per fight and in total."""
+    from app.services.ufc.decision_luck import decision_luck
+    return response_cache.cached(
+        f"decision-luck:{fighter_id}", with_session(decision_luck, fighter_id), RANKINGS_TTL,
+    )
 
 
 @router.get("/fighters/{fighter_id}/rank-history", response_model=list[UFCRankHistoryPoint])
@@ -347,6 +383,17 @@ def _style_row(style, fighter, with_profile: bool = False) -> dict:
     return row
 
 
+def _families(db: Session, with_profile: bool = True) -> list[dict]:
+    out = []
+    for f in db.query(UFCStyleFamily).order_by(UFCStyleFamily.id):
+        row = {"id": f.id, "name": f.name, "blurb": f.blurb, "traits": json.loads(f.traits),
+               "n_fighters": f.n_fighters}
+        if with_profile:
+            row["profile"] = json.loads(f.profile)
+        out.append(row)
+    return out
+
+
 def _build_styles(db: Session) -> dict:
     families = db.query(UFCStyleFamily).order_by(UFCStyleFamily.id).all()
     rows = (
@@ -379,11 +426,7 @@ def _build_styles(db: Session) -> dict:
         "version": families[0].map_version if families else None,
         "computed_at": computed.isoformat() if computed else None,
         "habit_keys": STYLE_HABIT_KEYS,
-        "families": [
-            {"id": f.id, "name": f.name, "blurb": f.blurb, "traits": json.loads(f.traits),
-             "profile": json.loads(f.profile), "n_fighters": f.n_fighters}
-            for f in families
-        ],
+        "families": _families(db),
         "fighters": [{**_style_row(s, f), "comps": comps.get(f.id, []), "ufc_fights": n_fights.get(f.id),
                       "last_fight": last_fight[f.id].isoformat() if f.id in last_fight else None,
                       "first_fight": first_fight[f.id].isoformat() if f.id in first_fight else None}
@@ -398,6 +441,52 @@ def get_styles():
     Profiles are left off (37 numbers x ~1,500 fighters); the per-fighter route has them.
     """
     return response_cache.cached("styles", with_session(_build_styles), RANKINGS_TTL)
+
+
+#: Generations of ancestors resolved for a fighter's lineage (as LineageView draws).
+LINEAGE_GENERATIONS = 2
+#: Heirs returned: later fighters who list this one among their ancestors.
+N_HEIRS = 8
+
+
+def _lineage(db: Session, fighter_id: int) -> dict:
+    """A fighter's ancestors two generations up and their heirs, with names resolved.
+
+    Ancestors are stored per fighter (style_page_service.ancestors); heirs are not, so they
+    come from scanning every fighter's ancestor lists for this id.
+    """
+    links: dict[int, dict[str, list[dict]]] = {}
+    for fid, anc, notable in db.query(UFCFighterStyle.fighter_id, UFCFighterStyle.ancestors,
+                                      UFCFighterStyle.notable_ancestors):
+        links[fid] = {"ancestors": json.loads(anc or "[]"), "notable_ancestors": json.loads(notable or "[]")}
+    if fighter_id not in links:
+        return {"nodes": [], "heirs": [], "notable_heirs": []}
+
+    wanted: set[int] = set()
+    for key in ("ancestors", "notable_ancestors"):
+        frontier = [fighter_id]
+        for _ in range(LINEAGE_GENERATIONS):
+            nxt = [int(a["id"]) for f in frontier for a in links.get(f, {}).get(key, [])]
+            wanted.update(nxt)
+            frontier = nxt
+
+    def heirs(key: str) -> list[dict]:
+        hits = [{"id": fid, "sim": a["sim"]} for fid, l in links.items() for a in l[key]
+                if int(a["id"]) == fighter_id]
+        return sorted(hits, key=lambda h: -h["sim"])[:N_HEIRS]
+
+    out_heirs, out_notable = heirs("ancestors"), heirs("notable_ancestors")
+    wanted.update(h["id"] for h in out_heirs + out_notable)
+    wanted.discard(fighter_id)
+    rows = (db.query(UFCFighterStyle, UFCFighter)
+            .join(UFCFighter, UFCFighter.id == UFCFighterStyle.fighter_id)
+            .filter(UFCFighterStyle.fighter_id.in_(wanted)).all()) if wanted else []
+    as_ids = lambda hs: [{"id": str(h["id"]), "sim": h["sim"]} for h in hs]  # noqa: E731
+    return {
+        "nodes": [_style_row(s, f) for s, f in rows],
+        "heirs": as_ids(out_heirs),
+        "notable_heirs": as_ids(out_notable),
+    }
 
 
 def _build_style_detail(db: Session, fighter_id: int) -> dict:
@@ -420,6 +509,8 @@ def _build_style_detail(db: Session, fighter_id: int) -> dict:
     )
     return {
         "fighter": _style_row(*hit, with_profile=True),
+        "families": _families(db, with_profile=False),
+        "lineage": _lineage(db, fighter_id),
         # Comps come from the similarity table — the same list the profile page serves —
         # so the two pages never disagree about who a fighter's comparables are.
         "comps": [
@@ -465,6 +556,11 @@ def list_career_stats(
 
 # --- Events ---
 
+# A bout has been fought once it has a winner or a method: ufcstats leaves winner_id null
+# on draws and no-contests, so winner_id alone kept those on Upcoming forever.
+_FOUGHT = or_(UFCFight.winner_id.isnot(None), func.coalesce(UFCFight.method, "") != "")
+_UNFOUGHT = and_(UFCFight.winner_id.is_(None), func.coalesce(UFCFight.method, "") == "")
+
 @router.get("/events", response_model=list[UFCEventResponse])
 def list_events(
     # 2000 covers the whole UFC history (~1,300 cards) in one request, which is what the
@@ -472,12 +568,17 @@ def list_events(
     limit: int = Query(default=50, le=2000),
     offset: int = 0,
     ufc_only: bool = Query(default=True),
+    # Only cards with results in: the Events page, so a card moves there from Upcoming
+    # once it is scored rather than at midnight on fight day.
+    completed: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
+    from sqlalchemy import exists
     query = db.query(UFCEvent)
-    if ufc_only:
+    if completed:
+        query = query.filter(exists().where(UFCFight.event_id == UFCEvent.id, _FOUGHT))
+    elif ufc_only:
         # Filter to events that have fights (excludes stub events from fighter profile scraping)
-        from sqlalchemy import exists
         query = query.filter(
             exists().where(UFCFight.event_id == UFCEvent.id)
         )
@@ -1625,7 +1726,7 @@ def _build_upcoming(db: Session):
         db.query(UFCFight.red_fighter_id, UFCFight.blue_fighter_id)
         .filter(
             UFCFight.event_id.in_([e.id for e in events]),
-            UFCFight.winner_id.is_(None),
+            _UNFOUGHT,
         )
         .all()
     ) if events else []
@@ -1639,7 +1740,7 @@ def _build_upcoming(db: Session):
                 joinedload(UFCFight.red_fighter),
                 joinedload(UFCFight.blue_fighter),
             )
-            .filter(UFCFight.event_id == event.id, UFCFight.winner_id.is_(None))
+            .filter(UFCFight.event_id == event.id, _UNFOUGHT)
             # Card order as ufcstats lists it: main event first. Bouts scraped before
             # card_position existed sort last rather than jumping to the top.
             .order_by(UFCFight.card_position.is_(None), UFCFight.card_position, UFCFight.id)
@@ -1834,7 +1935,7 @@ def _get_picks_data(db: Session):
             joinedload(UFCFight.blue_fighter),
             joinedload(UFCFight.event),
         )
-        .filter(UFCFight.winner_id.is_(None))
+        .filter(_UNFOUGHT)
         .join(UFCEvent, UFCFight.event_id == UFCEvent.id)
         .filter(UFCEvent.date >= cutoff)
         .all()

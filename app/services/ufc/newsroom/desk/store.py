@@ -3,7 +3,8 @@
     mentions     a day's headline count per fighter (the spike signal)
     follow_names who to search for next run: spiking fighters and fighters in stories
                  still developing
-    match_topic  is a new cluster a story we are already running? (fighters + wording)
+    running      the stories of the last week, for the labeler to recognise
+    match_topic  near-identical headlines to a story we are already running
     save_story   the topic, its headlines, the articles read and their claims
     cover        the best lead photo of the articles read, re-encoded and stored
     dossier      a short running summary per fighter, from their ledger
@@ -27,8 +28,7 @@ from app.services.ufc.newsroom.schemas import Article, Claim
 log = logging.getLogger(__name__)
 
 DEVELOPING = {"incident", "rumored_fight", "injury", "controversy", "callout", "trash_talk"}
-SAME_TOPIC_SIM = 0.2
-REWRITE_NEW_OUTLETS = 3
+SAME_STORY_SIM = 0.5
 
 
 def _now() -> dt.datetime:
@@ -79,8 +79,23 @@ def follow_names(db: Session, names: dict[int, str], today: dt.date | None = Non
 # Topic memory
 # ---------------------------------------------------------------------------
 
-def match_topic(db: Session, cluster: Cluster, days: int = 7):
-    """The running story this cluster belongs to, or None."""
+def running(db: Session, days: int = 7) -> list[tuple[int, str]]:
+    """(id, title) of the stories from the last week, newest first."""
+    from app.models.ufc import UFCNewsTopic
+    since = _now() - dt.timedelta(days=days)
+    try:
+        rows = (db.query(UFCNewsTopic.id, UFCNewsTopic.title).filter(UFCNewsTopic.last_seen >= since)
+                .order_by(UFCNewsTopic.first_seen.desc()).limit(40).all())
+    except Exception:
+        db.rollback()
+        return []
+    return [(i, t) for i, t in rows]
+
+
+def match_topic(db: Session, cluster: Cluster, days: int = 7, same_only: bool = False):
+    """The running story this cluster belongs to, or None. `same_only`: only a story whose
+    headlines say nearly the same thing (a guard behind the labeler, which tells a new
+    development about the same fighters from more coverage of an old one)."""
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.metrics.pairwise import cosine_similarity
     from app.models.ufc import UFCNewsTopic, UFCNewsTopicItem
@@ -100,15 +115,10 @@ def match_topic(db: Session, cluster: Cluster, days: int = 7):
         heads = [r[0] for r in db.query(UFCNewsTopicItem.title).filter(UFCNewsTopicItem.topic_id == t.id).limit(30)]
         other = " ".join([t.title, *heads])
         sim = float(cosine_similarity(TfidfVectorizer(stop_words="english").fit_transform([text, other]))[0, 1])
-        if (shared >= 2 or (shared and sim >= SAME_TOPIC_SIM) or sim >= 0.45) and sim > best_s:
+        same = (shared and sim >= SAME_STORY_SIM) if same_only else (shared >= 2 or (shared and sim >= 0.2) or sim >= 0.45)
+        if same and sim > best_s:
             best, best_s = t, sim
     return best
-
-
-def new_outlets(db: Session, topic, cluster: Cluster) -> int:
-    from app.models.ufc import UFCNewsTopicItem
-    have = {o for (o,) in db.query(UFCNewsTopicItem.outlet).filter(UFCNewsTopicItem.topic_id == topic.id)}
-    return len(set(cluster.outlets) - have)
 
 
 # ---------------------------------------------------------------------------

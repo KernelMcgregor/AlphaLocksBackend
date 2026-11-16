@@ -42,8 +42,9 @@ changes the verdict.
 
 From the sourced claims, plan the article and return JSON:
   "angle": one sentence, the story of this fight that the article leads with
-  "headline_hook": a plain sports-news headline for this fight, naming a fighter and what is
-                   at stake (e.g. "Hokit looks to drag Gane into chaos in first title shot");
+  "headline_hook": a plain sports-news headline for this fight, naming a fighter (one is
+                   usually enough) and what is at stake (e.g. "Hokit looks to cause chaos
+                   in heavyweight title shot");
                    no metaphors, wordplay or numbers
   "lead_claims": claim ids (numbers) the article is built around: matchup and recent tier first
   "background_claims": at most 2 background-tier ids, only if a reader needs them to understand

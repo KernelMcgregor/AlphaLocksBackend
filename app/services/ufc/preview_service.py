@@ -289,7 +289,7 @@ Chin | 80 | 94
 Structure every preview with exactly these sections:
 
 # [Red Last Name] vs. [Blue Last Name] | [Event Name]: [headline]
-The headline reads like a sports-news headline that a reader understands at a glance, on its own, without the names before the colon. Name at least one fighter by last name and say what is happening in plain words: who is trying to do what, what is at stake. Under 12 words. Examples of the style: "Hokit looks to drag Gane into chaos in first title shot", "Nunes returns from retirement to take back her belt from Harrison", "Prochazka needs a finish to stay in the title picture". No metaphors, wordplay, riddles or nicknames for a fighter ("the champion's jab", "the human firework"), no "X meets Y" or "X against Y" pairings, no numbers or percentages, no clichés ("Clash of Styles", "Youth vs. Experience").
+The headline reads like a sports-news headline that a reader understands at a glance, on its own, without the names before the colon. Name one fighter by last name (the other only if it reads naturally; one is usually enough) and say what is happening in plain words: who is trying to do what, what is at stake. Under 12 words. Examples of the style: "Hokit looks to cause chaos in heavyweight title shot", "Nunes returns from retirement to reclaim her belt", "Prochazka needs a finish to stay in the title picture". No metaphors, wordplay, riddles or nicknames for a fighter ("the champion's jab", "the human firework"), no "X meets Y" or "X against Y" pairings, no numbers or percentages, no clichés ("Clash of Styles", "Youth vs. Experience").
 
 ## Overview
 2-3 sentences setting up the matchup.

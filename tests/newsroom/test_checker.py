@@ -162,3 +162,10 @@ def test_news_keeps_outlet_credits_for_exclusives():
     many = few + "\n\nShe chose boxing, per MMA Fighting."
     assert not [i for i in checker.check_code(few, sheet(), [CLAIM], news=True)[0] if "credits" in i]
     assert any("credits outlets 3 times" in i for i in checker.check_code(many, sheet(), [CLAIM], news=True)[0])
+
+
+def test_a_record_inside_a_longer_one_is_not_ours():
+    fs = sheet()
+    fs.stats_prompt = (fs.stats_prompt or "") + "\nGane: 14-1"
+    md = "White said he scored the fight 4-1 for Gane."
+    assert any("4-1" in i for i in checker.check_code(md, fs, [CLAIM], news=True)[0])

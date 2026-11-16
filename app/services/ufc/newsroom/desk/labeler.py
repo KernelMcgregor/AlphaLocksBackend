@@ -1,9 +1,11 @@
 """One DeepSeek call per run: what each candidate story is, and which are worth writing.
 
-The model sees only headlines (no pages), names each story, sorts it into a kind, folds
-spin-offs into their parent story (a pundit's take on a brawl belongs with the brawl),
-throws out fight-week coverage the preview articles already cover, and suggests one
-follow-up search, which is kept only if it names the story's fighters.
+The model sees only headlines (no pages). It splits clusters into developments (each one
+thing that happened or was said: its own article), names and sorts each, folds a
+development reported in two clusters into one, recognises developments the site is
+already running (more coverage, no new article), throws out fight-week coverage the
+preview articles already cover, and suggests one follow-up search, which is kept only if
+it names the story's fighters.
 """
 
 from __future__ import annotations
@@ -22,10 +24,21 @@ WRITE_KINDS = {"incident", "trash_talk", "press_conference", "rumored_fight", "b
                "contract", "controversy", "other"}
 
 SYSTEM = """You are the news editor of a UFC site. You get candidate stories, each a cluster of
-headlines from the last day or two. For each one decide what it is.
+headlines from the last day or two, and the stories the site is already running.
 
-Return JSON: {"stories": [ ... ]}, one entry per candidate, each:
-  "id": the candidate's number
+Every DEVELOPMENT is its own article. A development is one thing that happened or was
+said: an attack, a sentencing, a fighter's statement about it, a new revelation, another
+fighter's reaction that is news in itself. "Usman attacks Merab", "Usman jailed", "Merab
+calls for Usman's release", "Merab says Umar hurt him" and "Topuria wanted to go to Abu
+Dhabi" are five developments and five articles, even though the same people are in them.
+Only the same development reported by different outlets, or with small new details, is
+one article.
+
+A candidate's headlines may mix developments: split them. Return JSON
+{"stories": [ ... ]}, one entry per development, each:
+  "candidate": the candidate's number
+  "headlines": the numbers of that candidate's headlines that report this development
+          (every headline when the candidate is a single development)
   "title": a short neutral working title (who, what)
   "kind": one of incident, trash_talk, press_conference, rumored_fight, booking, callout,
           injury, contract, controversy, personal, preview, other
@@ -39,47 +52,94 @@ Return JSON: {"stories": [ ... ]}, one entry per candidate, each:
           was said that changes or reveals something. What fighters SAY (press conferences,
           media days, trash talk, callouts, statements) is newsworthy even in fight week;
           analysis and predictions are not.
-  "merge_into": the id of another candidate this is a spin-off of (reactions, pundit takes
-          or knock-on effects of the same event), else null
-  "follow_up": one Google News search that would find more on this story, using the
+  "running": the R number of a RUNNING story that already covers this same development
+          (more coverage of it, nothing new happened), else null. A new development about
+          a running story's people is NOT the running story.
+  "merge_into": the number of another candidate reporting this same development, else null
+  "follow_up": one Google News search that would find more on this development, using the
           fighters' full names and one or two key words, else null"""
 
+SHOW = 10
 
-def label(meter: llm.Meter, clusters: list[Cluster], names: dict[int, str], limit: int = 15) -> list[dict]:
+
+def _part(c: Cluster, items: list) -> Cluster:
+    """A candidate cut down to one development's headlines."""
+    outlets = sorted({(i.outlet or "").strip() for i in items if i.outlet})
+    share = len(outlets) / max(1, len(c.outlets))
+    return Cluster(items=items, fighter_ids=c.fighter_ids, outlets=outlets,
+                   newest=max((i.published_at for i in items if i.published_at), default=None),
+                   score=round(c.score * share, 3), key=c.key)
+
+
+def label(meter: llm.Meter, clusters: list[Cluster], names: dict[int, str], running: list[tuple[int, str]] = (),
+          limit: int = 15) -> tuple[list[Cluster], list[dict]]:
+    """Split the candidates into developments and label each: (developments, labels), a
+    label's "id" indexing the developments. `running`: (topic id, title) of the stories
+    the site is running."""
     cands = clusters[:limit]
     blocks = []
     for i, c in enumerate(cands):
         who = ", ".join(names.get(f, "?") for f in c.fighter_ids[:4]) or "none of our fighters"
-        heads = "\n".join(f"   - {h}" for h in c.headlines[:6])
+        heads = "\n".join(f"   {j}. {h}" for j, h in enumerate(c.headlines[:SHOW]))
         blocks.append(f"[{i}] fighters: {who} | {len(c.outlets)} outlets\n{heads}")
-    data = llm.chat_json(meter, "desk_label", None, SYSTEM, "\n\n".join(blocks), max_tokens=2500)
-    out = []
+    run_ids = {tid for tid, _ in running}
+    user = ("RUNNING STORIES:\n" + ("\n".join(f"R{tid}: {t}" for tid, t in running) or "(none)")
+            + "\n\nCANDIDATES:\n" + "\n\n".join(blocks))
+    data = llm.chat_json(meter, "desk_label", None, SYSTEM, user, max_tokens=3500)
+
+    def num(v):
+        try:
+            return int(str(v).strip().lstrip("Rr"))
+        except (TypeError, ValueError):
+            return None
+
+    per: dict[int, list[dict]] = {}
     for s in data.get("stories") or []:
-        try:
-            i = int(s.get("id"))
-        except (TypeError, ValueError):
-            continue
-        if not 0 <= i < len(cands):
-            continue
-        merge = s.get("merge_into")
-        try:
-            merge = int(merge) if merge is not None else None
-        except (TypeError, ValueError):
-            merge = None
-        if merge == i or (merge is not None and not 0 <= merge < len(cands)):
-            merge = None
-        follow = (s.get("follow_up") or "").strip() or None
-        fighters = [names[f] for f in cands[i].fighter_ids if f in names]
-        if follow and fighters and not any(n.split()[-1].lower() in follow.lower() for n in fighters):
-            follow = None  # must stay on the story's own fighters
-        out.append({"id": i, "title": (s.get("title") or "").strip() or cands[i].headlines[0],
-                    "kind": s.get("kind") if s.get("kind") in KINDS else "other",
-                    "newsworthy": bool(s.get("newsworthy")), "merge_into": merge, "follow_up": follow})
-    return out
+        i = num(s.get("candidate", s.get("id")))
+        if i is not None and 0 <= i < len(cands):
+            per.setdefault(i, []).append(s)
+    devs, labs, first = [], [], {}
+    for i, entries in sorted(per.items()):
+        c = cands[i]
+        shown = len(c.items[:SHOW])
+        taken: set[int] = set()
+        parts = []
+        for s in entries:
+            hs = [h for h in (num(x) for x in s.get("headlines") or []) if h is not None and 0 <= h < shown and h not in taken]
+            taken.update(hs)
+            parts.append((s, hs))
+        if len(parts) == 1:
+            parts = [(parts[0][0], list(range(len(c.items))))]
+        else:
+            # Headlines not shown or not placed go with the candidate's first development.
+            rest = [j for j in range(len(c.items)) if j not in taken]
+            parts = [(s, hs + (rest if k == 0 else [])) for k, (s, hs) in enumerate(parts)]
+        for s, hs in parts:
+            if not hs:
+                continue
+            first.setdefault(i, len(devs))
+            devs.append(_part(c, [c.items[j] for j in sorted(hs)]) if len(parts) > 1 else c)
+            follow = (s.get("follow_up") or "").strip() or None
+            fighters = [names[f] for f in c.fighter_ids if f in names]
+            if follow and fighters and not any(n.split()[-1].lower() in follow.lower() for n in fighters):
+                follow = None  # must stay on the story's own fighters
+            run = num(s.get("running"))
+            labs.append({"id": len(devs) - 1, "candidate": i, "title": (s.get("title") or "").strip() or devs[-1].headlines[0],
+                         "kind": s.get("kind") if s.get("kind") in KINDS else "other",
+                         "newsworthy": bool(s.get("newsworthy")), "merge_into": num(s.get("merge_into")),
+                         "running": run if run in run_ids else None, "follow_up": follow})
+    # merge_into names a candidate; point it at that candidate's first development.
+    for lab in labs:
+        m = lab["merge_into"]
+        lab["merge_into"] = first.get(m) if m is not None and m != lab["candidate"] else None
+        if lab["merge_into"] == lab["id"]:
+            lab["merge_into"] = None
+    return devs, labs
 
 
 def pick(clusters: list[Cluster], labels: list[dict], top: int = 3) -> list[tuple[Cluster, dict]]:
-    """Fold spin-offs into their parents, then the best `top` newsworthy stories by score."""
+    """Fold duplicates into the development they repeat, then the best `top` newsworthy
+    developments by score."""
     by_id = {lab["id"]: lab for lab in labels}
     writable = {i for i, lab in by_id.items() if lab["newsworthy"] and lab["kind"] in WRITE_KINDS}
     # A spin-off only folds into a parent that will be written; one pointing at skipped

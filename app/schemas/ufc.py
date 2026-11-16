@@ -49,6 +49,9 @@ class UFCFighterResponse(BigIntStr, UFCFighterBase):
     id: int
     created_at: dt.datetime
     updated_at: dt.datetime
+    #: A right-facing portrait is stored (GET /ufc/fighters/{id}/image?pose=right).
+    #: UFCFighter.has_right_image reads image_right_url, never the deferred bytes.
+    has_right_image: bool = False
 
     model_config = {"from_attributes": True}
 
