@@ -279,6 +279,16 @@ jobs:
         run: pip install -r requirements.txt
       - name: Score fights missing a deserve-to-win meter
         run: python -m scripts.deserve_to_win --score-new
+      # Judge and referee pages (app/services/ufc/officials_service.py) read the meter's
+      # round probabilities, so they rebuild after it. Strengths fixed at the tuned values.
+      - name: Rebuild judge and referee profiles
+        run: python -m app.services.ufc.officials_service --write --s-lean 0.2 --s-axis 0.2
+      - name: Rebuild fighter clutch ratings
+        run: python -m app.services.ufc.fightflow_clutch --write
+      - name: Rebuild division age curves and the camp registry
+        run: |
+          python -m app.services.ufc.fighter_extras_age --write
+          python -m app.services.ufc.fighter_extras_camps --write
 
   # Also refresh odds twice a week regardless of events
   refresh-odds:

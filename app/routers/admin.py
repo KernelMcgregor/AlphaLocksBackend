@@ -1089,3 +1089,46 @@ def update_fighter(
     db.refresh(f)
     return {**_fighter_dict(f), "changed": changes}
 
+
+
+# --- Assigned officials (judge panels / referee entered before a card) ---
+
+class _OfficialsIn(_BaseModel):
+    judges: list[str] = []
+    referee: str | None = None
+
+
+@router.get("/fights/{fight_id}/officials", dependencies=[Depends(require_admin_key)])
+def admin_get_officials(fight_id: int, db: Session = Depends(get_db)):
+    from app.models.ufc_officials import UFCFightOfficial
+    rows = db.query(UFCFightOfficial).filter_by(fight_id=fight_id).order_by(
+        UFCFightOfficial.role, UFCFightOfficial.seq).all()
+    return [{"role": o.role, "seq": o.seq, "name": o.name, "judge_id": o.judge_id,
+             "referee_id": o.referee_id, "source": o.source} for o in rows]
+
+
+@router.put("/fights/{fight_id}/officials", dependencies=[Depends(require_admin_key)])
+def admin_set_officials(fight_id: int, body: _OfficialsIn, db: Session = Depends(get_db)):
+    """Replace a fight's assigned officials. Names are matched to the judge/referee
+    registries; an unmatched name is stored without an id (and reported back)."""
+    from app.models.ufc_officials import UFCFightOfficial
+    from app.routers.ufc_officials import resolve_official
+    from app.services import response_cache
+    if db.get(UFCFight, fight_id) is None:
+        raise HTTPException(status_code=404, detail="Fight not found")
+    if len(body.judges) > 3:
+        raise HTTPException(status_code=422, detail="At most three judges")
+    db.query(UFCFightOfficial).filter_by(fight_id=fight_id).delete()
+    unmatched = []
+    entries = [("judge", i, n) for i, n in enumerate(body.judges, start=1) if n.strip()]
+    if body.referee and body.referee.strip():
+        entries.append(("referee", 1, body.referee))
+    for role, seq, name in entries:
+        jid, rid = resolve_official(db, role, name.strip())
+        if jid is None and rid is None:
+            unmatched.append(name)
+        db.add(UFCFightOfficial(fight_id=fight_id, role=role, seq=seq, name=name.strip(),
+                                judge_id=jid, referee_id=rid, source="admin"))
+    db.commit()
+    response_cache.invalidate()
+    return {"saved": len(entries), "unmatched": unmatched}

@@ -2123,3 +2123,11 @@ def _get_picks_data(db: Session):
             r["updated_at"] = r["updated_at"].isoformat()
 
     return results
+
+
+# --- Feature-track sub-routers (same /ufc prefix). Imported last so their routes
+# register after the core ones above.
+from app.routers import ufc_fighter_extras, ufc_fightflow, ufc_markets, ufc_officials  # noqa: E402
+
+for _sub in (ufc_officials, ufc_fightflow, ufc_fighter_extras, ufc_markets):
+    router.include_router(_sub.router)

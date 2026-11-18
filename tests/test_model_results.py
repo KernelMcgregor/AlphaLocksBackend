@@ -108,7 +108,7 @@ def test_splits_partition_and_order(ledger):
 
 def test_labels_and_american():
     assert M.american(2.5) == 150 and M.american(1.5) == -200 and M.american(None) is None
-    assert M.family_label("sixway_dec_fav") == "Favourite by decision"
+    assert M.family_label("sixway_dec_fav") == "Favorite by decision"
     assert M.family_label("ou_1_5_under") == "Under 1.5 rounds"
     assert M.family_label("starts_r3_no") == "Starts round 3: no"
     assert M.side_label("itd_blue_no", "A", "B") == "B wins inside distance: no"

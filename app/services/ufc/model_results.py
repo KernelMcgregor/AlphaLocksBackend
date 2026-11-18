@@ -177,13 +177,13 @@ def totals(b: pd.DataFrame, ci: bool = False, seed: int = 0) -> dict:
 # ---------- labels ----------
 
 def family_label(fam: str) -> str:
-    """'sixway_dec_fav' -> 'Favourite by decision', 'ou_1_5_under' -> 'Under 1.5 rounds'."""
+    """'sixway_dec_fav' -> 'Favorite by decision', 'ou_1_5_under' -> 'Under 1.5 rounds'."""
     p = fam.split("_")
     if p[0] == "winner":
         return f"Moneyline ({p[1]})"
     if p[0] == "sixway":
         how = {"ko": "KO/TKO", "sub": "submission", "dec": "decision"}[p[1]]
-        return f"{'Favourite' if p[2] == 'fav' else 'Underdog'} by {how}"
+        return f"{'Favorite' if p[2] == 'fav' else 'Underdog'} by {how}"
     if p[0] == "method3":
         return {"ko": "KO/TKO (either fighter)", "sub": "Submission (either fighter)"}.get(p[1], fam)
     if p[0] == "decision":
