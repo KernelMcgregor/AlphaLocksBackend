@@ -66,8 +66,13 @@ def check(kind: str, rows: list[dict], registry: dict, today: date,
 
 
 def assign_ranks(rows: list[dict]) -> None:
+    """1..n by score. The BMF belt holder sits above the list as champion (rank 0), the
+    way a division's champion sits above its contenders."""
+    for r in rows:
+        if r.get("is_bmf_champion"):
+            r["default_rank"] = 0
     for pool in POOLS:
-        members = sorted((r for r in rows if r["pool"] == pool),
+        members = sorted((r for r in rows if r["pool"] == pool and not r.get("is_bmf_champion")),
                          key=lambda r: (-r["default_score"], r.get("division_rank") or 999,
                                         -r.get("raw", {}).get("score_raw", r["default_score"]),
                                         r["fighter_id"]))
@@ -102,7 +107,8 @@ def publish_alt_rankings(db, kinds=tuple(KINDS), as_of: date | None = None,
             kind=kind, fighter_id=int(r["fighter_id"]), pool=r["pool"],
             division=r["division"], as_of=ctx["today"],
             components=json.dumps({**r["components"],
-                                   "raw": {**r["raw"], "is_champion": r["is_champion"]}}),
+                                   "raw": {**r["raw"], "is_champion": r["is_champion"],
+                                           "is_bmf_champion": bool(r.get("is_bmf_champion"))}}),
             default_score=r["default_score"], default_rank=r["default_rank"],
             n_bouts=r["n_bouts"], last_fight_date=r["last_fight_date"],
             ledger=json.dumps(r["ledger"]),
@@ -130,7 +136,7 @@ def _print_preview(results: dict, ctx: dict, n: int = 25) -> None:
             print(f"{'#':>3}  {'fighter':<26}{'division':<19}{'score':>6}  "
                   + "  ".join(f"{k[:5]:>5}" for k in keys))
             for r in top:
-                belt = "C" if r["fighter_id"] in champs else " "
+                belt = "B" if r.get("is_bmf_champion") else "C" if r["fighter_id"] in champs else " "
                 print(f"{r['default_rank']:>3}{belt} {names.get(r['fighter_id'], '?')[:25]:<26}"
                       f"{r['division']:<19}{r['default_score']:>6.1f}  "
                       + "  ".join(f"{r['components'][k]:>5.0f}" for k in keys))
@@ -194,6 +200,7 @@ def get_alt_rankings(kind: str) -> dict:
             # Stored at publish time, judged with the ranker's division rules, rather
             # than re-derived here from a single stored division.
             is_champion = bool(raw.pop("is_champion", False))
+            is_bmf_champion = bool(raw.pop("is_bmf_champion", False))
             pools.setdefault(r.pool, []).append({
                 "id": str(f.id),
                 "first_name": f.first_name, "last_name": f.last_name,
@@ -203,6 +210,7 @@ def get_alt_rankings(kind: str) -> dict:
                 "division": r.division,
                 "division_label": WEIGHT_CLASS_LABELS.get(r.division, r.division),
                 "is_champion": is_champion,
+                "is_bmf_champion": is_bmf_champion,
                 "components": comps, "raw": raw,
                 "division_rank": raw.get("division_rank"),
                 "default_score": r.default_score, "default_rank": r.default_rank,
@@ -211,7 +219,8 @@ def get_alt_rankings(kind: str) -> dict:
                 "ledger": json.loads(r.ledger or "[]"),
                 # `delta` is POSITIVE when the fighter climbed; prior_rank None = not on
                 # the board then (NEW).
-                "movement": _movement(prior.get((kind, r.pool, f.id)), r.default_rank, since_iso),
+                "movement": None if is_bmf_champion else
+                _movement(prior.get((kind, r.pool, f.id)), r.default_rank, since_iso),
             })
         return {
             "kind": kind, "label": spec["label"],

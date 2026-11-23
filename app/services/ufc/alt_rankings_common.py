@@ -19,6 +19,8 @@ Cross-division comparability is the whole problem. Two choices carry it:
 
 from __future__ import annotations
 
+import json
+import logging
 import math
 from bisect import bisect_left
 from collections import defaultdict
@@ -26,6 +28,8 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 from app.services.ufc.fighter_registry import Eligibility, is_rankable
+
+log = logging.getLogger("alt_rankings")
 
 #: UFC bouts considered per fighter, newest first.
 WINDOW = 10
@@ -100,6 +104,13 @@ class BoutView:
     kd: int = 0                  # knockdowns landed
     kd_abs: int = 0              # knockdowns absorbed
     head_abs: int = 0            # significant head strikes absorbed
+    dist_landed: int = 0         # significant strikes at distance, landed
+    dist_abs: int = 0            # ... and absorbed
+    standing_min: float | None = None
+    minutes: float | None = None
+    ctrl_s: int = 0              # own control seconds
+    opp_ctrl_s: int = 0
+    excite: float | None = None  # FOTN-model pace + danger + swings (ufc_fight_excitement)
     w: float = 1.0               # recency weight
     q: float = 1.0               # quality weight
 
@@ -165,16 +176,19 @@ def load_context(db, as_of: date | None = None) -> dict:
         ).all()
     }
     totals: dict[tuple[int, int], dict] = {}
-    for fight_id, fighter_id, kd, head, sig, td, ctrl, sub, sig_att, td_att in db.query(
+    for (fight_id, fighter_id, kd, head, sig, td, ctrl, sub, sig_att, td_att, dist,
+         standing, minutes) in db.query(
         UFCFightStats.fight_id, UFCFightStats.fighter_id, UFCFightStats.kd,
         UFCFightStats.head_landed, UFCFightStats.sig_str_landed, UFCFightStats.td_landed,
         UFCFightStats.ctrl_seconds, UFCFightStats.sub_att, UFCFightStats.sig_str_attempted,
-        UFCFightStats.td_attempted,
+        UFCFightStats.td_attempted, UFCFightStats.distance_landed,
+        UFCFightStats.est_standing_min, UFCFightStats.fight_time_min,
     ).filter(UFCFightStats.round_number == 0).all():
         totals[(fight_id, fighter_id)] = {
             "kd": kd or 0, "head_landed": head or 0, "sig_str_landed": sig or 0,
             "td_landed": td or 0, "ctrl_seconds": ctrl or 0, "sub_att": sub or 0,
             "sig_str_attempted": sig_att or 0, "td_attempted": td_att or 0,
+            "distance_landed": dist or 0, "standing_min": standing, "minutes": minutes,
         }
 
     #: Fight ids of UFC title bouts, undisputed or interim (not tournament finals).
@@ -189,14 +203,42 @@ def load_context(db, as_of: date | None = None) -> dict:
         outcome[fid] = classify_outcome(row[5], row[6], row[4])
 
     champs = champions_at(hist, today)
+    from app.services.ufc.champions import bmf_champion_as_of, load_bmf_bouts
+    bmf = bmf_champion_as_of(load_bmf_bouts(db), today)
     from app.services.ufc.p4p_rankings import division_context
     divctx = division_context(hist, today)
 
     return {
         "today": today, "hist": hist, "registry": registry, "fights": fights,
         "totals": totals, "outcome": outcome, "champions": champs,
+        "bmf_champion": bmf[0] if bmf else None, "excitement": load_excitement(db),
         "title_fights": title_fights, **divctx,
     }
+
+
+#: Excitement groups BMF reads: how much fighting, how dangerous, how much it swung. The
+#: finish and upset groups are left out; BMF's finishing component already counts those.
+EXCITE_GROUPS = ("pace", "danger", "swings")
+
+
+def load_excitement(db) -> dict[int, float]:
+    """fight_id -> the FOTN model's pace + danger + swings utility. Empty if the table
+    has not been built."""
+    from app.models.ufc_highlights import UFCFightExcitement
+    from app.services.ufc.fight_excitement import MODEL_VERSION
+
+    try:
+        rows = db.query(UFCFightExcitement.fight_id, UFCFightExcitement.components).filter(
+            UFCFightExcitement.model_version == MODEL_VERSION).all()
+    except Exception:
+        log.warning("alt rankings: no fight excitement table; excitement left empty")
+        db.rollback()
+        return {}
+    out = {}
+    for fid, comps in rows:
+        groups = json.loads(comps or "{}").get("groups", {})
+        out[fid] = sum(groups.get(g, 0.0) for g in EXCITE_GROUPS)
+    return out
 
 
 def champions_at(hist: dict, as_of: date) -> dict[str, int]:
@@ -234,6 +276,10 @@ def bout_views(ctx: dict, fid: int, before: date, n: int | None = WINDOW) -> lis
             finish_round=b.finish_round, division=b.division, tier=tier,
             kd=me.get("kd", 0), kd_abs=opp.get("kd", 0),
             head_abs=opp.get("head_landed", 0),
+            dist_landed=me.get("distance_landed", 0), dist_abs=opp.get("distance_landed", 0),
+            standing_min=me.get("standing_min"), minutes=me.get("minutes"),
+            ctrl_s=me.get("ctrl_seconds", 0), opp_ctrl_s=opp.get("ctrl_seconds", 0),
+            excite=ctx.get("excitement", {}).get(b.fight_id),
             w=recency_weight((today - b.date).days), q=quality_weight(tier),
         ))
     return out

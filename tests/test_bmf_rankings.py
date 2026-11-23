@@ -14,16 +14,16 @@ from app.services.ufc.alt_rankings_common import (
 )
 
 TODAY = date(2026, 10, 5)
-BASE = {"mu": 0.5, "g": 0.01}
+BASE = {"mu": 0.5, "g": 0.01, "x": 6.0, "e": 0.0}
 
 
 def bout(i, result="W", outcome="ko", rnd=1, tier=5, kd=0, kd_abs=0, head_abs=40,
-         days_ago=None):
+         days_ago=None, **kw):
     d = TODAY - timedelta(days=days_ago if days_ago is not None else 120 * (i + 1))
     return BoutView(
         fight_id=i, date=d, opponent_id=1000 + i, result=result, outcome=outcome,
         finish_round=rnd, division="lightweight", tier=tier, kd=kd, kd_abs=kd_abs,
-        head_abs=head_abs, w=recency_weight((TODAY - d).days), q=quality_weight(tier),
+        head_abs=head_abs, w=recency_weight((TODAY - d).days), q=quality_weight(tier), **kw,
     )
 
 
@@ -39,6 +39,8 @@ def comps(f, base=BASE):
     return {
         "finishing": bmf.scale_finishing(r["finishing"]),
         "toughness": bmf.scale_toughness(r["toughness"]),
+        "exchange": bmf.scale_logistic(r["exchange"], bmf.X_SCALE),
+        "excitement": bmf.scale_logistic(r["excitement"], bmf.E_SCALE),
         "opp_quality": scale_quality(r["opp_quality"]),
         "recency": recency_score((TODAY - f.last_activity).days, f.bouts_last_730d),
     }
@@ -98,8 +100,9 @@ def test_chin_and_comebacks():
 
 
 def test_gate_off_and_bounds():
-    c = {"finishing": 80, "toughness": 60, "recency": 40, "opp_quality": 10}
-    base = (0.45 * 80 + 0.30 * 60 + 0.25 * 40) / 1.0
+    c = {"finishing": 80, "toughness": 60, "exchange": 30, "excitement": 70, "recency": 40,
+         "opp_quality": 10}
+    base = (0.25 * 80 + 0.15 * 60 + 0.15 * 30 + 0.30 * 70 + 0.15 * 40) / 1.0
     assert bmf.combine(c, {"gamma": 0}) == pytest.approx(base)
     assert bmf.combine({**c, "opp_quality": 100}, {"gamma": 1}) == pytest.approx(base)
     for raw in (-5, -0.5, 0, 0.5, 5):
@@ -109,7 +112,33 @@ def test_gate_off_and_bounds():
 
 
 def test_combine_matches_hand_computation():
-    c = {"finishing": 70, "toughness": 50, "recency": 90, "opp_quality": 64}
-    w = {"finishing": 1, "toughness": 1, "recency": 0, "gamma": 0.5}
+    c = {"finishing": 70, "toughness": 50, "exchange": 10, "excitement": 10, "recency": 90,
+         "opp_quality": 64}
+    w = {"finishing": 1, "toughness": 1, "exchange": 0, "excitement": 0, "recency": 0,
+         "gamma": 0.5}
     expected = 60 * (0.15 + 0.85 * 0.8)
     assert bmf.combine(c, w) == pytest.approx(expected)
+
+
+def test_exchange_striker_beats_control_grappler():
+    # Same record; one stands and trades at distance, the other holds people down.
+    striker = fighter(1, [bout(i, outcome="ud", dist_landed=60, dist_abs=50, minutes=15,
+                               standing_min=14) for i in range(5)])
+    grappler = fighter(2, [bout(i, outcome="ud", dist_landed=15, dist_abs=10, minutes=15,
+                                standing_min=4, ctrl_s=600) for i in range(5)])
+    x = lambda f: bmf.component_raws(f, BASE)["exchange"]
+    assert x(striker) > 0 > x(grappler)
+
+
+def test_exchange_quick_ko_is_not_a_rate_spike():
+    # A 12-second knockout adds 12 seconds of fight, not 25 strikes a minute.
+    one_quick_ko = fighter(1, [bout(0, dist_landed=4, dist_abs=1, kd=1, minutes=0.2)])
+    assert abs(bmf.component_raws(one_quick_ko, BASE)["exchange"]) < 0.25
+
+
+def test_excitement_shrinks_and_skips_unscored():
+    hot = fighter(1, [bout(i, excite=1.0) for i in range(5)])
+    one = fighter(2, [bout(0, excite=1.0)] + [bout(i) for i in range(1, 5)])
+    e = lambda f: bmf.component_raws(f, BASE)["excitement"]
+    assert e(hot) > e(one) > 0
+    assert e(fighter(3, [bout(i) for i in range(5)])) == 0   # no scores: division mean

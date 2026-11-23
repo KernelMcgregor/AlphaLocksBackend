@@ -55,6 +55,7 @@ def _alt(kind: str) -> list[dict]:
         "id": r["id"], "first_name": r["first_name"], "last_name": r["last_name"],
         "image_url": r["image_url"], "country_code": r["country_code"],
         "rank": r["default_rank"], "is_champion": r["is_champion"],
+        "is_bmf_champion": r.get("is_bmf_champion", False),
         "division_label": r["division_label"], "wins": r["wins"], "losses": r["losses"], "draws": r["draws"],
     } for r in men]
 

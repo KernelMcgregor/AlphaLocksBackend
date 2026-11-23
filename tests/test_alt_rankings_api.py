@@ -65,7 +65,7 @@ def test_bmf_payload_shape(client):
     assert body["kind"] == "bmf"
     assert set(body["defaults"]) >= {"finishing", "toughness", "recency", "gamma"}
     assert {c["key"] for c in body["components"]} == {
-        "finishing", "toughness", "recency", "opp_quality"}
+        "finishing", "toughness", "exchange", "excitement", "recency", "opp_quality"}
     men = body["pools"]["men"]
     assert [f["default_rank"] for f in men] == [1, 2]
     assert men[0]["id"] == "9007199254740993"            # id is a string, not a float

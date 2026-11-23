@@ -39,8 +39,9 @@ def is_undisputed_title_bout(weight_class: str | None) -> bool:
     low = wc.lower()
     if "title bout" not in low:
         return False
-    # Tapology counts only undisputed belts; an interim champion is not pinned.
-    return "interim" not in low and "tournament" not in low
+    # Tapology counts only undisputed belts; an interim champion is not pinned. The BMF
+    # belt is a title with no division; it is tracked by `bmf_champion` instead.
+    return "interim" not in low and "tournament" not in low and "bmf" not in low
 
 
 def load_title_bouts(db) -> list[tuple]:
@@ -181,3 +182,71 @@ def champions_as_of(title_bouts: list[tuple], as_of: date,
                      f"(holder moved divisions): {sorted(vacated)}")
 
     return champs
+
+
+# ---------------------------------------------------------------------------
+# BMF belt
+# ---------------------------------------------------------------------------
+
+#: BMF title bouts before UFCStats started labelling them: every one is filed under its
+#: weight class ("Lightweight Bout"). (date, winner last name, loser last name). Bouts
+#: labelled `UFC BMF Title Bout` are picked up on their own, so this only needs a new
+#: entry if UFCStats renames one after the event.
+BMF_LINEAGE: list[tuple[date, str, str]] = [
+    (date(2019, 11, 2), "Masvidal", "Diaz"),
+    (date(2023, 7, 29), "Gaethje", "Poirier"),
+    (date(2024, 4, 13), "Holloway", "Gaethje"),
+    (date(2025, 7, 19), "Holloway", "Poirier"),
+    (date(2026, 3, 7), "Oliveira", "Holloway"),
+]
+
+
+def is_bmf_title_bout(weight_class: str | None) -> bool:
+    return bool(weight_class) and "bmf" in weight_class.lower()
+
+
+def load_bmf_bouts(db) -> list[tuple]:
+    """Every BMF title bout, oldest first: (date, method, winner_id, red_id, blue_id)."""
+    from sqlalchemy import or_
+    from sqlalchemy.orm import aliased
+
+    from app.models.ufc import UFCFighter
+
+    red, blue = aliased(UFCFighter), aliased(UFCFighter)
+    rows = (
+        db.query(UFCFight.date, UFCFight.weight_class, UFCFight.method, UFCFight.winner_id,
+                 UFCFight.red_fighter_id, UFCFight.blue_fighter_id,
+                 red.last_name, blue.last_name)
+        .join(red, UFCFight.red_fighter_id == red.id)
+        .join(blue, UFCFight.blue_fighter_id == blue.id)
+        .filter(or_(UFCFight.weight_class.ilike("%bmf%"),
+                    UFCFight.date.in_([d for d, _, _ in BMF_LINEAGE])))
+        .order_by(UFCFight.date, UFCFight.id)
+        .all()
+    )
+    seeded = {(d, frozenset((w, l))) for d, w, l in BMF_LINEAGE}
+    out = []
+    for f_date, wc, method, winner_id, red_id, blue_id, red_ln, blue_ln in rows:
+        if is_bmf_title_bout(wc) or (f_date, frozenset((red_ln, blue_ln))) in seeded:
+            out.append((f_date, method, winner_id, red_id, blue_id))
+    found = {b[0] for b in out}
+    for d, w, l in BMF_LINEAGE:
+        if d not in found:
+            log.warning(f"  BMF: lineage bout {w} vs {l} on {d} not found")
+    return out
+
+
+def bmf_champion_as_of(bmf_bouts: list[tuple], as_of: date) -> tuple[int, date] | None:
+    """(holder fighter_id, date won) from `load_bmf_bouts` rows. A draw or no contest
+    leaves the belt where it was, as with the division belts."""
+    holder = None
+    for f_date, method, winner_id, _red, _blue in bmf_bouts:
+        if f_date > as_of:
+            break
+        if is_decided(method, winner_id):
+            holder = (winner_id, f_date)
+    return holder
+
+
+def bmf_champion(db, as_of: date | None = None) -> tuple[int, date] | None:
+    return bmf_champion_as_of(load_bmf_bouts(db), as_of or date.today())
