@@ -162,8 +162,18 @@ class Weights:
 
     #: "The carryover from one weight class to another is not exactly the same (it's not
     #: 1:1)... these rules impact the percentage of points that can be transferred."
-    #: Applied to a bout fought in a division other than the one being ranked.
-    carry_other_division: float = 1.0
+    #: Applied to a bout fought in a division other than the one being ranked. The fit
+    #: chose 1.0; 0.7 since 2026-11-23, when featherweight wins alone had Melquizael Costa
+    #: 7th at lightweight (checked against UFC.com snapshots with the rank-blended tiers).
+    carry_other_division: float = 0.7
+
+    #: Share of a DECISION's points taken from the deserve-to-win model rather than the
+    #: official result: the fighter earns p * (a win) + (1 - p) * (a loss) on that share,
+    #: p = their deserve-to-win (draw replays count half). Not Tapology's — they score the
+    #: official result only — so it is not in the fit grid. 0 = off. Finishes are never
+    #: touched. 0.2 chosen by scripts/dtw_rankings_test.py (next-fight accuracy +0.8pt,
+    #: Tapology-neutral).
+    dtw_blend: float = 0.2
 
 
     def clamp(self) -> "Weights":
@@ -181,6 +191,7 @@ class Weights:
             loss_scale=max(0.0, self.loss_scale),
             loss_tier_relief=min(max(self.loss_tier_relief, 0.0), 1.0),
             carry_other_division=min(max(self.carry_other_division, 0.0), 1.0),
+            dtw_blend=min(max(self.dtw_blend, 0.0), 1.0),
         )
 
 
@@ -317,14 +328,29 @@ def _resume(bouts_by_fighter: dict[int, list[_Bout]], fid: int, before: date,
 #
 #: FITTED against the 20 published SoS values on Tapology's lightweight page (2026-09-19).
 #: Re-derive with `python -m app.services.ufc.tapology_fit --sos`.
-TIER_INTERCEPT = -0.9
+TIER_INTERCEPT = -2.1
 TIER_SLOPE = 2.5
 
 #: Credit an opponent's LOSS earns toward their resume, scaled by the square of the
 #: winner's strength (see `_resume`). 0.0 is the original, losses-count-for-nothing
 #: recursion. Changing it moves every resume, so TIER_INTERCEPT/TIER_SLOPE must be refit
 #: with it — `scripts/fit_tier_line.py` does both.
-LOSS_CREDIT = 0.0
+LOSS_CREDIT = 0.5
+
+#: Share of an opponent's tier taken from where they were RANKED the day before the bout,
+#: rather than from the record recursion alone. The recursion rates a journeyman on a
+#: streak over unranked opposition as tier 8 and a veteran trading with the elite as
+#: tier 2; the rank does not. Rank r -> tier 10 - (r - 1) * RANK_TIER_SLOPE (champion 10,
+#: #15 ~6.5, #37+ 1); unranked -> 1. Checked against 33 monthly UFC.com snapshots, both
+#: Tapology pastes and next-fight results (2026-11-23): top-15 overlap with UFC.com .725 ->
+#: .768, order .672 -> .765, Tapology .797 -> .841. 0 = the record tier alone.
+RANK_TIER_WEIGHT = 0.5
+RANK_TIER_SLOPE = 0.25
+#: The replay's ranks come from the tiers of the pass before (the first from the record
+#: tier alone, which had Gaethje 15th in March 2025). Two passes beat one on every check
+#: above (UFC.com order .763 -> .775, Tapology lightweight .804 -> .835); a third added
+#: nothing.
+RANK_TIER_PASSES = 2
 
 
 def opponent_tier(resume: float, intercept: float | None = None,
@@ -435,11 +461,95 @@ def build_history(db, as_of: date | None = None) -> dict:
 
     from app.services.ufc.champions import load_title_bouts
 
-    return {
+    ctx = {
         "bouts": bouts_by_fighter, "tiers": tiers, "resumes": resumes, "names": names,
         "status": status, "activity": {f: sorted(ds) for f, ds in activity.items()},
         "div_bouts": div_bouts, "title_bouts": load_title_bouts(db),
+        "dtw": load_decision_dtw(db),
     }
+    if RANK_TIER_WEIGHT > 0:
+        ctx["record_tiers"] = tiers
+        ctx["tiers"] = _rank_tiers(ctx)
+    return ctx
+
+
+#: (cache key) -> tiers. The replay costs ~30s and its inputs change only when a bout
+#: is added, so one process pays for it once per card.
+_RANK_TIER_CACHE: dict[tuple, dict] = {}
+
+
+def _rank_tiers(ctx: dict) -> dict[tuple[int, int], int]:
+    """Blend each bout's record tier with the opponent's rank the day before it.
+
+    The ranks come from replaying the record-tier ranking at every bout date, inside the
+    build, rather than from `ufc_ranking_history`: that table is written by this ranker,
+    so reading it back would make each rebuild an input to the next."""
+    record = ctx["tiers"]
+    key = (len(record), max((f for _, f in record), default=0), RANK_TIER_WEIGHT,
+           RANK_TIER_SLOPE, RANK_TIER_PASSES, LOSS_CREDIT, TIER_INTERCEPT, TIER_SLOPE, FITTED)
+    if key in _RANK_TIER_CACHE:
+        return _RANK_TIER_CACHE[key]
+
+    by_date: dict[date, list[tuple[int, int, int]]] = defaultdict(list)
+    for fid, bouts in ctx["bouts"].items():
+        for b in bouts:
+            by_date[b.date].append((fid, b.fight_id, b.opponent_id))
+
+    ranker = TapologyRanker(FITTED)
+    tiers = record
+    for _ in range(RANK_TIER_PASSES):
+        source = {**ctx, "tiers": tiers}
+        tiers = {}
+        for d in sorted(by_date):
+            order = ranker.score(source, d - timedelta(days=1), lite=True).order
+            best: dict[int, int] = {}
+            for ids in order.values():
+                for i, f in enumerate(ids, 1):
+                    if i < best.get(f, 10**9):
+                        best[f] = i
+            for fid, fight_id, opp in by_date[d]:
+                r = best.get(opp)
+                rank_tier = 1 if r is None else max(
+                    1, min(N_TIERS, round(N_TIERS - (r - 1) * RANK_TIER_SLOPE)))
+                rec = record.get((fid, fight_id), (N_TIERS + 1) // 2)
+                tiers[(fid, fight_id)] = max(1, min(N_TIERS, round(
+                    RANK_TIER_WEIGHT * rank_tier + (1 - RANK_TIER_WEIGHT) * rec)))
+    _RANK_TIER_CACHE.clear()
+    _RANK_TIER_CACHE[key] = tiers
+    log.info(f"  Tapology: rank-blended tiers over {len(by_date)} bout dates, "
+             f"{RANK_TIER_PASSES} passes")
+    return tiers
+
+
+#: Official outcomes the DTW blend applies to: decisions and draws, never finishes.
+DTW_KINDS = ("ud", "sd", "md", "draw")
+
+
+def load_decision_dtw(db) -> dict[tuple[int, int], float]:
+    """(fighter_id, fight_id) -> deserve-to-win share for UFC decisions and draws, with
+    draw replays counted half. Empty if the table is missing."""
+    from app.models.ufc import UFCDeserveToWin
+
+    try:
+        rows = (
+            db.query(UFCDeserveToWin.fight_id, UFCDeserveToWin.p_red, UFCDeserveToWin.p_draw,
+                     UFCDeserveToWin.p_blue, UFCDeserveToWin.official_outcome,
+                     UFCFight.red_fighter_id, UFCFight.blue_fighter_id)
+            .join(UFCFight, UFCFight.id == UFCDeserveToWin.fight_id)
+            .filter(UFCDeserveToWin.model_version == "v1")
+            .all()
+        )
+    except Exception:
+        log.warning("  Tapology: no deserve-to-win table; DTW blend unavailable")
+        db.rollback()
+        return {}
+    out = {}
+    for fight_id, p_red, p_draw, p_blue, official, red, blue in rows:
+        if (official or "").split(":")[-1] not in DTW_KINDS:
+            continue
+        out[(red, fight_id)] = p_red + 0.5 * p_draw
+        out[(blue, fight_id)] = p_blue + 0.5 * p_draw
+    return out
 
 
 def _divisions_as_of(div_bouts: dict[int, list[tuple[date, str]]],
@@ -489,7 +599,10 @@ class TapologyRanker:
     def rank(self, db, registry: dict, as_of: date, crit=None):
         return self.score(build_history(db, as_of), as_of, registry)
 
-    def score(self, ctx: dict, as_of: date, registry: dict | None = None):
+    def score(self, ctx: dict, as_of: date, registry: dict | None = None,
+              lite: bool = False):
+        """`lite` skips the per-bout ledgers and SoS — the replay in `_rank_tiers` needs
+        only the order, ~1,200 times."""
         from app.services.ufc.ranking_publisher import RankingResult
 
         w = self.w
@@ -498,6 +611,7 @@ class TapologyRanker:
         names = ctx["names"]
         status = ctx["status"]
         activity = ctx["activity"]
+        dtw = ctx.get("dtw", {})
         divisions_now = _divisions_as_of(ctx["div_bouts"], as_of)
 
         # The context spans all of history, so every read of it here is bounded at
@@ -562,18 +676,27 @@ class TapologyRanker:
                     carry = 1.0 if b.division == division else w.carry_other_division
                     v = outcome_value(b.method, b.finish_round, w)
 
+                    # Losing to a tier-10 costs less than losing to a tier-1.
+                    relief = 1.0 - w.loss_tier_relief * ((tier - 1) / (N_TIERS - 1))
+                    win_pts = v * q * recency * carry
+                    loss_pts = -w.loss_scale * v * relief * recency * carry
                     if b.drew:
                         # "A draw probably does not help as much as a win, but it's not as
                         # bad as a loss." A reduced win, not its own category.
                         pts = w.v_draw * q * recency * carry
                     elif b.won:
-                        pts = v * q * recency * carry
+                        pts = win_pts
                     else:
-                        # Losing to a tier-10 costs less than losing to a tier-1.
-                        relief = 1.0 - w.loss_tier_relief * ((tier - 1) / (N_TIERS - 1))
-                        pts = -w.loss_scale * v * relief * recency * carry
+                        pts = loss_pts
+
+                    p_dtw = dtw.get((fid, b.fight_id)) if w.dtw_blend else None
+                    if p_dtw is not None:
+                        deserved = p_dtw * win_pts + (1 - p_dtw) * loss_pts
+                        pts = (1 - w.dtw_blend) * pts + w.dtw_blend * deserved
 
                     total += pts
+                    if lite:
+                        continue
                     ledger.append({
                         "fight_id": str(b.fight_id), "date": b.date.isoformat(),
                         "opponent_id": str(b.opponent_id),
@@ -584,7 +707,7 @@ class TapologyRanker:
 
                 div_scores[(fid, division)] = total
                 eligible_divisions.setdefault(fid, set()).add(division)
-                if total >= scores.get(fid, float("-inf")):
+                if total >= scores.get(fid, float("-inf")) and not lite:
                     scores[fid] = total
                     extras[fid] = {
                         # "The tier numbers for the last 6 opponents are added together...
@@ -612,7 +735,7 @@ class TapologyRanker:
                 order[d].remove(champ)
                 order[d].insert(0, champ)
 
-        log.info(f"  Tapology: scored {len(scores)} fighters into "
+        (log.debug if lite else log.info)(f"  Tapology: scored {len(scores)} fighters into "
                  f"{len(div_scores)} division slots across {len(order)} divisions")
         return RankingResult(order=dict(order), scores=scores, extras=extras,
                              division_scores=div_scores,

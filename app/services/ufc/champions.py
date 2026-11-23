@@ -178,7 +178,7 @@ def champions_as_of(title_bouts: list[tuple], as_of: date,
         for d in vacated:
             champs.pop(d, None)
         if vacated:
-            log.info(f"  Champions: {len(vacated)} belt(s) treated as vacant "
+            log.debug(f"  Champions: {len(vacated)} belt(s) treated as vacant "
                      f"(holder moved divisions): {sorted(vacated)}")
 
     return champs

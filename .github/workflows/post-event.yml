@@ -279,6 +279,11 @@ jobs:
         run: pip install -r requirements.txt
       - name: Score fights missing a deserve-to-win meter
         run: python -m scripts.deserve_to_win --score-new
+      # The division rankings blend the meter into decision credit (tapology_rankings
+      # dtw_blend), and last night's decisions only get their meter here, after
+      # check-and-update has published. Republish so they count now, not a card later.
+      - name: Republish division rankings with the new meters
+        run: python -m app.services.ufc.tapology_rankings
       # Judge and referee pages (app/services/ufc/officials_service.py) read the meter's
       # round probabilities, so they rebuild after it. Strengths fixed at the tuned values.
       - name: Rebuild judge and referee profiles

@@ -45,11 +45,14 @@ TOP_N = 10
 TITLE_SCALE = 1.5
 STREAK_CAP = 6
 DEPTH_SPREAD = 20.0          # 0-100 points per standard deviation of division depth
-#: Fitted by scripts/fit_p4p.py (2026-10-05, train 2024-25 / test 2026, scored after the
-#: division merge), rounded, with `champion` pinned at 0.05 (--fix champion=0.05). Left
-#: free the fit takes 0.10 and puts all eight men's champions in the top eight.
-DEFAULT_WEIGHTS = {"dominance": 0.29, "div_points": 0.21, "best_wins": 0.20,
-                   "title_fights": 0.12, "depth": 0.10, "champion": 0.05, "recency": 0.03}
+#: Fitted by scripts/fit_p4p.py (train 2024-25 / test 2026, scored after the division
+#: merge), rounded, with `champion` pinned at 0.05 (--fix champion=0.05). Refit 2026-11-23
+#: after the division ranker moved to rank-blended opponent tiers: test Spearman .712 ->
+#: .770. The men's top eight is all eight champions either way, and at champion=0 too
+#: (.686): the division merge caps every contender under their own champion, and each
+#: champion now outscores the best contender of every other division.
+DEFAULT_WEIGHTS = {"dominance": 0.20, "div_points": 0.16, "best_wins": 0.39,
+                   "title_fights": 0.11, "depth": 0.10, "champion": 0.05, "recency": 0.0}
 
 COMPONENTS = [
     {"key": "best_wins", "label": "Best wins", "type": "weight",

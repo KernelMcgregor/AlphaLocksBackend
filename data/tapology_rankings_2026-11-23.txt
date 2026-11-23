@@ -1,0 +1,232 @@
+# Tapology UFC rankings, pasted by the user 2026-11-23 (lightweight only, top 32).
+# Second snapshot; the first is tapology_rankings.txt (2026-09-18).
+
+== lightweight
+1
+Justin Gaethje
+
+Justin "The Highlight" Gaethje
+11-5
+UFC
+Strength
+of
+Schedule
+help
+67
+2
+Ilia Topuria
+
+Ilia "El Matador" Topuria
+9-1
+UFC
+76
+3
+Charles Oliveira
+
+Charles "Do Bronxs" Oliveira
+25-11, 1 NC
+UFC
+78
+4
+Arman Tsarukyan
+
+Arman "The Batman" Tsarukyan
+11-2
+UFC
+52
+5
+Paddy Pimblett
+
+Paddy "The Baddy" Pimblett
+8-1
+UFC
+49
+6
+Max Holloway
+
+Max "Blessed" Holloway
+24-9
+UFC
+60
+7
+Quillan Salkilld
+
+Quillan Salkilld
+6-0
+UFC
+32
+8
+Benoit Saint Denis
+
+Benoit "God of War" Saint Denis
+9-4
+UFC
+47
+9
+Tom Nolan
+
+Tom "Big Train" Nolan
+6-1
+UFC
+29
+10
+Mauricio Ruffy
+
+Mauricio Ruffy
+5-2
+UFC
+48
+11
+Rafael Fiziev
+
+Rafael "Ataman" Fiziev
+8-5
+UFC
+58
+12
+Salahdine Parnasse
+
+Salahdine "Lion of Atlas" Parnasse
+1-0
+UFC
+11
+13
+Renato Moicano
+
+Renato "Money" Moicano
+13-8
+UFC
+59
+14
+Jalin Turner
+
+Jalin "The Tarantula" Turner
+9-6
+UFC
+43
+15
+Dan Hooker
+
+Dan "The Hangman" Hooker
+15-11
+UFC
+55
+16
+Axel Sola
+
+Axel Sola
+3-1
+UFC
+21
+17
+Grant Dawson
+
+Grant "KGD" Dawson
+13-2-1
+UFC
+32
+18
+Manuel Torres
+
+Manuel "El Loco" Torres
+5-2
+UFC
+36
+19
+Mateusz Gamrot
+
+Mateusz "Gamer" Gamrot
+9-5
+UFC
+53
+20
+Rafa García
+
+Rafa "Gifted" García
+7-5
+UFC
+37
+21
+Chris Padilla
+
+Chris "Taco" Padilla
+5-0-1
+UFC
+22
+22
+Alexander Hernandez
+
+Alexander "El Gran Chango" Hernandez
+11-8
+UFC
+26
+23
+Ignacio Bahamondes
+
+Ignacio "La Jaula" Bahamondes
+7-4
+UFC
+30
+24
+Terrance McKinney
+
+Terrance "T.Wrecks" McKinney
+9-6
+UFC
+29
+25
+Michael Chandler
+
+"Iron" Michael Chandler
+2-6
+UFC
+64
+26
+Melquizael Costa
+
+Melquizael "The Dalmatian" Costa
+8-3
+UFC
+40
+27
+Fares Ziam
+
+Fares "The Smile Killer" Ziam
+8-4
+UFC
+33
+28
+Beneil Dariush
+
+Beneil Dariush
+17-8-1
+UFC
+65
+29
+Esteban Ribovics
+
+Esteban "El Gringo" Ribovics
+6-3
+UFC
+32
+30
+Jim Miller
+
+Jim "A-10" Miller
+28-19, 1 NC
+UFC
+32
+31
+Lance Gibson Jr.
+
+"Fearless" Lance Gibson Jr.
+1-1
+UFC
+16
+32
+King Green
+
+King Green
+17-13-1, 1 NC
+UFC
+26
