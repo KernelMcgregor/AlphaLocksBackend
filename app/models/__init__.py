@@ -15,4 +15,4 @@ __all__ = [
 ]
 
 # Feature-track tables (registered for create_all).
-from app.models import ufc_fighter_extras, ufc_fightflow, ufc_markets, ufc_officials  # noqa: E402,F401
+from app.models import ufc_fighter_extras, ufc_fightflow, ufc_highlights, ufc_markets, ufc_officials  # noqa: E402,F401

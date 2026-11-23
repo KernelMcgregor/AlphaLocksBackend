@@ -9,14 +9,15 @@ from app.services.response_cache import with_session
 router = APIRouter()
 import json
 
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 
-from app.models.ufc import UFCFight, UFCFightStats, UFCJudge
+from app.models.ufc import UFCFight, UFCFighter, UFCFightStats, UFCJudge
 from app.models.ufc_officials import (
     UFCDecisionReview, UFCFightOfficial, UFCJudgeCard, UFCJudgePair, UFCJudgeProfile,
     UFCJudgeRound, UFCOfficialsMeta, UFCReferee, UFCRefereeFight,
 )
 from app.services.ufc.officials_service import MODEL_VERSION, norm_name
+from app.services.ufc.time_window import parse_window
 
 OFFICIALS_TTL = 30 * 60
 V = MODEL_VERSION
@@ -63,12 +64,18 @@ def _pool(db: Session) -> dict | None:
     return json.loads(m.payload)["pool"] if m else None
 
 
-def _review(r: UFCDecisionReview) -> dict:
+def _review(r: UFCDecisionReview, imgs: set[int] | None = None) -> dict:
+    """`imgs`: fighter ids with a portrait, when the caller shows photos."""
+    def corner(fid, name):
+        out = {"id": str(fid), "name": name}
+        if imgs is not None:
+            out["has_image"] = fid in imgs
+        return out
     return {
         "fight_id": str(r.fight_id), "date": r.date.isoformat(), "event_name": r.event_name,
         "weight_class": r.weight_class,
-        "red": {"id": str(r.red_id), "name": r.red_name},
-        "blue": {"id": str(r.blue_id), "name": r.blue_name},
+        "red": corner(r.red_id, r.red_name),
+        "blue": corner(r.blue_id, r.blue_name),
         "result": r.result, "kind": r.kind, "p_red": r.p_red, "p_blue": r.p_blue,
         "robbery_score": r.robbery_score,
         "media": {"red": r.media_red, "blue": r.media_blue, "draw": r.media_draw},
@@ -217,18 +224,33 @@ def fight_round_stats(fight_id: int, db: Session = Depends(get_db)):
 
 # --- Robberies ---
 
-def _robberies_build(db: Session, limit: int, min_score: float) -> list[dict]:
-    rows = (db.query(UFCDecisionReview).filter(UFCDecisionReview.version == V,
-                                               UFCDecisionReview.robbery_score >= min_score)
-            .order_by(UFCDecisionReview.robbery_score.desc()).limit(limit).all())
-    return [_review(r) for r in rows]
+def _robberies_build(db: Session, limit: int, min_score: float, start, end, fans_agree: bool) -> list[dict]:
+    R = UFCDecisionReview
+    q = db.query(R).filter(R.version == V, R.robbery_score >= min_score)
+    if fans_agree:
+        # More fans scored it for the official loser than for the winner.
+        q = q.filter(or_(and_(R.result > 0, R.fan_blue > R.fan_red), and_(R.result < 0, R.fan_red > R.fan_blue)))
+    if start:
+        q = q.filter(UFCDecisionReview.date >= start)
+    if end:
+        q = q.filter(UFCDecisionReview.date <= end)
+    rows = q.order_by(UFCDecisionReview.robbery_score.desc()).limit(limit).all()
+    ids = {i for r in rows for i in (r.red_id, r.blue_id)}
+    imgs = {fid for (fid,) in db.query(UFCFighter.id).filter(UFCFighter.id.in_(ids), UFCFighter.image_url.isnot(None))} if ids else set()
+    return [_review(r, imgs) for r in rows]
 
 
 @router.get("/robberies")
-def robberies(limit: int = Query(100, ge=1, le=500), min_score: float = Query(0.5, ge=0, le=1),
-              db: Session = Depends(get_db)):
-    return response_cache.cached(f"officials:robberies:{limit}:{min_score}",
-                                 with_session(_robberies_build, limit, min_score), OFFICIALS_TTL)
+def robberies(limit: int = Query(100, ge=1, le=1000), min_score: float = Query(0.5, ge=0, le=1),
+              window: str = Query("all"), fans_agree: bool = Query(False), db: Session = Depends(get_db)):
+    """Decisions the meter gave to the official loser (robbery_score >= min_score), worst
+    first; `fans_agree` keeps only those where the fans' cards also favored the loser."""
+    try:
+        start, end = parse_window(window)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return response_cache.cached(f"officials:robberies:{limit}:{min_score}:{start}:{end}:{fans_agree}",
+                                 with_session(_robberies_build, limit, min_score, start, end, fans_agree), OFFICIALS_TTL)
 
 
 # --- Referees ---

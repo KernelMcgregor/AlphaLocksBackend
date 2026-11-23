@@ -285,6 +285,12 @@ jobs:
         run: python -m app.services.ufc.officials_service --write --s-lean 0.2 --s-axis 0.2
       - name: Rebuild fighter clutch ratings
         run: python -m app.services.ufc.fightflow_clutch --write
+      # Bonuses are often posted after the night's results scrape; resync the last two
+      # weeks, then rescore excitement (it reads the meter's rounds and the bonuses).
+      - name: Resync recent bonuses and rescore fight excitement
+        run: |
+          python -m scripts.backfill_fight_bonuses --days 14
+          python -m scripts.fight_excitement --write --top 0
       - name: Rebuild division age curves and the camp registry
         run: |
           python -m app.services.ufc.fighter_extras_age --write

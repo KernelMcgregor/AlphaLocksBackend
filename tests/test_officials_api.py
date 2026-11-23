@@ -26,7 +26,7 @@ def client():
     from fastapi.testclient import TestClient
 
     from app.database import Base, SessionLocal, engine
-    from app.models.ufc import UFCJudge, UFCJudgeAlias
+    from app.models.ufc import UFCFighter, UFCJudge, UFCJudgeAlias
     from app.models.ufc_officials import (
         UFCDecisionReview, UFCFightOfficial, UFCJudgeCard, UFCJudgePair, UFCJudgeProfile,
         UFCJudgeRound, UFCOfficialsMeta, UFCReferee, UFCRefereeFight,
@@ -34,7 +34,7 @@ def client():
     from app.routers import ufc as ufc_router
     from app.services import response_cache
 
-    models = [UFCJudge, UFCJudgeAlias, UFCJudgeProfile, UFCJudgeRound, UFCJudgeCard,
+    models = [UFCFighter, UFCJudge, UFCJudgeAlias, UFCJudgeProfile, UFCJudgeRound, UFCJudgeCard,
               UFCDecisionReview, UFCJudgePair, UFCOfficialsMeta, UFCReferee, UFCRefereeFight,
               UFCFightOfficial]
     tables = [m.__table__ for m in models]
@@ -136,6 +136,11 @@ def test_robberies_sorted_and_filtered(client):
     assert [x["fight_id"] for x in r] == [str(BIG)]
     assert r[0]["fans"] == {"red": 0.2, "blue": 0.8, "draw": 0.0}
     assert len(client.get("/ufc/robberies?min_score=0").json()) == 2
+    assert len(client.get("/ufc/robberies?min_score=0&window=year:2024").json()) == 2
+    assert client.get("/ufc/robberies?min_score=0&window=year:2023").json() == []
+    assert client.get("/ufc/robberies?window=bogus").status_code == 422
+    # Both fixture decisions went to red with the fans' cards 80% blue: both agree.
+    assert len(client.get("/ufc/robberies?min_score=0&fans_agree=true").json()) == 2
 
 
 def test_referees(client):

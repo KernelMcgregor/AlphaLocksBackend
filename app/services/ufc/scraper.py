@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.models.ufc import UFCEvent, UFCFight, UFCFighter, UFCFightStats
+from app.services.ufc.fight_bonuses import icons_in as bonus_icons_in, try_sync as try_sync_bonuses
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -458,6 +459,8 @@ def scrape_fight_details(scraper: Scraper, fight_url: str) -> dict | None:
     if fight_head:
         weight_class_el = fight_head.select_one("i.b-fight-details__fight-title")
         result["weight_class"] = _clean_text(weight_class_el.get_text()) if weight_class_el else None
+        if weight_class_el is not None:
+            result["bonuses"] = bonus_icons_in(weight_class_el)
 
         # Method is in i.b-fight-details__text-item_first
         method_el = fight_head.select_one("i.b-fight-details__text-item_first")
@@ -809,6 +812,9 @@ def upsert_fight(db: Session, fight_data: dict, event_db_id: int) -> int | None:
                 fighter_id=fighter.id,
                 **{k: v for k, v in stat_data.items() if k != "fighter_ufcstats_id"},
             ))
+
+    if "bonuses" in fight_data:
+        try_sync_bonuses(db, fight, fight_data["bonuses"])
 
     db.commit()
     return fight.id

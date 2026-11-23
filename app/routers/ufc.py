@@ -668,6 +668,8 @@ def get_event_detail(event_id: int, db: Session = Depends(get_db)):
         ):
             totals.setdefault(s.fight_id, []).append(s)
     deserve = _deserve_to_win_by_fight(db, fight_ids)
+    from app.routers.ufc_highlights import excitement_by_fight
+    excite = excitement_by_fight(db, fight_ids)
     # Attach consensus odds (first bookmaker found) to each fight
     odds_rows = db.query(UFCFightOdds).filter(UFCFightOdds.fight_id.in_(fight_ids)).all() if fight_ids else []
     odds_map = {}
@@ -689,6 +691,7 @@ def get_event_detail(event_id: int, db: Session = Depends(get_db)):
             "red_fighter": f.red_fighter, "blue_fighter": f.blue_fighter,
             "winner": f.winner, "stats": totals.get(f.id, []),
             "deserve_to_win": deserve.get(f.id),
+            "excitement": excite.get(f.id),
         }
         o = odds_map.get(f.id)
         if o:
@@ -948,6 +951,9 @@ def _build_fight(db: Session, fight_id: int):
         result["review"] = review_payload(db, fight, pred, method_pred)
     else:
         result["review"] = None
+
+    from app.routers.ufc_highlights import excitement_by_fight
+    result["excitement"] = excitement_by_fight(db, [fight.id]).get(fight.id)
 
     return result
 
@@ -2127,7 +2133,7 @@ def _get_picks_data(db: Session):
 
 # --- Feature-track sub-routers (same /ufc prefix). Imported last so their routes
 # register after the core ones above.
-from app.routers import ufc_fighter_extras, ufc_fightflow, ufc_markets, ufc_officials  # noqa: E402
+from app.routers import ufc_fighter_extras, ufc_fightflow, ufc_highlights, ufc_markets, ufc_officials  # noqa: E402
 
-for _sub in (ufc_officials, ufc_fightflow, ufc_fighter_extras, ufc_markets):
+for _sub in (ufc_officials, ufc_fightflow, ufc_fighter_extras, ufc_markets, ufc_highlights):
     router.include_router(_sub.router)
